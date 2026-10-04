@@ -75,7 +75,7 @@ Each neuron layer keeps its membrane in float32 whatever its input dtype, and re
 
 ## Neurons
 
-All layers share one discrete-time convention with step `dt = 1` and per-step decay `exp(-1 / tau)`: `v[t] = decay * v[t-1] + x[t]`, a spike where `v[t] >= threshold`, then a reset. The input enters unscaled, as in snnTorch's `Leaky`.
+The LIF family (`LIF`, `IF`, `LI`, `Synaptic`, `ALIF`) shares one discrete-time convention with step `dt = 1` and per-step decay `exp(-1 / tau)`: `v[t] = decay * v[t-1] + x[t]`, a spike where `v[t] >= threshold`, then a reset. The input enters unscaled, as in snnTorch's `Leaky`.
 
 | Layer | Dynamics | Learnable |
 | --- | --- | --- |
@@ -90,9 +90,9 @@ All layers share one discrete-time convention with step `dt = 1` and per-step de
 | `MaskedPSN(k)` | the PSN restricted to the `k` most recent steps | `W`, `b` |
 | `SlidingPSN(k)` | `k` weights slid over time, any `T`, causal | weights, `b` |
 
-`reset` is `"subtract"` (soft reset, the default), `"zero"` (hard reset) or `"none"`. `detach_reset=True` stops the gradient through the reset, which Zenke and Vogels (2021) find trains more reliably. Learned decays are the sigmoid of a parameter, so training cannot push them outside (0, 1).
+`reset` is `"subtract"` (soft reset, the default), `"zero"` (hard reset) or `"none"`. `detach_reset=True` stops the gradient through the reset, as SpyTorch's tutorials and SpikingJelly's `detach_reset` do. Learned decays are the sigmoid of a parameter, so training cannot push them outside (0, 1).
 
-The PSNs have no loop over time at all. Each is one `[T, T] x [T, N]` product followed by a threshold, which suits matrix hardware and long-range dependencies. `Recurrent(ALIF())` is the recurrent adaptive network (LSNN) of Bellec et al.
+The PSNs have no loop over time at all. Each is one `[T, T] x [T, N]` product followed by a threshold, so no step waits for the one before it; Fang et al. report that this also learns longer dependencies than the LIF. `Recurrent(ALIF())` is the recurrent adaptive network (LSNN) of Bellec et al.
 
 ## Surrogate gradients
 
@@ -156,7 +156,7 @@ Decays, thresholds and weights can be traced arrays, so they can be learned, swe
 
 ## Training with dew
 
-`sparx.dew.SpikingClassifier` is a dew objective. It encodes a batch field into spikes, runs the network, and scores its outputs against the labels, so dew's `Trainer` brings its mesh, checkpoints, EMA, evaluation and display to a spiking network unchanged:
+`sparx.dew.SpikingClassifier` is a dew objective. It encodes a batch field into spikes, runs the network, and scores its outputs against the labels, so a spiking network trains under dew's `Trainer` with its checkpoints, EMA, evaluation and display. The tests run it on one CPU device; multi-device meshes have not been tried yet.
 
 ```python
 import optax

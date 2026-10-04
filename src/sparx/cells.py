@@ -87,9 +87,8 @@ def fire(v: jax.Array, threshold: jax.Array | float, reset: Reset, surrogate: Su
     """Spike where `v` reaches `threshold`, then reset; return the membrane and the spikes.
 
     `detach_reset` stops the gradient through the reset, so the surrogate
-    reaches the membrane only through the spike output (Zenke and Vogels,
-    "The Remarkable Robustness of Surrogate Gradient Learning", 2021, find it
-    trains more reliably).
+    reaches the membrane only through the spike output, as in SpyTorch's
+    tutorials and SpikingJelly's `detach_reset`.
     """
     s = spike(v - threshold, surrogate)
     r = jax.lax.stop_gradient(s) if detach_reset else s
