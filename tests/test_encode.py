@@ -22,7 +22,8 @@ def test_latency_fires_once_earlier_for_brighter_values():
 
 
 def test_delta_matches_snntorch_without_padding():
-    np.testing.assert_array_equal(encode.delta(SNNTORCH["delta_input"], 0.5, off_spikes=True), SNNTORCH["delta"])
+    out = encode.delta(SNNTORCH["delta_input"], 0.5, off_spikes=True)
+    np.testing.assert_array_equal(out, SNNTORCH["delta"])
     np.testing.assert_array_equal(encode.delta(SNNTORCH["delta_input"], 0.5), SNNTORCH["delta_on"])
 
 

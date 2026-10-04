@@ -28,7 +28,8 @@ def per_step_cross_entropy(outputs: jax.Array, labels: jax.Array) -> jax.Array:
     """
     steps = outputs.shape[0]
     logits = outputs.astype(jnp.float32)
-    per_step = optax.softmax_cross_entropy_with_integer_labels(logits, jnp.broadcast_to(labels, logits.shape[:-1]))
+    labels = jnp.broadcast_to(labels, logits.shape[:-1])
+    per_step = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
     return jnp.sum(per_step, axis=0) / steps
 
 

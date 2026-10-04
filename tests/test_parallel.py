@@ -27,7 +27,8 @@ def test_fully_masked_psn_is_causal_within_its_order():
     np.testing.assert_array_equal(layer.apply(params, future)[:7], layer.apply(params, x)[:7])
     np.testing.assert_array_equal(layer.apply(params, distant)[6:], layer.apply(params, x)[6:])
     # Partial masking lets the future in.
-    assert not np.array_equal(layer.apply(params, future, masking=0.5)[:7], layer.apply(params, x, masking=0.5)[:7])
+    blended = layer.apply(params, future, masking=0.5)[:7]
+    assert not np.array_equal(blended, layer.apply(params, x, masking=0.5)[:7])
 
 
 def test_full_psn_reads_the_future():

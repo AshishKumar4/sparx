@@ -4,15 +4,7 @@ import numpy as np
 import pytest
 import reference
 
-from sparx.cells import (
-    ALIFCell,
-    IzhikevichCell,
-    LICell,
-    LIFCell,
-    RecurrentCell,
-    SynapticCell,
-    run,
-)
+from sparx.cells import ALIFCell, IzhikevichCell, LICell, LIFCell, RecurrentCell, SynapticCell, run
 from sparx.surrogate import ATan, Rectangle
 
 T, B, F = 40, 3, 7
@@ -103,8 +95,9 @@ CELLS = {
     "synaptic": SynapticCell(0.8, 0.5),
     "alif": ALIFCell(0.9, 0.95, beta=0.3),
     "izhikevich": IzhikevichCell(),
-    "recurrent_alif": RecurrentCell(ALIFCell(0.9, 0.95, beta=0.3),
-                                    jnp.asarray(np.random.default_rng(9).normal(0, 0.3, (F, F)), jnp.float32)),
+    "recurrent_alif": RecurrentCell(
+        ALIFCell(0.9, 0.95, beta=0.3),
+        jnp.asarray(np.random.default_rng(9).normal(0, 0.3, (F, F)), jnp.float32)),
 }
 
 
@@ -147,7 +140,7 @@ def test_recurrent_bf16_carry_keeps_its_dtype():
 
 def _two_step_gradient(detach_reset):
     """d s[1] / d x[0] for an LIF that fires at step 0."""
-    cell = LIFCell(0.8, 1.0, "subtract", Rectangle(width=2.0), detach_reset)
+    cell = LIFCell(0.8, 1.0, "subtract", Rectangle(width=2.0), detach_reset=detach_reset)
 
     def second_spike(x0):
         xs = jnp.stack([x0, jnp.asarray(0.9)])[:, None]
@@ -162,8 +155,8 @@ def test_reset_gradient_follows_the_chain_rule():
     # ds1/dx0 = g(v1 - 1) * 0.8 * (1 - g(v0 - 1)) = 0.5 * 0.8 * 0.5 = 0.2,
     # and with the reset detached the spike's path drops out:
     # ds1/dx0 = g(v1 - 1) * 0.8 = 0.4.
-    np.testing.assert_allclose(_two_step_gradient(False), 0.2, rtol=1e-6)
-    np.testing.assert_allclose(_two_step_gradient(True), 0.4, rtol=1e-6)
+    np.testing.assert_allclose(_two_step_gradient(detach_reset=False), 0.2, rtol=1e-6)
+    np.testing.assert_allclose(_two_step_gradient(detach_reset=True), 0.4, rtol=1e-6)
 
 
 def test_gradients_reach_learnable_decays_and_thresholds():

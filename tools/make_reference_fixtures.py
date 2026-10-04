@@ -73,7 +73,8 @@ def _psn_case(name: str, module: torch.nn.Module, x: np.ndarray, rng: np.random.
     # A bias drawn near zero instead of the initial -1, so the case fires
     # often and its threshold gradient has many terms.
     with torch.no_grad():
-        module.bias.copy_(torch.as_tensor(rng.normal(-0.3, 0.3, tuple(module.bias.shape)), dtype=torch.float32))
+        bias = rng.normal(-0.3, 0.3, tuple(module.bias.shape))
+        module.bias.copy_(torch.as_tensor(bias, dtype=torch.float32))
     xt = torch.tensor(x, requires_grad=True)
     spikes = module(xt)
     (spikes * torch.tensor(weights)).sum().backward()
@@ -100,8 +101,9 @@ def psn_cases(rng: np.random.Generator) -> dict[str, np.ndarray]:
         masked = neuron.MaskedPSN(k=3, T=steps, lambda_init=masking, surrogate_function=surrogate.ATan(),
                                   step_mode="m")
         mask = masked.mask0.numpy().astype(np.float64)
-        cases |= _psn_case(f"masked_psn_{masking}", masked, rng.normal(0.5, 1.0, (steps, 3, 4)).astype(np.float32),
-                           rng, lambda w, mask=mask, m=masking: (m * mask + (1 - m)) * w)
+        x = rng.normal(0.5, 1.0, (steps, 3, 4)).astype(np.float32)
+        cases |= _psn_case(f"masked_psn_{masking}", masked, x, rng,
+                           lambda w, mask=mask, m=masking: (m * mask + (1 - m)) * w)
         cases[f"masked_psn_{masking}/masking"] = np.float32(masking)
     for exp_init in (True, False):
         sliding = neuron.SlidingPSN(k=3, exp_init=exp_init, surrogate_function=surrogate.ATan(),

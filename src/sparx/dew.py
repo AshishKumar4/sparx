@@ -183,8 +183,9 @@ class SpikingClassifier(Objective[Ratio]):
     def init(self, key: jax.Array, variables: Variables | None = None) -> Variables:
         encode_key, init_key = jax.random.split(key)
         x = self.encoder(encode_key, jnp.zeros((1, *self.sample.shape), jnp.float32))
-        kwargs = {"train": False} if self._train else {}
-        return dict(self.model.init(init_key, x, **kwargs))
+        if self._train:
+            return dict(self.model.init(init_key, x, train=False))
+        return dict(self.model.init(init_key, x))
 
     def _logits(self, outputs: jax.Array) -> jax.Array:
         outputs = outputs.astype(jnp.float32)
@@ -204,9 +205,14 @@ class SpikingClassifier(Objective[Ratio]):
         x = self.encoder(encode_key, jnp.asarray(batch[self.sample.key]))
         labels = jnp.asarray(batch[self.labels])
         mutable = [RATES, *(["batch_stats"] if "batch_stats" in variables else [])]
-        kwargs = {"train": True} if self._train else {}
-        outputs, updated = self.model.apply(variables, x, rngs={"dropout": dropout_key}, mutable=mutable,
-                                            **kwargs)
+        rngs = {"dropout": dropout_key}
+        if self._train:
+            result = self.model.apply(variables, x, train=True, rngs=rngs, mutable=mutable)
+        else:
+            result = self.model.apply(variables, x, rngs=rngs, mutable=mutable)
+        # With mutable collections, apply returns the outputs and the collections.
+        assert isinstance(result, tuple)
+        outputs, updated = result
         losses = self._losses(outputs, labels)
         total = jnp.sum(losses)
         metrics = {"accuracy": jnp.mean(jnp.argmax(self._logits(outputs), -1) == labels)}
@@ -221,10 +227,12 @@ class SpikingClassifier(Objective[Ratio]):
 
     @functools.cached_property
     def _scores(self):
-        kwargs = {"train": False} if self._train else {}
-
         def scores(variables, field, labels, key):
-            outputs = self.model.apply(variables, self.encoder(key, field), **kwargs)
+            x = self.encoder(key, field)
+            outputs = (self.model.apply(variables, x, train=False) if self._train
+                       else self.model.apply(variables, x))
+            # `mutable` is unset, so apply returns the outputs alone, not a pair.
+            assert not isinstance(outputs, tuple)
             losses = self._losses(outputs, labels)
             correct = jnp.argmax(self._logits(outputs), -1) == labels
             return losses[:, None], jnp.ones_like(losses)[:, None], correct[:, None]
@@ -238,5 +246,6 @@ class SpikingClassifier(Objective[Ratio]):
         return TokenScores(losses=losses, weights=weights, correct=correct)
 
 
-accuracy = Mean(lambda scores, batch: scores.correct[:, 0], name="accuracy", better="higher", reads=TokenScores)
+accuracy = Mean(lambda scores, batch: scores.correct[:, 0], name="accuracy", better="higher",
+                reads=TokenScores)
 """Validation accuracy from a `SpikingClassifier`'s evaluation, as `val/accuracy`."""

@@ -151,7 +151,7 @@ class SlidingPSN(nn.Module):
         history = self.get_variable(STATE, "carry") if carrying else None
         if history is None:
             history = jnp.zeros((self.k - 1, *x.shape[1:]), x.dtype)
-        window = jnp.concatenate([history.astype(x.dtype), x])
+        window = jnp.concatenate([jnp.asarray(history, x.dtype), x])
         steps, held = x.shape[0], self.k - 1
         # The Toeplitz matrix that slides the weights, over the held steps and
         # the new ones: row t reads columns t .. t + k - 1 of the window.

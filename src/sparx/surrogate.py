@@ -53,18 +53,22 @@ class Surrogate(ABC):
         return spike(x, self)
 
 
-@functools.partial(jax.custom_jvp, nondiff_argnums=(1,))
 def spike(x: jax.Array, surrogate: Surrogate) -> jax.Array:
     """The Heaviside step of `x`, 1 where `x >= 0`, differentiated through `surrogate`."""
     if not jnp.issubdtype(x.dtype, jnp.floating):
         raise TypeError(f"spike takes a floating membrane, not {x.dtype}")
+    return _spike(x, surrogate)
+
+
+@functools.partial(jax.custom_jvp, nondiff_argnums=(1,))
+def _spike(x: jax.Array, surrogate: Surrogate) -> jax.Array:
     return (x >= 0).astype(x.dtype)
 
 
-@spike.defjvp
+@_spike.defjvp
 def _spike_jvp(surrogate: Surrogate, primals: tuple[jax.Array], tangents: tuple[jax.Array]):
     (x,), (dx,) = primals, tangents
-    return spike(x, surrogate), surrogate.derivative(x).astype(x.dtype) * dx
+    return _spike(x, surrogate), surrogate.derivative(x).astype(x.dtype) * dx
 
 
 @dataclass(frozen=True)

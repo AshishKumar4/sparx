@@ -49,7 +49,8 @@ def latency(x: ArrayLike, steps: int, threshold: float = 0.01, dtype: DTypeLike 
     return ((times == when) & (x >= threshold)).astype(dtype)
 
 
-def delta(xs: ArrayLike, threshold: float, off_spikes: bool = False, dtype: DTypeLike = jnp.float32) -> jax.Array:
+def delta(xs: ArrayLike, threshold: float, off_spikes: bool = False,
+          dtype: DTypeLike = jnp.float32) -> jax.Array:
     """Spike where a time-major signal `[T, ...]` rises by at least `threshold` from the step before.
 
     The step before the first is zero, so a signal that starts at or above
