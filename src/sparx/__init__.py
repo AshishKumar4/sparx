@@ -1,14 +1,21 @@
 """Sparx: spiking neural networks in JAX and Flax.
 
-Networks are Flax linen modules over time-major spike trains `[T, ...]`;
-neuron dynamics are pure JAX cells (`sparx.cells`) that `sparx.nn` wraps as
-layers. `sparx.dew` adapts them to dew's `Trainer`.
+Networks are Flax linen modules over time-major spike trains `[T, ...]`.
+
+- `sparx.surrogate`: the spike and its surrogate gradients.
+- `sparx.cells`: neuron dynamics as pure JAX, and `run`, which scans them over time.
+- `sparx.nn`: Flax layers over those cells, and the parallel spiking neurons.
+- `sparx.encode`: data to spike trains.
+- `sparx.losses` and `sparx.rates`: losses over time, firing-rate readouts and penalties.
+- `sparx.dew`: spiking objectives for dew's `Trainer` (needs dew installed).
 """
 
-from sparx import cells, nn, surrogate
+from sparx import cells, encode, losses, nn, rates, surrogate
 from sparx.cells import run
+from sparx.rates import firing_rates, rate_penalty
 from sparx.surrogate import spike
 
 __version__ = "0.1.0"
 
-__all__ = ["__version__", "cells", "nn", "run", "spike", "surrogate"]
+__all__ = ["__version__", "cells", "encode", "firing_rates", "losses", "nn", "rate_penalty", "rates", "run",
+           "spike", "surrogate"]
