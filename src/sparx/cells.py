@@ -49,6 +49,7 @@ __all__ = [
     "IzhikevichState",
     "LICell",
     "LIFCell",
+    "LIFState",
     "RecurrentCell",
     "RecurrentState",
     "Reset",

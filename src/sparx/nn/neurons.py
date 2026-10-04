@@ -122,8 +122,9 @@ def _decay(module: nn.Module, name: str, tau: float, learn: bool, features: int)
 
     A learned decay is the sigmoid of its parameter, so no update can move it
     out of (0, 1), where the membrane would grow without bound or flip sign.
-    The parametric LIF of Fang et al. (ICCV 2021) learns one shared decay
-    the same way; one per feature is the per-neuron generalization.
+    The parametric LIF of Fang et al. (ICCV 2021) also bounds its learned
+    decay with a sigmoid, one shared by the layer; here each feature learns
+    its own.
     """
     if not learn:
         return decay(tau)
@@ -239,6 +240,13 @@ class Recurrent(Neuron):
     projection stays outside, as an `nn.Dense` before this layer, so it runs
     over all time steps at once; only the feedback product runs inside the
     loop. The wrapped neuron's parameters live under `neuron`.
+
+    Backpropagation through the feedback multiplies by the recurrent matrix
+    at every step, and a heavy-tailed surrogate passes gradient through
+    every neuron, even those far from threshold. Training the recurrent
+    network of `examples/train_shd.py` with ATan grew the matrix's spectral
+    radius from 1 to 5 and the gradient norm past 1e8 within 300 steps;
+    with `FastSigmoid(100)` the gradient norm stayed below 10.
     """
 
     neuron: Neuron = LIF()

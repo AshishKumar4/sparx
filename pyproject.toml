@@ -23,7 +23,9 @@ dependencies = [
 # sparx.dew: spiking objectives for dew's Trainer. Dew is not on PyPI, so the
 # extra names the repository.
 dew = ["dewml @ git+https://github.com/AshishKumar4/dew"]
-test = ["pytest", "ruff==0.14.3"]
+# sparx.datasets reads the published HDF5 files.
+datasets = ["h5py"]
+test = ["pytest", "ruff==0.14.3", "h5py"]
 
 [tool.setuptools.dynamic]
 version = { attr = "sparx.__version__" }
