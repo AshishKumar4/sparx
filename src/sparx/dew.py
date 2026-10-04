@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import functools
 import inspect
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -161,13 +161,20 @@ class SpikingClassifier(Objective[Ratio]):
     model that keeps `batch_stats` (BatchNorm) has them updated by the loss.
     `ema_decay` keeps an exponential moving average of the parameters, which
     `evaluate` scores when the trainer passes it.
+
+    `call` supplies further keyword arguments for the model from the step
+    counter, for arguments that follow a schedule: `call=lambda step:
+    {"sigma": schedule(step)}` anneals a `sparx.nn.DelayedDense`, and
+    `{"masking": ...}` a `MaskedPSN`. It sees `Step.step`, the count of
+    accepted microbatches, in the loss and in evaluation alike.
     """
 
     artifact = TokenScores
     shown: Mapping[str, Shown] = {"accuracy": Shown(better="higher", percent=True)}
 
     def __init__(self, model: nn.Module, sample: Field, encoder: Encoder, *, labels: str = "label",
-                 readout: Readout = "mean", rates: RateBand | None = None, ema_decay: float | None = None):
+                 readout: Readout = "mean", rates: RateBand | None = None, ema_decay: float | None = None,
+                 call: Callable[[jax.Array], Mapping[str, jax.Array | float]] | None = None):
         if readout not in ("mean", "max", "sum", "per_step"):
             raise ValueError(f"readout must be mean, max, sum or per_step, not {readout!r}")
         self.model = model
@@ -178,14 +185,20 @@ class SpikingClassifier(Objective[Ratio]):
         self.rates = rates
         self.inputs = InputSpec(sample=sample)
         self.ema = None if ema_decay is None else EMASpec(decay=optax.constant_schedule(ema_decay))
+        self.call = call
         self._train = _takes_train(model)
+
+    def _method(self, step: jax.Array, *, train: bool) -> functools.partial[jax.Array]:
+        """The model's `__call__` with `train` (when it takes one) and the scheduled arguments bound."""
+        kwargs: dict[str, jax.Array | float | bool] = dict(self.call(step)) if self.call is not None else {}
+        if self._train:
+            kwargs["train"] = train
+        return functools.partial(type(self.model).__call__, **kwargs)
 
     def init(self, key: jax.Array, variables: Variables | None = None) -> Variables:
         encode_key, init_key = jax.random.split(key)
         x = self.encoder(encode_key, jnp.zeros((1, *self.sample.shape), jnp.float32))
-        if self._train:
-            return dict(self.model.init(init_key, x, train=False))
-        return dict(self.model.init(init_key, x))
+        return dict(self.model.init(init_key, x, method=self._method(jnp.zeros((), jnp.int32), train=False)))
 
     def _logits(self, outputs: jax.Array) -> jax.Array:
         outputs = outputs.astype(jnp.float32)
@@ -206,10 +219,8 @@ class SpikingClassifier(Objective[Ratio]):
         labels = jnp.asarray(batch[self.labels])
         mutable = [RATES, *(["batch_stats"] if "batch_stats" in variables else [])]
         rngs = {"dropout": dropout_key}
-        if self._train:
-            result = self.model.apply(variables, x, train=True, rngs=rngs, mutable=mutable)
-        else:
-            result = self.model.apply(variables, x, rngs=rngs, mutable=mutable)
+        result = self.model.apply(variables, x, rngs=rngs, mutable=mutable,
+                                  method=self._method(step.step, train=True))
         # With mutable collections, apply returns the outputs and the collections.
         assert isinstance(result, tuple)
         outputs, updated = result
@@ -227,10 +238,9 @@ class SpikingClassifier(Objective[Ratio]):
 
     @functools.cached_property
     def _scores(self):
-        def scores(variables, field, labels, key):
+        def scores(variables, field, labels, key, step):
             x = self.encoder(key, field)
-            outputs = (self.model.apply(variables, x, train=False) if self._train
-                       else self.model.apply(variables, x))
+            outputs = self.model.apply(variables, x, method=self._method(step, train=False))
             # `mutable` is unset, so apply returns the outputs alone, not a pair.
             assert not isinstance(outputs, tuple)
             losses = self._losses(outputs, labels)
@@ -241,8 +251,8 @@ class SpikingClassifier(Objective[Ratio]):
 
     def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
         variables = params if step.ema is None else step.ema
-        losses, weights, correct = self._scores(
-            variables, jnp.asarray(batch[self.sample.key]), jnp.asarray(batch[self.labels]), step.key)
+        field, labels = jnp.asarray(batch[self.sample.key]), jnp.asarray(batch[self.labels])
+        losses, weights, correct = self._scores(variables, field, labels, step.key, step.step)
         return TokenScores(losses=losses, weights=weights, correct=correct)
 
 

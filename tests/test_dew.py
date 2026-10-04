@@ -109,3 +109,25 @@ def test_event_data_moves_its_time_axis_to_the_front():
 def test_an_unknown_readout_is_refused():
     with pytest.raises(ValueError, match="readout"):
         SpikingClassifier(Net(), Field("image", (8, 8, 1)), Direct(4), readout="last")  # type: ignore[arg-type]
+
+
+class Scaled(nn.Module):
+    """Net, with its readout scaled by a keyword the objective schedules."""
+
+    @nn.compact
+    def __call__(self, x, scale):
+        return Net()(x) * scale
+
+
+def test_scheduled_call_arguments_reach_the_model_in_loss_and_evaluation():
+    objective = SpikingClassifier(Scaled(), Field("image", (8, 8, 1)), Direct(steps=4),
+                                  call=lambda step: {"scale": 1.0 + step.astype(jnp.float32)})
+    batch = {key: jnp.asarray(value) for key, value in halves(16, 3).items()}
+    variables = objective.init(jax.random.key(0))
+    step = Step(jnp.asarray(2), jax.random.key(1), None)
+    stats, _ = objective.loss(variables, batch, step)
+    outputs = Scaled().apply(variables, Direct(4)(jax.random.key(1), batch["image"]), 3.0)
+    ce = optax.softmax_cross_entropy_with_integer_labels(jnp.mean(outputs, 0), batch["label"])
+    np.testing.assert_allclose(stats.mean()[0], ce.mean(), rtol=1e-5)
+    scores = objective.evaluate(variables, batch, step)
+    np.testing.assert_allclose(scores.losses[:, 0], ce, rtol=1e-5)

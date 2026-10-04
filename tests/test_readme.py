@@ -59,3 +59,14 @@ def test_the_pure_jax_cell_snippet_runs():
              "weight": jnp.eye(6) * 0.1}
     exec(_block("from sparx.cells import"), scope)
     assert scope["spikes"].shape == (20, 4, 6) and scope["more"].shape == (5, 4, 6)
+
+
+def test_the_sew_resnet_snippet_returns_per_step_logits():
+    import sparx
+
+    frames = jnp.ones((2, 1, 32, 32, 3))
+    net = sparx.models.sew_resnet18(10, width=32, stem="small")
+    scope = {"sparx": sparx, "frames": frames,
+             "variables": net.init(jax.random.key(0), frames, train=False)}
+    exec(_block("import functools"), scope)
+    assert scope["logits"].shape == (2, 1, 10)

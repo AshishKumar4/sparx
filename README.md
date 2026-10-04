@@ -89,8 +89,11 @@ The LIF family (`LIF`, `IF`, `LI`, `Synaptic`, `ALIF`) shares one discrete-time 
 | `PSN()` | parallel spiking neuron: `H = W X + b` over all `T x T` step pairs (Fang et al. 2023) | `W`, `b` |
 | `MaskedPSN(k)` | the PSN restricted to the `k` most recent steps | `W`, `b` |
 | `SlidingPSN(k)` | `k` weights slid over time, any `T`, causal | weights, `b` |
+| `DelayedDense(features, max_delay)` | a dense synapse where every connection has its own delay of 0 to `max_delay` steps (Hammouamri et al. 2024) | weights, delays |
 
 `reset` is `"subtract"` (soft reset, the default), `"zero"` (hard reset) or `"none"`. `detach_reset=True` stops the gradient through the reset, as SpyTorch's tutorials and SpikingJelly's `detach_reset` do. Learned decays are the sigmoid of a parameter, so training cannot push them outside (0, 1).
+
+`DelayedDense` learns each delay by spreading the synapse over a Gaussian centered at it; the width is a call argument that a schedule shrinks during training, and `sigma=0` reads exactly the rounded delay, the network to deploy.
 
 The PSNs have no loop over time at all. Each is one `[T, T] x [T, N]` product followed by a threshold, so no step waits for the one before it; Fang et al. report that this also learns longer dependencies than the LIF. `Recurrent(ALIF())` is the recurrent adaptive network (LSNN) of Bellec et al.
 
@@ -109,6 +112,20 @@ A spike is the Heaviside step of `v - threshold`. Its derivative is zero almost 
 | `StraightThrough()` | 1 | |
 
 Pass one to any neuron: `sparx.nn.LIF(surrogate=sparx.surrogate.FastSigmoid(100.0))`.
+
+## Models
+
+`sparx.models` builds architectures from these layers. `SEWResNet` is the spike-element-wise residual network of Fang et al. (2021), laid out as in SpikingJelly, with `sew_resnet18` and `sew_resnet34` presets. Its `neuron` argument sets every neuron of the network:
+
+```python
+import functools
+
+net = sparx.models.sew_resnet18(10, width=32, stem="small",
+                                neuron=functools.partial(sparx.nn.LIF, tau=2.0, detach_reset=True))
+logits = net.apply(variables, frames, train=False)   # frames [T, B, 32, 32, 3] -> [T, B, 10]
+```
+
+[docs/design.md](docs/design.md) explains how neurons, models and objectives fit together, and what is planned.
 
 ## Encoding, losses and firing rates
 
@@ -177,7 +194,7 @@ state = trainer.fit(Dataset.from_records(train, batch=64, validation=test),
                     steps=3000, eval_every=500, metrics=[accuracy])
 ```
 
-Encoders for static data are `Direct(steps)`, `Rate(steps)` and `Latency(steps)`; uint8 fields are read as `x / 255`. The readout is `"mean"`, `"max"`, `"sum"` or `"per_step"`. The objective logs the batch accuracy and every spiking layer's firing rate (`rate/<layer>`), updates BatchNorm statistics, passes `train` and dropout keys to a model that takes them, and evaluates to dew's `TokenScores`, which `sparx.dew.accuracy` reads. [`examples/train_shd.py`](examples/train_shd.py) is the full script.
+Encoders for static data are `Direct(steps)`, `Rate(steps)` and `Latency(steps)`; uint8 fields are read as `x / 255`. The readout is `"mean"`, `"max"`, `"sum"` or `"per_step"`. `call` maps the step counter to keyword arguments for the model, for anything on a schedule, such as `call=lambda step: {"sigma": width(step)}` for a `DelayedDense`. The objective logs the batch accuracy and every spiking layer's firing rate (`rate/<layer>`), updates BatchNorm statistics, passes `train` and dropout keys to a model that takes them, and evaluates to dew's `TokenScores`, which `sparx.dew.accuracy` reads. [`examples/train_shd.py`](examples/train_shd.py) is the full script.
 
 ## Results
 
@@ -227,7 +244,7 @@ For a GPU or TPU, install the matching JAX build first (`jax[cuda12]` or `jax[tp
 
 - Accelerator measurements of the scan, the PSNs and synapse folding, then fused time-loop kernels (Pallas) where they pay.
 - An associative-scan path for linear dynamics, if it wins on accelerators.
-- Learnable synaptic delays, spiking self-attention, and more neuromorphic datasets (SSC, N-MNIST, DVS Gesture).
+- Spiking self-attention and spiking sequence models, and more neuromorphic datasets (SSC, N-MNIST, DVS Gesture).
 - Online learning rules (e-prop, OTTT) that train without backpropagation through time.
 
 ## License

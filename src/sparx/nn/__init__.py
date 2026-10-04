@@ -1,5 +1,6 @@
 """Flax linen layers for spiking networks, over time-major inputs `[T, ...]`."""
 
+from .delays import DelayedDense, delay_kernel
 from .neurons import (
     ALIF,
     IF,
@@ -16,5 +17,23 @@ from .neurons import (
 )
 from .parallel import PSN, MaskedPSN, SlidingPSN, band_mask
 
-__all__ = ["ALIF", "IF", "LI", "LIF", "PSN", "RATES", "STATE", "Izhikevich", "MaskedPSN", "Neuron",
-           "Recurrent", "SlidingPSN", "Synaptic", "band_mask", "decay", "record_rates"]
+__all__ = [
+    "ALIF",
+    "IF",
+    "LI",
+    "LIF",
+    "PSN",
+    "RATES",
+    "STATE",
+    "DelayedDense",
+    "Izhikevich",
+    "MaskedPSN",
+    "Neuron",
+    "Recurrent",
+    "SlidingPSN",
+    "Synaptic",
+    "band_mask",
+    "decay",
+    "delay_kernel",
+    "record_rates",
+]
