@@ -51,5 +51,7 @@ Steady-state steps per second as dew's display or the script reports them, on th
 | `examples/train_mnist.py`, batch 128, 8 steps, 784-512-512-10 | 33 steps/s (468 steps in 14 s) |
 | `examples/train_shd.py`, batch 64, 100 steps x 700 channels, 256 ALIF | 11.3 steps/s |
 | `examples/train_shd.py --recurrent`, the same with a 256 x 256 recurrent matrix | 6.6 steps/s |
+| `examples/train_shd.py --channels 140 --hidden 128` | 31.9 steps/s |
+| the same with `--delays 15`: 16 lagged products in the input layer | 12.6 steps/s |
 
 The recurrent run differs in two ways, the `[64, 256] x [256, 256]` feedback product inside the time loop and the surrogate, and the cost of each has not been separated.

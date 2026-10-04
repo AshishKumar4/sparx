@@ -26,7 +26,7 @@ Conventions shared by the LIF family:
 Two families need no loop over time:
 
 - Parallel spiking neurons (`PSN`, `MaskedPSN`, `SlidingPSN`) replace the recurrence with a learned mixing matrix over time.
-- `DelayedDense` moves the temporal structure into the synapse: each synapse learns a delay.
+- `DelayedDense` moves the temporal structure into the synapse: each synapse learns a delay. On SHD it raised a feedforward network from 64.5% to 74.6% test accuracy (README, Results).
 
 Open questions:
 
@@ -88,4 +88,4 @@ Measured on CPU only so far. Synapses dominate the cost, the neuron scan is a fe
 2. Fuse the time loop into one kernel (Pallas) where the scan's per-step overhead dominates.
 3. Revisit the associative scan for linear dynamics on hardware where it may win.
 
-Event-driven sparse execution is deferred. Dense products on binary inputs are what accelerators run fastest at the sparsities measured (6 to 15% in the SHD runs).
+Event-driven sparse execution is deferred. Dense products on binary inputs are what accelerators run fastest at the firing rates measured (6 to 13% of steps in the SHD runs).

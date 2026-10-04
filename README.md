@@ -205,8 +205,10 @@ All runs below are the example scripts as committed, on a 4-core x86 CPU with JA
 | MNIST, rate-coded, 8 steps | `python examples/train_mnist.py --epochs 2` | 784-512-512 LIF, LI readout, plain JAX loop | 97.46% after 2 epochs | 15 s per epoch |
 | SHD, 100 steps of 14 ms | `python examples/train_shd.py --steps 3000` | 700-256 ALIF, LI readout (max), dew `Trainer` | 53.00% | 4 min 45 s |
 | SHD | `python examples/train_shd.py --steps 3000 --recurrent --surrogate superspike` | 256 recurrent ALIF | 45.23%, still rising at the last evaluation | 8 min |
+| SHD, channels pooled to 140 | `python examples/train_shd.py --steps 3000 --channels 140 --hidden 128` | 140-128 ALIF | 64.53% | 1 min 42 s |
+| SHD, channels pooled to 140 | `... --channels 140 --hidden 128 --delays 15` | the same, with a learned delay of 0 to 15 steps per input synapse | 74.56%, with every delay rounded to a whole step | 4 min 19 s |
 
-For scale, Cramer et al. (2020) report about 71% for recurrent and under 50% for feedforward LIF networks on SHD, and Hammouamri et al. (ICLR 2024) reach 95% with learned synaptic delays.
+The last two rows differ only in the delays, which add 10 points. For scale, Cramer et al. (2020) report about 71% for recurrent and under 50% for feedforward LIF networks on SHD, and Hammouamri et al. (ICLR 2024) reach 95% with learned synaptic delays.
 
 The recurrent SHD run needs the steep SuperSpike surrogate. With ATan, backpropagation through the recurrence exploded once training grew the recurrent matrix's spectral radius from 1 to 5: the gradient norm passed 1e8 within 300 steps and test accuracy fell below 15%. `FastSigmoid(100)` kept the gradient norm below 10. The `Recurrent` docstring records this.
 
