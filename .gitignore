@@ -1,0 +1,12 @@
+dist
+build/
+*.egg-info
+__pycache__
+*.pyc
+.ipynb_checkpoints
+.pytest_cache/
+.venv/
+.claude/
+.worktrees/
+# where the examples write their output by default
+/runs/
