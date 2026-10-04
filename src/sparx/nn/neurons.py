@@ -58,6 +58,8 @@ __all__ = [
     "Neuron",
     "Recurrent",
     "Synaptic",
+    "decay",
+    "record_rates",
 ]
 
 STATE = "state"
@@ -97,9 +99,15 @@ class Neuron(nn.Module):
         outputs, final = run(cell, x, state, unroll=self.unroll)
         if carrying:
             self.put_variable(STATE, "carry", final)
-        if self.spiking and self.is_mutable_collection(RATES) and not self.is_initializing():
-            self.sow(RATES, "rate", jnp.mean(outputs, axis=0, dtype=jnp.float32))
+        if self.spiking:
+            record_rates(self, outputs)
         return outputs
+
+
+def record_rates(module: nn.Module, spikes: jax.Array) -> None:
+    """Sow `spikes`' time-averaged rate into `"spike_rates"` when that collection is mutable."""
+    if module.is_mutable_collection(RATES) and not module.is_initializing():
+        module.sow(RATES, "rate", jnp.mean(spikes, axis=0, dtype=jnp.float32))
 
 
 def decay(tau: float) -> float:
