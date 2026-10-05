@@ -17,7 +17,7 @@ import jax
 import jax.numpy as jnp
 
 import sparx
-from sparx.cells import LIFCell, run
+from sparx.dynamics import LIFCell, SynapticInput, decay, run
 
 
 def timed(fn, *args, repeats):
@@ -36,7 +36,7 @@ def lif_unroll(args):
     print(f"LIF forward+backward, T={args.steps} B={args.batch} F={args.features}")
     for unroll in (1, 2, 4, 8, 16):
         def loss(x, unroll=unroll):
-            return jnp.sum(run(LIFCell(0.8), x, unroll=unroll)[0])
+            return jnp.sum(run(LIFCell(0.8), x, unroll=unroll)[0].fired)
         fn = jax.jit(jax.grad(loss))
         print(f"  unroll={unroll:<3} {timed(fn, x, repeats=args.repeats) * 1e3:8.2f} ms")
 
@@ -54,13 +54,13 @@ class Folded(nn.Module):
 def per_step(params, x):
     """`Folded` with the same parameters, stepped one time step at a time:
     both synaptic products run inside the loop, on `B` rows each."""
-    cell = LIFCell(sparx.nn.decay(2.0))
+    cell = LIFCell(decay(2.0))
     first, second = params["params"]["Dense_0"], params["params"]["Dense_1"]
 
     def step(states, x_t):
-        a, s = cell.step(states[0], x_t @ first["kernel"] + first["bias"])
-        b, s = cell.step(states[1], s @ second["kernel"] + second["bias"])
-        return (a, b), s
+        a, s = cell.step(states[0], SynapticInput(jump=x_t @ first["kernel"] + first["bias"]), 1.0)
+        b, s = cell.step(states[1], SynapticInput(jump=s.fired @ second["kernel"] + second["bias"]), 1.0)
+        return (a, b), s.fired
 
     features = first["kernel"].shape[1]
     states = (cell.init_state((*x.shape[1:-1], features), x.dtype),) * 2

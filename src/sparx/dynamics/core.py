@@ -1,21 +1,26 @@
-"""The contract every biophysical model meets, and the arithmetic they share.
+"""The contract every neuron model meets, the runner that scans one over time, and the arithmetic they share.
 
-Units are a convention, checked where values are read in (design.md 4.4):
+A neuron model advances one step of `dt` from its state and the synaptic
+input it receives that step:
+
+    model.init_state(shape, dtype) -> state
+    model.step(state, SynapticInput, dt) -> (state, Spikes)
+
+and `run(model, inputs)` scans the step over time-major inputs. Two
+families meet this contract. The physical models (`sparx.dynamics.neurons`)
+are in units, checked where values are read in (design.md 4.4):
 
     time         ms        voltage      mV
     current      pA        conductance  nS
     capacitance  pF        rate         1/ms
 
 so `pF * mV / ms = pA` and `nS * mV = pA` hold without conversion factors.
+The dimensionless models deep networks train with (`sparx.dynamics.ml`)
+count time in steps, `dt = 1` by default, and take their input as a jump
+of the membrane.
 
-A neuron model advances one step of `dt` ms from its state and the synaptic
-input it receives that step. The input separates what is a current from
-what is a conductance, because a conductance acts through the neuron's own
-voltage and reversal potential:
-
-    model.init_state(shape, dtype) -> state
-    model.step(state, SynapticInput, dt) -> (state, Spikes)
-
+The input separates what is a current from what is a conductance, because
+a conductance acts through the neuron's own voltage and reversal potential.
 A step covers `(t, t + dt]`. Synaptic currents are waveforms over it, sums
 of `(a + b s) exp(-s / tau)` for `s` in `[0, dt]` (`Term`), which cover the
 exponential, alpha and bi-exponential synapses; a model whose membrane is
@@ -36,30 +41,47 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping
-from typing import Any, NamedTuple, Protocol
+from typing import Literal, NamedTuple, Protocol, overload
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from flax import struct
 
+from sparx.surrogate import Surrogate, spike
+
 __all__ = [
+    "Model",
     "NeuronModel",
+    "Reset",
     "Spikes",
     "SynapticInput",
     "Term",
     "crossing",
+    "decay",
     "exact_linear",
-    "integrate",
+    "fire",
     "membrane_dtype",
     "response",
     "rk4",
+    "run",
     "substeps",
 ]
 
 
 def membrane_dtype(dtype: jnp.dtype) -> jnp.dtype:
-    """The dtype state integrates in for inputs of `dtype`: float32 or wider."""
+    """The dtype state integrates in for inputs of `dtype`: float32 or wider.
+
+    A bf16 membrane loses the small inputs it integrates over long sequences.
+    """
     return jnp.promote_types(dtype, jnp.float32)
+
+
+def decay(tau: float, dt: float = 1.0) -> float:
+    """`exp(-dt / tau)`: what a time constant `tau` leaves of a value after a step `dt` in the same unit."""
+    if tau <= 0:
+        raise ValueError(f"a time constant must be positive, not {tau}")
+    return math.exp(-dt / tau)
 
 
 class Term(NamedTuple):
@@ -107,23 +129,66 @@ class SynapticInput:
 class Spikes(NamedTuple):
     """A step's spikes, and when within the step each happened.
 
-    `fired` is 0 or 1 in the input dtype. `offset` is the fraction of the
-    step, in [0, 1], at which the membrane crossed threshold, from linear
-    interpolation of the voltage across the step (Hansel et al., Neural
-    Computation 1998); 1 where nothing fired. A spike's time is
-    `(step + offset) * dt` from the start of the run.
+    `fired` is 0 or 1. `offset` is the fraction of the step, in [0, 1], at
+    which the membrane crossed threshold, from linear interpolation of the
+    voltage across the step (Hansel et al., Neural Computation 1998); 1
+    where nothing fired. A spike's time is `(step + offset) * dt` from the
+    start of the run. A model that never fires (`sparx.dynamics.ml.LICell`)
+    reports its membrane as `fired`, the output a readout reads and the
+    next model of a `Serial` receives.
     """
 
     fired: jax.Array
     offset: jax.Array
 
 
-class NeuronModel[State](Protocol):
-    """One population of neurons in physical units, advanced one step at a time."""
+class Model[State, Inputs](Protocol):
+    """Anything `run` steps: a neuron model, or a neuron with the synapses onto it (`PointNeuron`)."""
 
-    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> State: ...
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> State:
+        """The population at rest, for inputs of per-step shape `shape` and dtype `dtype`."""
+        ...
 
-    def step(self, state: State, inputs: SynapticInput, dt: float) -> tuple[State, Spikes]: ...
+    def step(self, state: State, inputs: Inputs, dt: float) -> tuple[State, Spikes]:
+        """Advance one step of `dt` on `inputs`; return the new state and the step's spikes."""
+        ...
+
+
+class NeuronModel[State](Model[State, SynapticInput], Protocol):
+    """One population of neurons, advanced one step at a time on the synaptic input it receives."""
+
+
+type Reset = Literal["subtract", "zero", "none"]
+"""What a spike does to a dimensionless membrane: `subtract` the threshold (soft reset,
+which keeps the overshoot), set it to `zero` (hard reset), or leave it, `none`."""
+
+
+def fire(v: jax.Array, threshold: jax.Array | float, surrogate: Surrogate, reset: Reset | jax.Array | float,
+         *, subtract: jax.Array | float | None = None,
+         detach_reset: bool = False) -> tuple[jax.Array, jax.Array]:
+    """Spike where `v` reaches `threshold`, then reset; return the membrane and the spikes.
+
+    `reset` is the voltage a membrane that fired is set to, or a rule:
+    `"subtract"` takes away `subtract` (the threshold unless given),
+    `"zero"` sets it to 0 and `"none"` leaves it. A set voltage is exact,
+    and its gradient is that of `v + s (reset - v)`, so the surrogate's
+    gradient passes the reset as it passes a subtraction. `detach_reset`
+    stops the gradient through the reset, so the surrogate reaches the
+    membrane only through the spike output, as in SpyTorch's tutorials and
+    SpikingJelly's `detach_reset`. An infinite threshold fires nothing and
+    resets nothing, which is how a refractory neuron is held.
+    """
+    s = spike(v - threshold, surrogate)
+    r = jax.lax.stop_gradient(s) if detach_reset else s
+    if isinstance(reset, str):
+        if reset == "subtract":
+            return v - r * (threshold if subtract is None else subtract), s
+        if reset == "none":
+            return v, s
+        if reset != "zero":
+            raise ValueError(f"reset must be subtract, zero or none, not {reset!r}")
+        reset = 0.0
+    return jnp.where(r > 0, reset, v) + (r - jax.lax.stop_gradient(r)) * (reset - v), s
 
 
 def exact_linear(v: jax.Array, target: jax.Array, tau: jax.Array | float, dt: float) -> jax.Array:
@@ -204,29 +269,55 @@ def crossing(before: jax.Array, after: jax.Array, threshold: jax.Array | float) 
     return jnp.clip(jnp.where(rise > 0, fraction, 0), 0, 1)
 
 
-def integrate[State](model: NeuronModel[State], inputs, dt: float, state: State | None = None,
-                     record: Callable[[State], Any] | None = None):
-    """Scan `model` over time-major `inputs`: every leaf `[T, ...]`, or a scalar held over time.
+@overload
+def run[State, Inputs](model: Model[State, Inputs], inputs: Inputs | jax.Array | np.ndarray,
+                       state: State | None = None, *, dt: float = 1.0, record: None = None,
+                       unroll: int | bool = 1) -> tuple[Spikes, State]: ...
 
-    `inputs` is what `model.step` takes for one step (a `SynapticInput`
-    for a neuron model). Returns the step outputs stacked over time and the
-    final state, which a later call continues from. The population's shape
-    is the per-step shape of the first input with a time axis. With
-    `record`, each step's output is paired with `record(state)` after the
-    step (the membrane voltage, say).
+
+@overload
+def run[State, Inputs, Record](model: Model[State, Inputs], inputs: Inputs | jax.Array | np.ndarray,
+                               state: State | None = None, *, dt: float = 1.0,
+                               record: Callable[[State], Record],
+                               unroll: int | bool = 1) -> tuple[tuple[Spikes, Record], State]: ...
+
+
+def run[State, Inputs, Record](model: Model[State, Inputs], inputs: Inputs | jax.Array | np.ndarray,
+                               state: State | None = None, *, dt: float = 1.0,
+                               record: Callable[[State], Record] | None = None,
+                               unroll: int | bool = 1) -> tuple[Spikes | tuple[Spikes, Record], State]:
+    """Scan `model` over time-major `inputs`; return its spikes `[T, ...]` and the final state.
+
+    `inputs` is what `model.step` takes for one step, with every leaf
+    `[T, ...]` or a scalar held over time: a `SynapticInput` for a neuron
+    model, `Arrivals` for a `PointNeuron`. An array `[T, ...]` stands for
+    `SynapticInput(jump=...)`, the dimensionless family's input. The
+    population's per-step shape and its dtype are those of the first input
+    with a time axis. `state` None starts the population at rest; a run over
+    the first `k` steps and one over the rest from its final state equal one
+    run over all. With `record`, each step's spikes are paired with
+    `record(state)` after the step (the membrane voltage, say). `unroll` is
+    `jax.lax.scan`'s: how many steps one loop iteration holds.
     """
-    leaves = [jnp.asarray(leaf) for leaf in jax.tree.leaves(inputs)]
-    timed = [leaf for leaf in leaves if leaf.ndim > 0]
+    given = SynapticInput(jump=jnp.asarray(inputs)) if isinstance(inputs, jax.Array | np.ndarray) else inputs
+    leaves, tree = jax.tree.flatten(given)
+    timed = [i for i, leaf in enumerate(leaves) if jnp.ndim(leaf) > 0]
     if not timed:
-        raise ValueError("integrate needs at least one input with a leading time axis")
-    steps, shape, dtype = timed[0].shape[0], timed[0].shape[1:], timed[0].dtype
+        raise ValueError("run takes time-major inputs: at least one leaf [T, ...]")
+    first = jnp.asarray(leaves[timed[0]])
+    steps, shape, dtype = first.shape[0], first.shape[1:], first.dtype
     if state is None:
         state = model.init_state(shape, dtype)
-    held = jax.tree.map(lambda leaf: jnp.broadcast_to(jnp.asarray(leaf, dtype), (steps, *shape)), inputs)
+    # Held scalars stay outside the scan as they were given, so an absent
+    # input reads as Python's 0.0 in every step.
+    xs = [jnp.broadcast_to(jnp.asarray(leaves[i], dtype), (steps, *shape)) for i in timed]
 
-    def step(state, inputs):
-        state, out = model.step(state, inputs, dt)
-        return state, out if record is None else (out, record(state))
+    def step(state: State, xs_t: list[jax.Array]) -> tuple[State, Spikes | tuple[Spikes, Record]]:
+        now = list(leaves)
+        for i, x in zip(timed, xs_t, strict=True):
+            now[i] = x
+        state, spikes = model.step(state, jax.tree.unflatten(tree, now), dt)
+        return state, spikes if record is None else (spikes, record(state))
 
-    state, out = jax.lax.scan(step, state, held)
+    state, out = jax.lax.scan(step, state, xs, unroll=unroll)
     return out, state

@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from sparx.cells import LIFCell, SynapticCell, run
+from sparx.dynamics import LICell, LIFCell, Serial, run
 from sparx.nn import PSN, MaskedPSN, SlidingPSN
 from sparx.surrogate import ATan
 
@@ -38,7 +38,8 @@ def test_lif_matches_spikingjelly_lifnode_without_input_decay(name, reset, detac
     cell = LIFCell(1 - 1 / float(c["tau"]), 1.0, reset, ATan(2.0), detach)
 
     def weighted(x):
-        spikes, state = run(cell, x)
+        out, state = run(cell, x)
+        spikes = out.fired
         return jnp.sum(spikes * c["weights"]), (spikes, state)
 
     grad_x, (spikes, state) = jax.grad(weighted, has_aux=True)(jnp.asarray(c["x"]))
@@ -103,7 +104,7 @@ def _snntorch_case(key):
 @pytest.mark.parametrize("reset", ["subtract", "zero"])
 @pytest.mark.parametrize(("name", "cell"), [
     ("leaky", lambda reset: LIFCell(0.8, 1.0, reset, ATan(2.0))),
-    ("synaptic", lambda reset: SynapticCell(0.8, 0.6, 1.0, reset, ATan(2.0))),
+    ("synaptic", lambda reset: Serial(LICell(0.6), LIFCell(0.8, 1.0, reset, ATan(2.0)))),
 ])
 def test_lif_and_synaptic_match_snntorch_with_an_immediate_reset(name, cell, reset):
     # snnTorch's immediate reset subtracts the threshold times the live spike,
@@ -113,7 +114,7 @@ def test_lif_and_synaptic_match_snntorch_with_an_immediate_reset(name, cell, res
     expected = _snntorch_case(f"neuron_x/{name}_{reset}_immediate")
 
     def weighted(x):
-        spikes, _ = run(cell(reset), x)
+        spikes = run(cell(reset), x)[0].fired
         return jnp.sum(spikes * SNNTORCH["neuron_weights"]), spikes
 
     grad_x, spikes = jax.grad(weighted, has_aux=True)(jnp.asarray(SNNTORCH["neuron_x"]))

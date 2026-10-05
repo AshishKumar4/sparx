@@ -8,11 +8,12 @@ from .neurons import (
     LIF,
     RATES,
     STATE,
+    Dynamics,
     Izhikevich,
     Neuron,
     Recurrent,
     Synaptic,
-    decay,
+    adopt,
     record_rates,
 )
 from .parallel import PSN, MaskedPSN, SlidingPSN, band_mask
@@ -27,6 +28,7 @@ __all__ = [
     "RATES",
     "STATE",
     "DelayedDense",
+    "Dynamics",
     "Flatten",
     "Izhikevich",
     "MaskedPSN",
@@ -34,8 +36,8 @@ __all__ = [
     "Recurrent",
     "SlidingPSN",
     "Synaptic",
+    "adopt",
     "band_mask",
-    "decay",
     "delay_kernel",
     "record_rates",
 ]

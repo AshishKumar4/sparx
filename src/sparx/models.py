@@ -17,8 +17,8 @@ integrator readout.
 `neuron` is the template every neuron layer of a model copies, such as
 `sparx.nn.LIF(tau=2.0, detach_reset=True)`. It is a registered value, so a
 run's record holds it as `{"name": "lif", "fields": {...}}` and rebuilds the model. Each
-copy belongs to the block that uses it, so its parameters (a learned time
-constant) are that block's own.
+copy (`sparx.nn.adopt`) belongs to the block that uses it, so its parameters
+(a learned time constant) are that block's own.
 
 Both models are registered in dew's model registry, `sew_resnet` and
 `spiking_mlp`, and take `train` as dew's objectives pass it.
@@ -35,19 +35,10 @@ import jax.numpy as jnp
 from dew.registry import models
 
 from sparx.nn.delays import DelayedDense
-from sparx.nn.neurons import LI, LIF, Neuron, Recurrent
+from sparx.nn.neurons import LI, LIF, Neuron, Recurrent, adopt
 
-__all__ = ["SEWBlock", "SEWResNet", "SpikingMLP", "copy_neuron", "sew_resnet18", "sew_resnet34"]
+__all__ = ["SEWBlock", "SEWResNet", "SpikingMLP", "sew_resnet18", "sew_resnet34"]
 
-
-def copy_neuron(template: Neuron, owner: nn.Module, name: str) -> Neuron:
-    """A copy of `template` that is `owner`'s child called `name`, wherever the template was built."""
-    return template.clone(parent=owner, name=name)
-
-
-def _template(neuron: Neuron) -> Neuron:
-    """`neuron` unbound, to hand to a submodule as its own template."""
-    return neuron.clone(parent=None)
 
 type Connect = Literal["add", "and", "iand"]
 """How a SEW block combines its shortcut `s` with its residual output `r`:
@@ -88,12 +79,12 @@ class SEWBlock(nn.Module):
                         kernel_init=_conv_init, name=f"{name}_conv")(x)
             return nn.BatchNorm(use_running_average=not train, momentum=0.9, name=f"{name}_bn")(x)
 
-        residual = copy_neuron(self.neuron, self, "sn1")(conv_bn(x, self.features, 3, self.strides, "first"))
-        residual = copy_neuron(self.neuron, self, "sn2")(conv_bn(residual, self.features, 3, 1, "second"))
+        residual = adopt(self.neuron, self, "sn1")(conv_bn(x, self.features, 3, self.strides, "first"))
+        residual = adopt(self.neuron, self, "sn2")(conv_bn(residual, self.features, 3, 1, "second"))
         shortcut = x
         if self.strides != 1 or x.shape[-1] != self.features:
             shortcut = conv_bn(x, self.features, 1, self.strides, "downsample")
-            shortcut = copy_neuron(self.neuron, self, "downsample_sn")(shortcut)
+            shortcut = adopt(self.neuron, self, "downsample_sn")(shortcut)
         return connect(shortcut, residual, self.connect)
 
 
@@ -124,7 +115,7 @@ class SEWResNet(nn.Module):
         else:
             x = nn.Conv(self.width, (3, 3), padding=1, use_bias=False, kernel_init=_conv_init)(x)
         x = nn.BatchNorm(use_running_average=not train, momentum=0.9)(x)
-        x = copy_neuron(self.neuron, self, "stem_sn")(x)
+        x = adopt(self.neuron, self, "stem_sn")(x)
         if self.stem == "imagenet":
             # torch's MaxPool2d(3, 2, padding=1) pads with -inf, which never wins the max.
             pad = [(0, 0)] * (x.ndim - 3) + [(1, 1), (1, 1), (0, 0)]
@@ -132,7 +123,7 @@ class SEWResNet(nn.Module):
         for stage, blocks in enumerate(self.stages):
             for block in range(blocks):
                 strides = 2 if stage > 0 and block == 0 else 1
-                x = SEWBlock(self.width * 2 ** stage, strides, self.connect, _template(self.neuron),
+                x = SEWBlock(self.width * 2 ** stage, strides, self.connect, self.neuron,
                              name=f"stage{stage + 1}_block{block + 1}")(x, train)
         x = jnp.mean(x, axis=(-3, -2))
         return nn.Dense(self.classes)(x)
@@ -179,9 +170,9 @@ class SpikingMLP(nn.Module):
             else:
                 x = nn.Dense(width, name=f"dense_{layer}")(x)
             if self.recurrent:
-                x = Recurrent(neuron=_template(self.neuron), name=f"recurrent_{layer}")(x)
+                x = Recurrent(neuron=self.neuron, name=f"recurrent_{layer}")(x)
             else:
-                x = copy_neuron(self.neuron, self, f"neuron_{layer}")(x)
+                x = adopt(self.neuron, self, f"neuron_{layer}")(x)
             x = nn.Dropout(self.dropout, deterministic=not train)(x)
         x = nn.Dense(self.classes, name="readout")(x)
         return LI(tau=self.readout_tau, learn_tau=self.learn_readout_tau, name="integrator")(x)

@@ -25,7 +25,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
-from sparx.cells import membrane_dtype
+from sparx.dynamics.core import membrane_dtype
 from sparx.nn.neurons import STATE
 
 __all__ = ["DelayedDense", "delay_kernel"]

@@ -8,17 +8,7 @@ import numpy as np
 import pytest
 from scipy.integrate import quad
 
-from sparx.dynamics import (
-    LIF,
-    Alpha,
-    BiExponential,
-    Exponential,
-    MgBlock,
-    SynapticInput,
-    Term,
-    integrate,
-    response,
-)
+from sparx.dynamics import LIF, Alpha, BiExponential, Exponential, MgBlock, SynapticInput, Term, response, run
 
 
 def lif_period(neuron: LIF, current: float) -> float:
@@ -40,8 +30,8 @@ def test_one_long_step_equals_many_short_ones_below_threshold():
             return SynapticInput(jnp.broadcast_to(current, (steps, 2)), conductance=
                                  {k: jnp.broadcast_to(v, (steps, 2)) for k, v in g.items()})
 
-        long, long_state = integrate(neuron, held(1), 5.0)
-        short, short_state = integrate(neuron, held(500), 0.01)
+        long, long_state = run(neuron, held(1), dt=5.0)
+        short, short_state = run(neuron, held(500), dt=0.01)
     assert float(long.fired.sum() + short.fired.sum()) == 0
     np.testing.assert_allclose(long_state.v, short_state.v, rtol=1e-12)
 
@@ -53,8 +43,8 @@ def test_constant_conductances_relax_to_their_analytic_steady_state():
     v_inf = (g_l * neuron.e_l + g_e * 0.0 + g_i * -80.0) / (g_l + g_e + g_i)
     tau = neuron.c_m / (g_l + g_e + g_i)
     with jax.enable_x64(new_val=True):
-        _, state = integrate(neuron, SynapticInput(0.0, conductance={"ampa": jnp.full((300, 1), g_e),
-                                                         "gaba_a": jnp.full((300, 1), g_i)}), 0.1)
+        _, state = run(neuron, SynapticInput(0.0, conductance={"ampa": jnp.full((300, 1), g_e),
+                                                         "gaba_a": jnp.full((300, 1), g_i)}), dt=0.1)
     expected = v_inf + (neuron.e_l - v_inf) * math.exp(-30.0 / tau)
     np.testing.assert_allclose(state.v[0], expected, rtol=1e-12)
     assert v_inf < neuron.v_th  # the test never fires
@@ -65,7 +55,7 @@ def test_firing_period_is_the_analytic_one_within_a_step(current):
     neuron = LIF()
     dt = 0.01
     with jax.enable_x64(new_val=True):
-        spikes, _ = integrate(neuron, SynapticInput(jnp.full((40_000, 1), current)), dt)
+        spikes, _ = run(neuron, SynapticInput(jnp.full((40_000, 1), current)), dt=dt)
     steps = np.flatnonzero(np.asarray(spikes.fired[:, 0]))
     assert len(steps) > 5
     periods = np.diff(steps) * dt
@@ -81,7 +71,7 @@ def test_in_step_spike_times_are_closer_than_the_grid():
     dt = 0.5
     current = 400.0
     with jax.enable_x64(new_val=True):
-        spikes, _ = integrate(neuron, SynapticInput(jnp.full((200, 1), current)), dt)
+        spikes, _ = run(neuron, SynapticInput(jnp.full((200, 1), current)), dt=dt)
     first = int(np.flatnonzero(np.asarray(spikes.fired[:, 0]))[0])
     on_grid = (first + 1) * dt
     precise = (first + float(spikes.offset[first, 0])) * dt
@@ -92,7 +82,7 @@ def test_in_step_spike_times_are_closer_than_the_grid():
 def test_refractoriness_holds_for_t_ref_over_dt_steps():
     neuron = LIF(t_ref=2.0)
     dt = 0.1
-    spikes, _ = integrate(neuron, SynapticInput(jnp.full((400, 1), 5000.0)), dt)
+    spikes, _ = run(neuron, SynapticInput(jnp.full((400, 1), 5000.0)), dt=dt)
     steps = np.flatnonzero(np.asarray(spikes.fired[:, 0]))
     # The membrane is held at reset for round(t_ref / dt) = 20 steps, then
     # climbs from reset to threshold toward E_L + R I, which takes
@@ -106,7 +96,7 @@ def test_the_surrogate_passes_gradients_to_the_input_current():
     neuron = LIF()
 
     def rate(current):
-        spikes, _ = integrate(neuron, SynapticInput(jnp.full((2000, 1), current)), 0.1)
+        spikes, _ = run(neuron, SynapticInput(jnp.full((2000, 1), current)), dt=0.1)
         return jnp.sum(spikes.fired)
 
     assert float(jax.grad(rate)(400.0)) > 0

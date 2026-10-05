@@ -7,9 +7,8 @@ import numpy as np
 import pytest
 import reference
 
-import sparx
-from sparx.cells import LIFCell, run
-from sparx.nn import ALIF, IF, LI, LIF, RATES, STATE, Flatten, Izhikevich, Recurrent, Synaptic
+from sparx.dynamics import AdEx, Izhikevich as IzhikevichModel, LIFCell, SynapticInput, decay, run
+from sparx.nn import ALIF, IF, LI, LIF, RATES, STATE, Dynamics, Flatten, Izhikevich, Recurrent, Synaptic
 
 T, B, D = 24, 4, 6
 
@@ -173,7 +172,7 @@ def test_bf16_networks_spike_in_bf16():
     x = inputs(10).astype(jnp.bfloat16)
     out = LIF().apply({}, x)
     assert out.dtype == jnp.bfloat16
-    np.testing.assert_array_equal(out, run(LIFCell(math.exp(-1 / 2.0)), x)[0])
+    np.testing.assert_array_equal(out, run(LIFCell(decay(2.0)), x)[0].fired)
 
 
 @pytest.mark.parametrize("tau", [0.0, -1.0])
@@ -185,7 +184,7 @@ def test_nonpositive_time_constants_are_refused(tau):
 def test_positional_arguments_name_the_neuron_not_the_unroll():
     assert LIF(3.0).tau == 3.0
     assert Recurrent(ALIF()).neuron == ALIF()
-    assert sparx.nn.decay(2.0) == math.exp(-0.5)
+    assert decay(2.0) == math.exp(-0.5)
 
 
 def test_flatten_orders_features_as_pytorch_does():
@@ -194,3 +193,23 @@ def test_flatten_orders_features_as_pytorch_does():
     out = Flatten().apply({}, jnp.asarray(x))
     np.testing.assert_array_equal(out, nchw.reshape(2, 3, -1))  # torch.flatten(x, start_dim=2)
     np.testing.assert_array_equal(Flatten(ndim=1).apply({}, jnp.asarray(x)), x)
+
+
+def test_a_physical_model_runs_as_a_layer_and_streams():
+    # AdEx on currents in pA, steps of 0.1 ms: the layer is the model run
+    # alone, and chunks carried through the state collection are one run.
+    x = jnp.asarray(np.random.default_rng(11).normal(900.0, 300.0, (1000, 2, 3)), jnp.float32)
+    layer = Dynamics(neuron=AdEx(), dt=0.1)
+    out = layer.apply({}, x)
+    expected = run(AdEx(), SynapticInput(current=x), dt=0.1)[0].fired
+    np.testing.assert_array_equal(out, expected)
+    assert out.dtype == x.dtype and int(out.sum()) > 20
+    head, carried = layer.apply({}, x[:350], mutable=[STATE])
+    tail, _ = layer.apply(carried, x[350:], mutable=[STATE])
+    np.testing.assert_array_equal(jnp.concatenate([head, tail]), out)
+
+
+def test_izhikevich_layer_is_the_dynamics_model_on_currents():
+    x = jnp.asarray(np.random.default_rng(12).normal(10.0, 3.0, (300, 2, 3)), jnp.float32)
+    expected = run(IzhikevichModel(c=-55.0, v_init=-55.0), SynapticInput(current=x))[0].fired
+    np.testing.assert_array_equal(Izhikevich(c=-55.0).apply({}, x), expected)

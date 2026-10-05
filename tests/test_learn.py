@@ -9,7 +9,7 @@ import numpy as np
 import optax
 import pytest
 
-from sparx.cells import ALIFCell, LIFCell
+from sparx.dynamics import ALIFCell, LIFCell, SynapticInput, decay
 from sparx.learn import (
     AvgPool,
     ConvLayer,
@@ -32,12 +32,12 @@ from sparx.learn.events import EventLIF, first_spike_cross_entropy, spike_times
 from sparx.surrogate import Sigmoid, Triangle
 
 CELLS = {
-    "lif": lambda: LIFCell(decay=float(np.exp(-1 / 20)), threshold=0.6, detach_reset=True,
+    "lif": lambda: LIFCell(decay=decay(20.0), threshold=0.6, detach_reset=True,
                            surrogate=Triangle()),
-    "alif": lambda: ALIFCell(decay=float(np.exp(-1 / 20)), adapt_decay=float(np.exp(-1 / 200)), beta=0.07,
+    "alif": lambda: ALIFCell(decay=decay(20.0), adapt_decay=decay(200.0), beta=0.07,
                              threshold=0.6, detach_reset=True, surrogate=Triangle()),
     # Their numerical verifications run with n_ref = 2.
-    "alif_refractory": lambda: ALIFCell(decay=float(np.exp(-1 / 20)), adapt_decay=float(np.exp(-1 / 200)),
+    "alif_refractory": lambda: ALIFCell(decay=decay(20.0), adapt_decay=decay(200.0),
                                         beta=0.07, threshold=0.6, detach_reset=True, surrogate=Triangle(),
                                         refractory=2),
 }
@@ -65,7 +65,7 @@ def test_eprop_is_backpropagation_with_the_recurrent_spikes_cut(kind):
     # recurrent spikes, to rounding.
     with jax.enable_x64(new_val=True):
         params, inputs, targets = problem()
-        cell, kappa = CELLS[kind](), float(np.exp(-1 / 20))
+        cell, kappa = CELLS[kind](), decay(20.0)
         total, online = eprop(cell, params, kappa, inputs, targets, mse)
         expected = jax.grad(bptt_loss, argnums=1)(cell, params, kappa, inputs, targets, mse,
                                                   cut_recurrence=True)
@@ -83,7 +83,7 @@ def test_the_eligibility_factorization_is_exactly_backpropagation(kind):
     # gradient.
     with jax.enable_x64(new_val=True):
         params, inputs, targets = problem(seed=1)
-        cell, kappa = CELLS[kind](), float(np.exp(-1 / 20))
+        cell, kappa = CELLS[kind](), decay(20.0)
 
         def loss_of_spikes(zs_shift, params):
             # The loss with an additive probe on every step's spikes, to read dE/dz_t.
@@ -92,7 +92,8 @@ def test_the_eligibility_factorization_is_exactly_backpropagation(kind):
             def step(carry, xs):
                 state, z, y = carry
                 u, shift = xs
-                state, z = cell.step(state, u @ params.w_in + z @ params.w_rec)
+                state, spikes = cell.step(state, SynapticInput(jump=u @ params.w_in + z @ params.w_rec), 1.0)
+                z = spikes.fired
                 z = z + shift
                 y = kappa * y + z @ params.w_out + params.b_out
                 return (state, z, y), y
@@ -366,7 +367,7 @@ def test_event_gradients_are_the_exact_derivatives_of_spike_times():
 def test_event_simulation_is_the_lif_integrated_on_a_fine_grid():
     # The same neurons in sparx.dynamics (exact integration, exponential
     # current synapses) at 1 us fire at the same times, to the grid.
-    from sparx.dynamics import LIF, Arrivals, Exponential, PointNeuron, Receptor, integrate
+    from sparx.dynamics import LIF, Arrivals, Exponential, PointNeuron, Receptor, run
 
     neuron = EventLIF()
     dt, horizon = 0.001, 60.0
@@ -380,7 +381,7 @@ def test_event_simulation_is_the_lif_integrated_on_a_fine_grid():
             arrivals[step] += np.asarray(weights[source])
         lif = LIF(tau_m=neuron.tau_mem, c_m=neuron.tau_mem, e_l=0.0, v_th=1.0, v_reset=0.0, t_ref=0.0)
         cell = PointNeuron(lif, {"syn": Receptor(Exponential(neuron.tau_syn))})
-        fired, _ = integrate(cell, Arrivals(0.0, {"syn": jnp.asarray(arrivals)}), dt)
+        fired, _ = run(cell, Arrivals(0.0, {"syn": jnp.asarray(arrivals)}), dt=dt)
     for n in range(weights.shape[1]):
         grid = (np.flatnonzero(np.asarray(fired.fired[:, n])) + 1) * dt
         want = np.sort(np.asarray(exact[0, n]))

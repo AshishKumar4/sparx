@@ -1,24 +1,44 @@
-"""Biophysical neuron, synapse and plasticity models in physical units.
+"""Neuron, synapse and plasticity models, and the runner that scans them over time.
 
-`sparx.cells` holds the dimensionless, one-step-is-one-unit dynamics deep
-spiking networks train with. This package holds models of neurons as
-biology measures them: membrane equations in mV and ms with conductances,
-refractoriness and reversal potentials, synapses with receptor kinetics,
-and plasticity rules. They are what `sparx.graph` builds circuits and
-connectomes from (design.md sections 4 and 5).
+Every neuron model meets one contract (`sparx.dynamics.core`):
+`init_state(shape, dtype)` and `step(state, SynapticInput, dt) -> (state,
+Spikes)`, and `run(model, inputs)` scans one over time. Two families meet
+it. `sparx.dynamics.ml` holds the dimensionless, one-step-is-one-unit
+models deep spiking networks train with: soft resets, detached resets,
+learnable decays, input as a jump of the membrane. `sparx.dynamics.neurons`
+holds models of neurons as biology measures them: membrane equations in mV
+and ms with conductances, refractoriness and reversal potentials. Synapses
+with receptor kinetics and plasticity rules complete them; `sparx.nn` builds
+layers from these models and `sparx.graph` builds circuits and connectomes
+(design.md sections 4 and 5).
 """
 
 from sparx.dynamics.core import (
+    Model,
     NeuronModel,
+    Reset,
     Spikes,
     SynapticInput,
     Term,
     crossing,
+    decay,
     exact_linear,
-    integrate,
+    fire,
+    membrane_dtype,
     response,
     rk4,
+    run,
     substeps,
+)
+from sparx.dynamics.ml import (
+    ALIFCell,
+    ALIFState,
+    LICell,
+    LIFCell,
+    MembraneState,
+    RecurrentCell,
+    RecurrentState,
+    Serial,
 )
 from sparx.dynamics.neurons import (
     IZHIKEVICH_2003,
@@ -60,6 +80,8 @@ __all__ = [
     "IZHIKEVICH_2004",
     "LIF",
     "RECEPTORS",
+    "ALIFCell",
+    "ALIFState",
     "AdEx",
     "AdExState",
     "Alpha",
@@ -71,13 +93,21 @@ __all__ = [
     "HodgkinHuxleyState",
     "Izhikevich",
     "IzhikevichState",
+    "LICell",
+    "LIFCell",
     "LIFState",
+    "MembraneState",
     "MgBlock",
+    "Model",
     "NeuronModel",
     "PairSTDP",
     "PointNeuron",
     "Receptor",
+    "RecurrentCell",
+    "RecurrentState",
+    "Reset",
     "STDPTraces",
+    "Serial",
     "Spikes",
     "SynapseModel",
     "SynapticInput",
@@ -87,11 +117,14 @@ __all__ = [
     "TsodyksMarkram",
     "TsodyksMarkramState",
     "crossing",
+    "decay",
     "exact_linear",
-    "integrate",
+    "fire",
     "izhikevich_2003",
     "izhikevich_2004",
+    "membrane_dtype",
     "response",
     "rk4",
+    "run",
     "substeps",
 ]

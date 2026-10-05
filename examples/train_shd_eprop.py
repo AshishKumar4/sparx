@@ -24,8 +24,8 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
-from sparx.cells import ALIFCell
 from sparx.datasets import shd
+from sparx.dynamics import ALIFCell, SynapticInput, decay
 from sparx.learn import EPropParams, bptt_loss, eprop
 from sparx.surrogate import Triangle
 
@@ -45,7 +45,9 @@ def accuracy(cell, kappa, params, test):
 
         def step(carry, u):
             cell_state, z, y = carry
-            cell_state, z = cell.step(cell_state, u @ params.w_in + z @ params.w_rec)
+            jump = SynapticInput(jump=u @ params.w_in + z @ params.w_rec)
+            cell_state, spikes_t = cell.step(cell_state, jump, 1.0)
+            z = spikes_t.fired
             y = kappa * y + z @ params.w_out + params.b_out
             return (cell_state, z, y), y
 
@@ -72,11 +74,12 @@ def main():
     args = parser.parse_args()
 
     train, test = pooled("train", args.channels), pooled("test", args.channels)
-    # Time constants in steps of 14 ms: membrane 20 ms, adaptation 200 ms
-    # and readout 20 ms, as Bellec et al. take them for speech (TIMIT).
-    cell = ALIFCell(decay=float(np.exp(-14 / 20)), adapt_decay=float(np.exp(-14 / 200)), beta=0.2,
+    # Steps of 14 ms, each one unit of the model's time, so a decay is over
+    # 14 ms: membrane 20 ms, adaptation 200 ms and readout 20 ms, as
+    # Bellec et al. take them for speech (TIMIT).
+    cell = ALIFCell(decay=decay(20.0, dt=14.0), adapt_decay=decay(200.0, dt=14.0), beta=0.2,
                     detach_reset=True, surrogate=Triangle(scale=0.3), refractory=2)
-    kappa = float(np.exp(-14 / 20))
+    kappa = decay(20.0, dt=14.0)
     rng = np.random.default_rng(args.seed)
     n, h = args.channels, args.hidden
     w_rec = rng.normal(0, 1 / np.sqrt(h), (h, h))

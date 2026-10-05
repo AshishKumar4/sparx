@@ -29,9 +29,9 @@ from sparx.dynamics import (
     PointNeuron,
     Receptor,
     SynapticInput,
-    integrate,
     izhikevich_2003,
     izhikevich_2004,
+    run,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -56,14 +56,14 @@ def nest_lif(model, **overrides):
     return LIF(**{**fields, **overrides})
 
 
-def run(cell, model, sign=1.0):
+def nest_run(cell, model, sign=1.0):
     """`cell` driven by `model`'s fixture inputs in float64: spikes and the voltage after every step.
     Conductance weights are stored with the inhibitory sign; `sign=-1` makes them positive."""
     arrivals = {"ex": NEST[f"{model}/arrivals_ex"], "in": sign * NEST[f"{model}/arrivals_in"]}
     with jax.enable_x64(new_val=True):
         inputs = Arrivals(jnp.full(arrivals["ex"].shape, param(model, "I_e")),
                           {k: jnp.asarray(v) for k, v in arrivals.items()})
-        (spikes, v), _ = integrate(cell, inputs, DT, record=lambda state: state.neuron.v)
+        (spikes, v), _ = run(cell, inputs, dt=DT, record=lambda state: state.neuron.v)
     return np.asarray(spikes.fired), np.asarray(v)
 
 
@@ -72,7 +72,7 @@ def test_current_synapses_match_nest_to_rounding(model, synapse):
     # NEST integrates these exactly (Rotter and Diesmann 1999), as sparx does.
     cell = PointNeuron(nest_lif(model), {"ex": Receptor(synapse(param(model, "tau_syn_ex"))),
                                          "in": Receptor(synapse(param(model, "tau_syn_in")))})
-    fired, v = run(cell, model)
+    fired, v = nest_run(cell, model)
     np.testing.assert_array_equal(fired, NEST[f"{model}/spikes"])
     np.testing.assert_allclose(v, NEST[f"{model}/v"], atol=1e-11)
     assert fired.sum() >= 20
@@ -80,7 +80,7 @@ def test_current_synapses_match_nest_to_rounding(model, synapse):
 
 def test_delta_synapses_match_nest_to_rounding():
     cell = PointNeuron(nest_lif("iaf_psc_delta"), {"ex": Receptor(Delta()), "in": Receptor(Delta())})
-    fired, v = run(cell, "iaf_psc_delta")
+    fired, v = nest_run(cell, "iaf_psc_delta")
     np.testing.assert_array_equal(fired, NEST["iaf_psc_delta/spikes"])
     np.testing.assert_allclose(v, NEST["iaf_psc_delta/v"], atol=1e-11)
 
@@ -106,7 +106,7 @@ def test_conductance_synapses_fire_with_nest_spike_for_spike(model):
     # the step, a second-order scheme, and stays within 2e-3 mV. Trajectories
     # that close can only part where one of them grazes the threshold.
     tolerance = 2e-3
-    fired, v = run(conductance_cell(model), model, sign=-1.0)
+    fired, v = nest_run(conductance_cell(model), model, sign=-1.0)
     expected, expected_v = NEST[f"{model}/spikes"], NEST[f"{model}/v"]
     for neuron in range(fired.shape[1]):
         differ = np.flatnonzero(fired[:, neuron] != expected[:, neuron])
@@ -123,7 +123,7 @@ def test_brian2_exponential_euler_is_the_start_of_step_hold():
     # Brian2 counts refractoriness from the start of the step in which the
     # neuron crossed, one step less than NEST and sparx (docs/fidelity.md).
     cell = conductance_cell("iaf_cond_exp", hold="start", t_ref=param("iaf_cond_exp", "t_ref") - DT)
-    fired, v = run(cell, "iaf_cond_exp", sign=-1.0)
+    fired, v = nest_run(cell, "iaf_cond_exp", sign=-1.0)
     np.testing.assert_array_equal(fired, BRIAN2["coba/spikes"])
     np.testing.assert_allclose(v, BRIAN2["coba/v"], atol=1e-9)
 
@@ -132,7 +132,7 @@ def test_brian2_exact_current_synapses_are_sparxs():
     model = "iaf_psc_exp"
     cell = PointNeuron(nest_lif(model, t_ref=param(model, "t_ref") - DT),
                        {"ex": Receptor(Exponential(2.0)), "in": Receptor(Exponential(5.0))})
-    fired, v = run(cell, model)
+    fired, v = nest_run(cell, model)
     np.testing.assert_array_equal(fired, BRIAN2["cuba/spikes"])
     np.testing.assert_allclose(v, BRIAN2["cuba/v"], atol=1e-9)
 
@@ -154,7 +154,7 @@ def test_conductance_hold_converges_at_second_order_to_the_rk4_truth():
         cell = conductance_cell(model, v_th=0.0)
         with jax.enable_x64(new_val=True):
             inputs = Arrivals(jnp.asarray(current), {k: jnp.asarray(a) for k, a in arrivals.items()})
-            (_, v), _ = integrate(cell, inputs, dt, record=lambda state: state.neuron.v)
+            (_, v), _ = run(cell, inputs, dt=dt, record=lambda state: state.neuron.v)
         errors.append(np.abs(np.asarray(v) - truth).max())
     assert errors[0] < 1e-3
     assert 3.5 < errors[0] / errors[1] < 4.5
@@ -176,7 +176,7 @@ def naud_spikes(name, **overrides):
     neuron, current = naud_adex(name, **overrides)
     steps = len(NEST[f"naud/{name}/spikes"])
     with jax.enable_x64(new_val=True):
-        spikes, _ = integrate(neuron, SynapticInput(jnp.full((steps, 1), current)), DT)
+        spikes, _ = run(neuron, SynapticInput(jnp.full((steps, 1), current)), dt=DT)
     return np.flatnonzero(np.asarray(spikes.fired[:, 0]))
 
 
@@ -233,7 +233,7 @@ def test_adex_with_synapses_fires_with_nest(model, kind):
     neuron = AdEx(t_ref=param(model, "t_ref"), reversal=REVERSAL)
     cell = PointNeuron(neuron, {"ex": Receptor(Exponential(param(model, "tau_syn_ex")), kind),
                                 "in": Receptor(Exponential(param(model, "tau_syn_in")), kind)})
-    fired, _ = run(cell, model, sign=-1.0 if kind == "conductance" else 1.0)
+    fired, _ = nest_run(cell, model, sign=-1.0 if kind == "conductance" else 1.0)
     expected = NEST[f"{model}/spikes"]
     for neuron in range(fired.shape[1]):
         got, want = np.flatnonzero(fired[:, neuron]), np.flatnonzero(expected[:, neuron])
@@ -252,8 +252,8 @@ def izhikevich_run(kind, label, exact=False):
     steps = len(NEST[f"izhikevich/{kind}/{label}/spikes"])
     with jax.enable_x64(new_val=True), jax.disable_jit(exact):
         inputs = SynapticInput(jnp.full((steps, 1), 10.0))
-        neuron = izhikevich_2003(kind, scheme=scheme)
-        (spikes, v), _ = integrate(neuron, inputs, dt, record=lambda state: state.v)
+        neuron = izhikevich_2003(kind, scheme=scheme, order="nest")
+        (spikes, v), _ = run(neuron, inputs, dt=dt, record=lambda state: state.v)
     return np.asarray(spikes.fired[:, 0]), np.asarray(v[:, 0])
 
 
@@ -289,7 +289,7 @@ def test_izhikevich_delta_input_matches_nest(scheme):
         arrivals = jnp.asarray(arrivals)
         inputs = (SynapticInput(4.0, jump=arrivals) if scheme == "euler"
                   else SynapticInput(4.0 + arrivals))
-        (spikes, v), _ = integrate(izhikevich_2003("regular_spiking", scheme=scheme), inputs, 0.1,
+        (spikes, v), _ = run(izhikevich_2003("regular_spiking", scheme=scheme, order="nest"), inputs, dt=0.1,
                                    record=lambda state: state.v)
     np.testing.assert_array_equal(np.asarray(spikes.fired), NEST[f"{case}/spikes"])
     np.testing.assert_allclose(np.asarray(v), NEST[f"{case}/v"], atol=1e-9)
@@ -309,28 +309,28 @@ def test_izhikevich_2004_patterns_are_his_codes_runs(panel, pattern):
     # Octave's `V^2` is libm's `pow`, which rounds differently from `v * v`
     # in about one value in a thousand, and that panel's slow ramp through
     # the bifurcation grows the difference to 0.012 mV.
-    run = {key.split("/")[1]: IZHIKEVICH_FIGURE_1[key] for key in IZHIKEVICH_FIGURE_1 if key[0] == panel}
+    case = {key.split("/")[1]: IZHIKEVICH_FIGURE_1[key] for key in IZHIKEVICH_FIGURE_1 if key[0] == panel}
     neuron = izhikevich_2004(pattern)
-    assert (neuron.a, neuron.b, neuron.c, neuron.d) == tuple(run[k] for k in "abcd")
+    assert (neuron.a, neuron.b, neuron.c, neuron.d) == tuple(case[k] for k in "abcd")
     with jax.enable_x64(new_val=True):
-        state = IzhikevichState(jnp.asarray([run["V0"]]), jnp.asarray([run["u0"]]))
-        (spikes, v), _ = integrate(neuron, SynapticInput(jnp.asarray(run["II"])[:, None]), float(run["tau"]),
+        state = IzhikevichState(jnp.asarray([case["V0"]]), jnp.asarray([case["u0"]]))
+        (spikes, v), _ = run(neuron, SynapticInput(jnp.asarray(case["II"])[:, None]), dt=float(case["tau"]),
                                    state=state, record=lambda state: state.v)
     fired, v = np.asarray(spikes.fired[:, 0]) > 0, np.asarray(v[:, 0])
-    theirs = run["VV"] == 30
+    theirs = case["VV"] == 30
     assert theirs.any()
     np.testing.assert_array_equal(np.flatnonzero(fired), np.flatnonzero(theirs))
     if pattern == "class_2_excitable":
-        np.testing.assert_allclose(v[~theirs], run["VV"][~theirs], rtol=0, atol=0.02)
+        np.testing.assert_allclose(v[~theirs], case["VV"][~theirs], rtol=0, atol=0.02)
     else:
-        np.testing.assert_allclose(v[~theirs], run["VV"][~theirs], rtol=1e-8, atol=1e-8)
+        np.testing.assert_allclose(v[~theirs], case["VV"][~theirs], rtol=1e-8, atol=1e-8)
 
 
 def hh_under_currents(steps, **fields):
     currents = jnp.asarray(NEST["hh_currents/currents"])
     with jax.enable_x64(new_val=True):
         inputs = SynapticInput(jnp.broadcast_to(jnp.asarray(currents, jnp.float64), (steps, len(currents))))
-        (spikes, v), _ = integrate(HodgkinHuxley(**fields), inputs, DT, record=lambda state: state.v)
+        (spikes, v), _ = run(HodgkinHuxley(**fields), inputs, dt=DT, record=lambda state: state.v)
     return np.asarray(spikes.fired), np.asarray(v)
 
 
@@ -379,7 +379,7 @@ def test_hodgkin_huxley_with_alpha_synapses(scheme):
     cell = PointNeuron(HodgkinHuxley(scheme=scheme, substep=0.01 if scheme == "strang" else 0.025),
                        {"ex": Receptor(Alpha(param(model, "tau_syn_ex"))),
                         "in": Receptor(Alpha(param(model, "tau_syn_in")))})
-    fired, v = run(cell, model)
+    fired, v = nest_run(cell, model)
     if scheme == "rk4":
         assert np.isnan(v).any()
         return

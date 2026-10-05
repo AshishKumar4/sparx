@@ -71,6 +71,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from sparx.dynamics import decay
 from sparx.nn import LIF, Flatten, Recurrent
 
 if TYPE_CHECKING:
@@ -87,19 +88,19 @@ type Pair = tuple[int, int]
 type Edges = list[tuple[str, str]]
 
 
-def _continuous(decay: float, dt: float, discretization: Discretization) -> tuple[float, float]:
-    """`(tau, r)` of the continuous LIF whose `discretization` at `dt` is `v <- decay v + x`."""
+def _continuous(kept: float, dt: float, discretization: Discretization) -> tuple[float, float]:
+    """`(tau, r)` of the continuous LIF whose `discretization` at `dt` is `v <- kept * v + x`."""
     if discretization == "exact":
-        return -dt / math.log(decay), 1 / (1 - decay)
-    tau = dt / (1 - decay)
+        return -dt / math.log(kept), 1 / (1 - kept)
+    tau = dt / (1 - kept)
     return tau, tau / dt
 
 
 def _discrete(tau: float, r: float, dt: float, discretization: Discretization) -> tuple[float, float]:
     """`(decay, input scale)` of a continuous LIF's `discretization` at `dt`."""
     if discretization == "exact":
-        decay = math.exp(-dt / tau)
-        return decay, r * (1 - decay)
+        kept = decay(tau, dt)
+        return kept, r * (1 - kept)
     return 1 - dt / tau, r * dt / tau
 
 
@@ -140,7 +141,7 @@ def _export_lif(layer: nn.Module, shape: tuple[int, ...], dt: float,
     if not isinstance(layer, LIF) or layer.reset != "zero" or layer.learn_tau:
         raise NotImplementedError("NIR's LIF resets to v_reset: "
                                   "export LIF(reset='zero') with a fixed tau")
-    tau, r = _continuous(math.exp(-1 / layer.tau), dt, discretization)
+    tau, r = _continuous(decay(layer.tau, layer.dt), dt, discretization)
     ones = np.ones(_to_nir_shape(shape))
     return nir.LIF(tau=tau * ones, r=r * ones, v_leak=0 * ones,
                    v_threshold=layer.threshold * ones, v_reset=0 * ones)
@@ -391,7 +392,7 @@ def _import_lif(node: nir.LIF, w_rec: nir.NIRNode | None, previous: dict[str, np
         raise NotImplementedError("only LIF nodes with v_leak = v_reset = 0 import")
     if np.unique(tau).size != 1 or np.unique(node.v_threshold).size != 1:
         raise NotImplementedError("a LIF node imports with one tau and one threshold")
-    decay, scale = _discrete(float(tau.ravel()[0]), 1.0, dt, discretization)
+    kept, scale = _discrete(float(tau.ravel()[0]), 1.0, dt, discretization)
     scales = _per_channel(np.asarray(node.r), "r") * scale
     bias = np.asarray(w_rec.bias) if isinstance(w_rec, nir.Affine) else np.zeros(())
     if previous is not None and "kernel" in previous:
@@ -401,7 +402,7 @@ def _import_lif(node: nir.LIF, w_rec: nir.NIRNode | None, previous: dict[str, np
         previous["bias"] = ((previous["bias"] + bias) * scales).astype(kernel.dtype)
     elif not np.allclose(scales, 1) or np.any(bias != 0):
         raise NotImplementedError("a LIF node must follow an Affine, Linear or Conv2d node to import")
-    lif = LIF(tau=-1 / math.log(decay), threshold=float(np.ravel(node.v_threshold)[0]), reset="zero")
+    lif = LIF(tau=-1 / math.log(kept), threshold=float(np.ravel(node.v_threshold)[0]), reset="zero")
     if w_rec is None:
         return lif, {}
     if not isinstance(w_rec, nir.Affine | nir.Linear):

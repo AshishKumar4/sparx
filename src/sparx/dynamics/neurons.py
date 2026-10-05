@@ -3,8 +3,8 @@
 Every model here has a refractory period after a spike, measured on the step
 grid as NEST's `iaf_*` models count it: a neuron that fires holds its
 reset voltage for `t_ref` ms, `round(t_ref / dt)` steps. Spikes pass
-gradients through a surrogate, as in `sparx.cells`, and the reset sets the
-voltage exactly while its gradient follows the spike.
+gradients through a surrogate, as in `sparx.dynamics.ml`, and the reset
+(`fire`) sets the voltage exactly while its gradient follows the spike.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from sparx.dynamics.core import (
     SynapticInput,
     crossing,
     exact_linear,
+    fire,
     membrane_dtype,
     response,
     rk4,
@@ -69,9 +70,14 @@ class MgBlock:
         return 1 / (1 + self.mg / 3.57 * jnp.exp(-0.062 * v))
 
 
-def _reset(v: jax.Array, fired: jax.Array, to: jax.Array | float) -> jax.Array:
-    """`to` where fired, exactly, with the gradient of `v + fired * (to - v)`."""
-    return jnp.where(fired > 0, to, v) + (fired - jax.lax.stop_gradient(fired)) * (to - v)
+def _synaptic(model: LIF | AdEx | Izhikevich | HodgkinHuxley, inputs: SynapticInput,
+              v: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """The total held conductance (nS) and its drive `sum g E` (pA) at voltage `v`, gates applied."""
+    conductance = {name: g * model.gates[name](v) if name in model.gates else g
+                   for name, g in inputs.conductance.items()}
+    total = sum(conductance.values(), jnp.zeros(()))
+    drive = sum((g * model.reversal[name] for name, g in conductance.items()), jnp.zeros(()))
+    return total, drive
 
 
 class LIFState(NamedTuple):
@@ -121,31 +127,19 @@ class LIF:
 
     def step(self, state: LIFState, inputs: SynapticInput, dt: float) -> tuple[LIFState, Spikes]:
         g_l = self.c_m / self.tau_m
-        conductance = {name: g * self.gates[name](state.v) if name in self.gates else g
-                       for name, g in inputs.conductance.items()}
-        g_total = g_l + sum(conductance.values(), jnp.zeros(()))
-        drive = g_l * self.e_l + inputs.current + sum(
-            (g * self.reversal[name] for name, g in conductance.items()), jnp.zeros(()))
+        g_syn, syn_drive = _synaptic(self, inputs, state.v)
+        g_total = g_l + g_syn
+        drive = g_l * self.e_l + inputs.current + syn_drive
         tau = self.c_m / g_total
         integrated = exact_linear(state.v, drive / g_total, tau, dt) + sum(
             (response(term, tau, dt) for term in inputs.currents), jnp.zeros(())) / self.c_m + inputs.jump
         held = state.refractory > dt / 2
         v = jnp.where(held, self.v_reset, integrated)
-        fired = spike(v - self.v_th, self.surrogate) * (1 - held)
+        reset, fired = fire(v, jnp.where(held, jnp.inf, self.v_th), self.surrogate, self.v_reset)
         offset = jnp.where(fired > 0, crossing(state.v, v, self.v_th), 1.0)
         refractory = jnp.where(fired > 0, self.t_ref, jnp.maximum(state.refractory - dt, 0))
         dtype = state.v.dtype
-        return (LIFState(_reset(v, fired, self.v_reset).astype(dtype), refractory.astype(dtype)),
-                Spikes(fired, offset))
-
-
-def _synaptic(model, inputs: SynapticInput, v: jax.Array) -> tuple[jax.Array, jax.Array]:
-    """The total held conductance (nS) and its drive `sum g E` (pA) at voltage `v`, gates applied."""
-    conductance = {name: g * model.gates[name](v) if name in model.gates else g
-                   for name, g in inputs.conductance.items()}
-    total = sum(conductance.values(), jnp.zeros(()))
-    drive = sum((g * model.reversal[name] for name, g in conductance.items()), jnp.zeros(()))
-    return total, drive
+        return LIFState(reset.astype(dtype), refractory.astype(dtype)), Spikes(fired, offset)
 
 
 class AdExState(NamedTuple):
@@ -222,12 +216,12 @@ class AdEx:
         # rest of the step integrates from the reset (refractory if t_ref > 0),
         # as NEST's aeif models reset within their adaptive steps.
         def detect(i, before, v, w, held, fired, offset):
-            crossed = spike(v - self.v_peak, self.surrogate) * (1 - held)
+            reset, crossed = fire(v, jnp.where(held, jnp.inf, self.v_peak), self.surrogate, self.v_reset)
             first = (crossed > 0) & (fired == 0)
             offset = jnp.where(first, (i + crossing(before, v, self.v_peak)) / count, offset)
             held = held | (crossed > 0) if self.t_ref > 0 else held
             fired = fired + crossed * (1 - fired)
-            return _reset(v, crossed, self.v_reset), w + crossed * self.b, held, fired, offset
+            return reset, w + crossed * self.b, held, fired, offset
 
         def substep(i, carry):
             v, w, held, fired, offset = carry
@@ -261,14 +255,20 @@ class Izhikevich:
     `d`. `I` is in the model's own units, as in the paper. `scheme` names
     the integration: `"published"` takes two half-steps of `v` and then
     one step of `u` from the new `v`, the 2003 paper's code (at `dt = 1`
-    it is that code exactly, and its firing patterns are this scheme's);
-    `"euler"` is the forward Euler step of both from the old values,
-    NEST's `consistent_integration`; `"semi_implicit"` is one Euler step
-    of `v` and then one of `u` from the new `v`, the code of the 2004
-    paper's twenty firing patterns (`izhikevich_2004`). Synaptic current
-    waveforms are read at the start of the step and conductances at the
-    voltage of each update. The defaults are the regular spiking cell; the
-    2003 paper's classes are `izhikevich_2003`.
+    with `order="izhikevich"` it is that code to the last bit, and its
+    firing patterns are this scheme's); `"euler"` is the forward Euler step
+    of both from the old values, NEST's `consistent_integration`;
+    `"semi_implicit"` is one Euler step of `v` and then one of `u` from the
+    new `v`, the code of the 2004 paper's twenty firing patterns
+    (`izhikevich_2004`). Synaptic current waveforms are read at the start
+    of the step and conductances at the voltage of each update. The
+    defaults are the regular spiking cell; the 2003 paper's classes are
+    `izhikevich_2003`.
+
+    `order` names the arithmetic of the quadratic term, which the membrane
+    amplifies from the last bit to whole spikes over a long run:
+    `"izhikevich"` squares first, `0.04 * v**2`, as his MATLAB code does;
+    `"nest"` multiplies `(0.04 * v) * v`, as NEST's `izhikevich` does.
 
     `quadratic` holds the coefficients of `v^2`, `v` and 1, and
     `du/dt = a (b (v - v_u) - u_decay u)`: the defaults are the equations
@@ -287,6 +287,7 @@ class Izhikevich:
     quadratic: tuple[float, float, float] = struct.field(pytree_node=False, default=(0.04, 5.0, 140.0))
     scheme: Literal["published", "euler", "semi_implicit"] = struct.field(pytree_node=False,
                                                                          default="published")
+    order: Literal["izhikevich", "nest"] = struct.field(pytree_node=False, default="izhikevich")
     reversal: Mapping[str, float] = struct.field(pytree_node=False, default_factory=lambda: dict(RECEPTORS))
     gates: Mapping[str, MgBlock] = struct.field(pytree_node=False,
                                                 default_factory=lambda: {"nmda": MgBlock()})
@@ -305,8 +306,8 @@ class Izhikevich:
 
         def dv(v, u):
             g, drive = _synaptic(self, inputs, v)
-            # NEST's order of operations, `(0.04 v) v`; Izhikevich's code squares first.
-            return k2 * v * v + k1 * v + k0 - u + current + drive - g * v
+            square = k2 * v ** 2 if self.order == "izhikevich" else k2 * v * v
+            return square + k1 * v + k0 - u + current + drive - g * v
 
         def du(v, u):
             # `dt a (...)` multiplies `dt a` first, as NEST and Izhikevich's code both do.
@@ -323,10 +324,10 @@ class Izhikevich:
             v = v + dt / 2 * dv(v, u)
             u = u + du(v, u)
         v = v + inputs.jump
-        fired = spike(v - self.v_th, self.surrogate)
+        reset, fired = fire(v, self.v_th, self.surrogate, self.c)
         offset = jnp.where(fired > 0, crossing(state.v, v, self.v_th), 1.0)
         dtype = state.v.dtype
-        return (IzhikevichState(_reset(v, fired, self.c).astype(dtype), (u + fired * self.d).astype(dtype)),
+        return (IzhikevichState(reset.astype(dtype), (u + fired * self.d).astype(dtype)),
                 Spikes(fired, offset))
 
 
@@ -479,19 +480,17 @@ class HodgkinHuxley:
                        - self.g_l * (v - self.e_l) + syn_drive - g_syn * v + inputs.current_at(s))
             return current / self.c_m, am * (1 - m) - bm * m, ah * (1 - h) - bh * h, an * (1 - n) - bn * n
 
+        def gates_over(m, h, n, v, length):
+            return [exact_linear(x, alpha / (alpha + beta), 1 / (alpha + beta), length)
+                    for x, (alpha, beta) in zip((m, h, n), self.rates(v), strict=True)]
+
         def exponential_euler(i, y):
             v, m, h, n = y
             g_na, g_k = self.g_na * m ** 3 * h, self.g_k * n ** 4
             g_total = g_na + g_k + self.g_l + g_syn
             drive = (g_na * self.e_na + g_k * self.e_k + self.g_l * self.e_l + syn_drive
                      + inputs.current_at(i * step))
-            gates = [exact_linear(x, alpha / (alpha + beta), 1 / (alpha + beta), step)
-                     for x, (alpha, beta) in zip((m, h, n), self.rates(v), strict=True)]
-            return exact_linear(v, drive / g_total, self.c_m / g_total, step), *gates
-
-        def gates_over(m, h, n, v, length):
-            return [exact_linear(x, alpha / (alpha + beta), 1 / (alpha + beta), length)
-                    for x, (alpha, beta) in zip((m, h, n), self.rates(v), strict=True)]
+            return exact_linear(v, drive / g_total, self.c_m / g_total, step), *gates_over(m, h, n, v, step)
 
         def strang(i, y):
             v, m, h, n = y
