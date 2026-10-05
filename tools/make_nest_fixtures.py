@@ -185,6 +185,61 @@ def hh_currents():
     return {"v": v, "spikes": spikes, "currents": np.array(HH_CURRENTS)}
 
 
+PLASTIC_PAIRS, PLASTIC_TIME, PLASTIC_DELAY = 4, 2000.0, 1.0
+PLASTICITY = {
+    "stdp_additive": ("stdp_synapse", {"lambda": 0.05, "alpha": 1.1, "mu_plus": 0.0, "mu_minus": 0.0,
+                                       "Wmax": 100.0}, {}),
+    "stdp_multiplicative": ("stdp_synapse", {"lambda": 0.05, "alpha": 1.1, "mu_plus": 1.0, "mu_minus": 1.0,
+                                             "Wmax": 100.0, "tau_plus": 15.0}, {"tau_minus": 30.0}),
+    "stdp_triplet": ("stdp_triplet_synapse", {"Wmax": 100.0, "Aplus": 0.5, "Aplus_triplet": 0.6,
+                                              "Aminus": 0.7, "Aminus_triplet": 0.2},
+                     {"tau_minus": 33.7, "tau_minus_triplet": 125.0}),
+    # NEST's initial u is 0.5 whatever U is, and its first spike transmits
+    # the initial u x; a synapse at rest has u = U.
+    "tsodyks_depressing": ("tsodyks2_synapse", {"U": 0.5, "u": 0.5, "x": 1.0, "tau_rec": 800.0,
+                                                "tau_fac": 0.0}, {}),
+    "tsodyks_facilitating": ("tsodyks2_synapse", {"U": 0.03, "u": 0.03, "x": 1.0, "tau_rec": 100.0,
+                                                  "tau_fac": 1000.0}, {}),
+}
+
+
+def plasticity(rng, model, synapse, neuron):
+    """Plastic synapses between parrot neurons replaying random trains; weights at each presynaptic spike.
+
+    Each postsynaptic parrot repeats its own generator's train; the plastic
+    synapse targets its port 1, which parrots do not repeat, so plasticity
+    sees the replayed trains. The weight a synapse transmits at each
+    presynaptic spike is recorded.
+    """
+    nest.ResetKernel()
+    nest.resolution = DT
+    steps = round(PLASTIC_TIME / DT)
+    pre = nest.Create("parrot_neuron", PLASTIC_PAIRS)
+    post = nest.Create("parrot_neuron", PLASTIC_PAIRS, params=neuron)
+    for group, rate in ((pre, 0.004), (post, 0.003)):
+        for parrot in group:
+            times = (np.flatnonzero(rng.random(steps - 40) < rate) + 1) * DT
+            generator = nest.Create("spike_generator", params={"spike_times": times})
+            nest.Connect(generator, parrot, syn_spec={"delay": DT})
+    recorder = nest.Create("weight_recorder")
+    nest.CopyModel(model, "recorded", {"weight_recorder": recorder})
+    initial = 50.0 if model != "tsodyks2_synapse" else 1.0
+    nest.Connect(pre, post, "one_to_one", syn_spec={"synapse_model": "recorded", "weight": initial,
+                                                    "delay": PLASTIC_DELAY, "receptor_type": 1, **synapse})
+    spikes = nest.Create("spike_recorder")
+    nest.Connect(pre + post, spikes)
+    nest.Simulate(PLASTIC_TIME)
+    first = pre[0].global_id
+    trains = np.zeros((steps, 2 * PLASTIC_PAIRS))
+    sent = spikes.events
+    trains[np.rint(sent["times"] / DT).astype(int) - 1, sent["senders"] - first] = 1
+    weights = recorder.events
+    params = {f"param/{k}": np.array(v) for k, v in {**synapse, **neuron}.items()}
+    return {"pre": trains[:, :PLASTIC_PAIRS], "post": trains[:, PLASTIC_PAIRS:], "initial": np.array(initial),
+            "weight_senders": weights["senders"] - first, "weight_times": weights["times"],
+            "weights": weights["weights"], **params}
+
+
 def main():
     nest.set_verbosity("M_ERROR")
     rng = np.random.default_rng(0)
@@ -216,6 +271,10 @@ def main():
         out = izhikevich(IZHIKEVICH["regular_spiking"], 0.1, consistent, current=4.0, trains=delta)
         cases.update({f"izhikevich/delta_{label}/{k}": v for k, v in out.items()})
         print("izhikevich delta", label, "spikes", out["spikes"].sum(0))
+    for name, (model, synapse, neuron) in PLASTICITY.items():
+        out = plasticity(rng, model, synapse, neuron)
+        cases.update({f"plasticity/{name}/{k}": v for k, v in out.items()})
+        print("plasticity", name, "weights", len(out["weights"]), out["weights"][:4])
     np.savez_compressed(OUT, **cases)
     print(f"wrote {OUT} (nest {nest.__version__})")
 

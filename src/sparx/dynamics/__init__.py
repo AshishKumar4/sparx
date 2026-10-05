@@ -34,6 +34,14 @@ from sparx.dynamics.neurons import (
     MgBlock,
     izhikevich_2003,
 )
+from sparx.dynamics.plasticity import (
+    PairSTDP,
+    STDPTraces,
+    TripletSTDP,
+    TripletTraces,
+    TsodyksMarkram,
+    TsodyksMarkramState,
+)
 from sparx.dynamics.synapses import (
     Alpha,
     Arrivals,
@@ -63,12 +71,18 @@ __all__ = [
     "LIFState",
     "MgBlock",
     "NeuronModel",
+    "PairSTDP",
     "PointNeuron",
     "Receptor",
+    "STDPTraces",
     "Spikes",
     "SynapseModel",
     "SynapticInput",
     "Term",
+    "TripletSTDP",
+    "TripletTraces",
+    "TsodyksMarkram",
+    "TsodyksMarkramState",
     "crossing",
     "exact_linear",
     "integrate",
