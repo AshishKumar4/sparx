@@ -19,7 +19,7 @@ from sparx.graph import (
     SpikeTimes,
     simulate,
 )
-from sparx.graph.connectome import Connectome, shiu2024
+from sparx.graph.connectome import FLYWIRE_630_MEDIAN_INPUTS, Connectome, matched_w_syn, shiu2024
 
 DT = 0.1
 
@@ -105,3 +105,43 @@ def test_malecns_reader_keeps_neurons_and_signs_them_by_transmitter(tmp_path):
                        strict=True))
     # GABA inhibits; "unclear" falls back to the prediction (glutamate, inhibitory); ACh excites.
     assert edges == [(10, 20, -5), (20, 30, -3), (30, 10, 7)]
+
+
+def test_matched_w_syn_scales_the_weight_by_the_median_neurons_input():
+    # Neuron 0 gets 4 + 8 = 12 synapses, 1 gets 3, 2 gets 6 (signs ignored): median 6.
+    brain = Connectome(np.arange(3), np.array([1, 2, 0, 0]), np.array([0, 0, 1, 2]), np.array([4, -8, 3, -6]))
+    np.testing.assert_array_equal(brain.inputs(), [12, 3, 6])
+    assert matched_w_syn(brain) == pytest.approx(0.275 * FLYWIRE_630_MEDIAN_INPUTS / 6)
+    assert matched_w_syn(brain, w_syn=1.0, reference=6.0) == 1.0
+
+
+MALECNS = Path(os.environ.get("SPARX_MALECNS", Path(__file__).resolve().parents[2] / "data" / "malecns"))
+MALECNS_TABLES = ("body-annotations-male-cns-v0.9-minconf-0.5.feather",
+                  "body-neurotransmitters-male-cns-v0.9.feather",
+                  "connectome-weights-male-cns-v0.9-minconf-0.5.feather")
+MALECNS_MN9 = 10331  # rootSide L; its partner 16949 is rootSide R
+SUGAR_TYPES = ("LB3b", "LB3c", "LB3d", "LB4b")  # the cell types of Shiu et al.'s 21 FlyWire sugar neurons
+
+
+@pytest.mark.skipif(not all((MALECNS / table).exists() for table in MALECNS_TABLES),
+                    reason="needs the male CNS v0.9 release tables (gs://flyem-male-cns/v0.9) "
+                           "at $SPARX_MALECNS or ../data/malecns")
+def test_shiu2024_on_the_male_cns_activates_mn9_from_sugar_neurons_at_the_matched_weight():
+    # Shiu et al.'s sugar experiment on the male CNS: the gustatory neurons
+    # of their 21 FlyWire sugar neurons' types, on one side, at 100 Hz.
+    # FlyWire's run recruits about 400 neurons and drives MN9 at 67 Hz. At
+    # the matched weight (0.163 mV) the male CNS recruits about 670 and MN9
+    # fires at about 80 Hz; at FlyWire's 0.275 mV it recruits 18,000.
+    feather = pytest.importorskip("pyarrow.feather")
+    brain = Connectome.from_malecns(*(MALECNS / table for table in MALECNS_TABLES))
+    bodies = feather.read_table(MALECNS / MALECNS_TABLES[0], columns=["bodyId", "type", "rootSide"])
+    types = np.asarray(bodies.column("type").to_pylist(), object)
+    side = np.asarray(bodies.column("rootSide").to_pylist(), object)
+    sugar = np.asarray(bodies.column("bodyId").to_numpy())[np.isin(types, SUGAR_TYPES) & (side == "R")]
+    w_syn = matched_w_syn(brain)
+    assert w_syn == pytest.approx(0.163, abs=0.001)
+    network = shiu2024(brain, stimuli=[(brain.index(sugar), 100.0)], w_syn=w_syn)
+    rates = simulate(network, network.init(jax.random.key(0)), duration=1000.0, key=jax.random.key(0),
+                     monitors=(SpikeCounts("brain"),), chunk=1000.0).records[0]
+    assert rates[brain.index([MALECNS_MN9])[0]] > 40.0
+    assert 200 < np.count_nonzero(rates) < 2000

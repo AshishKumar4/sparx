@@ -27,7 +27,7 @@ from sparx.dynamics.synapses import Delta, Exponential, Receptor
 from sparx.graph.connectivity import FromEdges
 from sparx.graph.network import Network, PoissonInput, Population, Projection
 
-__all__ = ["SIGNS", "Connectome", "shiu2024"]
+__all__ = ["FLYWIRE_630_MEDIAN_INPUTS", "SIGNS", "Connectome", "matched_w_syn", "shiu2024"]
 
 SIGNS: dict[str, int] = {"acetylcholine": 1, "gaba": -1, "glutamate": -1, "histamine": -1, "dopamine": 1,
                          "serotonin": 1, "octopamine": 1, "unclear": 1}
@@ -53,6 +53,10 @@ class Connectome:
     @property
     def size(self) -> int:
         return len(self.ids)
+
+    def inputs(self) -> np.ndarray:
+        """Each neuron's input synapses, excitatory and inhibitory alike."""
+        return np.bincount(self.post, weights=np.abs(self.synapses), minlength=self.size)
 
     def index(self, ids: Iterable[int]) -> np.ndarray:
         """The neuron indices of `ids`; raises for an ID not in the connectome."""
@@ -145,6 +149,25 @@ class Connectome:
         return cls(ids, pre, post, counts * sign[pre])
 
 
+FLYWIRE_630_MEDIAN_INPUTS = 206.0
+"""The median neuron's input synapses in FlyWire v630, the connectome Shiu et al. fit `w_syn` on."""
+
+
+def matched_w_syn(connectome: Connectome, *, w_syn: float = 0.275,
+                  reference: float = FLYWIRE_630_MEDIAN_INPUTS) -> float:
+    """Shiu et al.'s `w_syn` scaled so `connectome`'s median neuron gets the input FlyWire's did.
+
+    `w_syn` was fit to FlyWire v630's synapse counts, and a connectome that
+    counts more synapses per neuron drives every neuron harder at the same
+    weight. The male CNS v0.9 counts a median 347 input synapses per neuron
+    against FlyWire's 206 (its mean, 748 against 414, grows alike), so it
+    takes 0.163 mV: with 0.275 mV its sugar neurons recruit 18,000 neurons,
+    with 0.163 mV about 670 (FlyWire: about 400), and MN9 fires as Shiu et
+    al.'s does (`docs/fidelity.md`).
+    """
+    return w_syn * reference / float(np.median(connectome.inputs()))
+
+
 def shiu2024(connectome: Connectome, *, stimuli: Sequence[tuple[Sequence[int], float]] = (),
              silenced: Sequence[int] = (), dt: float = 0.1, capacity: int = 4096,
              w_syn: float = 0.275, stimulus_scale: float = 250.0) -> Network:
@@ -158,7 +181,8 @@ def shiu2024(connectome: Connectome, *, stimuli: Sequence[tuple[Sequence[int], f
     each neuron gets Poisson spikes at the rate that move its voltage by
     `stimulus_scale * w_syn` (enough to fire it) and has no refractory
     period, their model of optogenetic activation. `silenced` neurons
-    (indices) lose their outgoing synapses.
+    (indices) lose their outgoing synapses. On a connectome other than
+    FlyWire v630, `matched_w_syn` scales `w_syn` to its synapse counts.
 
     The model is theirs as their Brian2 code runs it (`model.py`, checked
     spike for spike on a small graph in `tests/test_graph.py`), quirks

@@ -16,6 +16,7 @@ import reference
 
 from sparx.dynamics import (
     IZHIKEVICH_2003,
+    IZHIKEVICH_2004,
     LIF,
     AdEx,
     Alpha,
@@ -24,11 +25,13 @@ from sparx.dynamics import (
     Delta,
     Exponential,
     HodgkinHuxley,
+    IzhikevichState,
     PointNeuron,
     Receptor,
     SynapticInput,
     integrate,
     izhikevich_2003,
+    izhikevich_2004,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -290,6 +293,37 @@ def test_izhikevich_delta_input_matches_nest(scheme):
                                    record=lambda state: state.v)
     np.testing.assert_array_equal(np.asarray(spikes.fired), NEST[f"{case}/spikes"])
     np.testing.assert_allclose(np.asarray(v), NEST[f"{case}/v"], atol=1e-9)
+
+
+IZHIKEVICH_FIGURE_1 = np.load(Path(__file__).parent / "fixtures" / "izhikevich_2004.npz")
+
+
+@pytest.mark.parametrize(("panel", "pattern"),
+                         list(zip("ABCDEFGHIJKLMNOPQRST", IZHIKEVICH_2004, strict=True)))
+def test_izhikevich_2004_patterns_are_his_codes_runs(panel, pattern):
+    # Each panel of Figure 1 as his MATLAB script runs it (GNU Octave 8.4,
+    # tools/make_izhikevich_2004_fixtures.py): its current each step, its
+    # step, its start. His trace shows 30 on a spike step, where sparx holds
+    # the reset. Every spike falls on his step. Between spikes the voltage is
+    # his to a relative 1e-9 (float64, compiled), except in the class 2 panel:
+    # Octave's `V^2` is libm's `pow`, which rounds differently from `v * v`
+    # in about one value in a thousand, and that panel's slow ramp through
+    # the bifurcation grows the difference to 0.012 mV.
+    run = {key.split("/")[1]: IZHIKEVICH_FIGURE_1[key] for key in IZHIKEVICH_FIGURE_1 if key[0] == panel}
+    neuron = izhikevich_2004(pattern)
+    assert (neuron.a, neuron.b, neuron.c, neuron.d) == tuple(run[k] for k in "abcd")
+    with jax.enable_x64(new_val=True):
+        state = IzhikevichState(jnp.asarray([run["V0"]]), jnp.asarray([run["u0"]]))
+        (spikes, v), _ = integrate(neuron, SynapticInput(jnp.asarray(run["II"])[:, None]), float(run["tau"]),
+                                   state=state, record=lambda state: state.v)
+    fired, v = np.asarray(spikes.fired[:, 0]) > 0, np.asarray(v[:, 0])
+    theirs = run["VV"] == 30
+    assert theirs.any()
+    np.testing.assert_array_equal(np.flatnonzero(fired), np.flatnonzero(theirs))
+    if pattern == "class_2_excitable":
+        np.testing.assert_allclose(v[~theirs], run["VV"][~theirs], rtol=0, atol=0.02)
+    else:
+        np.testing.assert_allclose(v[~theirs], run["VV"][~theirs], rtol=1e-8, atol=1e-8)
 
 
 def hh_under_currents(steps, **fields):

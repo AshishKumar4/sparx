@@ -267,7 +267,7 @@ A step runs in NEST's order: synapses deliver what is due, membranes integrate (
 
 ## Connectomes, serving and exchange
 
-- `sparx.graph.connectome` reads FlyWire (Shiu et al.'s tables) and the male CNS release into a `Connectome` and builds Shiu et al.'s (2024) whole-brain model; on FlyWire v630 it reproduces their published runs (rate correlation 0.999, MN9 at 67.1 Hz against their 67.0 +- 6.6) at about 30 s per simulated second on 4 CPU cores.
+- `sparx.graph.connectome` reads FlyWire (Shiu et al.'s tables) and the male CNS release into a `Connectome` and builds Shiu et al.'s (2024) whole-brain model; on FlyWire v630 it reproduces their published runs (rate correlation 0.999, MN9 at 67.1 Hz against their 67.0 +- 6.6) at about 30 s per simulated second on 4 CPU cores. On the male CNS, whose neurons receive about 1.7 times FlyWire's synapses, `matched_w_syn` rescales their weight (0.275 to 0.163 mV): sugar neurons then recruit about 670 neurons and drive MN9 at 81 Hz, against FlyWire's 400 and 67 Hz.
 - `simulate(trials=..., mesh=...)` spreads trials, or one network's neurons, over devices, with one device's results.
 - `sparx.serve.StreamServer` serves streaming models to many sessions at once, each with its own neuron state in a slot of one batch; a session's outputs equal a direct call over its stream.
 - `sparx.nir` exchanges networks through NIR; a network exported by snnTorch runs in sparx spike for spike and exports back unchanged.
@@ -300,7 +300,7 @@ The design keeps the sequential part of a spiking network small: synapses run ov
 - Each surrogate's gradient and forward-mode tangent match its published formula, and its area matches its stated normalization.
 - Invariants are tested directly: a run in chunks equals one run for every cell and layer, a call without the state collection starts at rest, `init` creates only parameters, bfloat16 inputs keep exact spikes over a float32 membrane.
 - `SpikingClassifier` trains through dew's real `Trainer`, and its loss is checked against a manual computation.
-- The physical models match NEST 3.10 and Brian2 2.10 (`tools/make_nest_fixtures.py`, `tools/make_brian2_fixtures.py`, `tests/test_simulators.py`): current-based LIF with exponential, alpha and delta synapses to 1e-11 mV and spike for spike; conductance-based LIF, AdEx, Izhikevich (bit for bit, op by op) and Hodgkin-Huxley spike for spike or within a stated step; STDP, triplet STDP and Tsodyks-Markram synapses to every transmitted weight.
+- The physical models match NEST 3.10 and Brian2 2.10 (`tools/make_nest_fixtures.py`, `tools/make_brian2_fixtures.py`, `tests/test_simulators.py`): current-based LIF with exponential, alpha and delta synapses to 1e-11 mV and spike for spike; conductance-based LIF, AdEx, Izhikevich (bit for bit, op by op) and Hodgkin-Huxley spike for spike or within a stated step; Izhikevich's (2004) twenty firing patterns (`izhikevich_2004`) spike for spike against his own `figure1.m` run in Octave; STDP, triplet STDP and Tsodyks-Markram synapses to every transmitted weight.
 - Recurrent networks with per-edge delays fire with NEST spike for spike; Brunel's four regimes and the CUBA and COBA benchmarks match NEST's and Brian2's rates, irregularity and synchrony within their spread over seeds (`tests/test_graph.py`).
 
 [docs/fidelity.md](docs/fidelity.md) lists, for every model, its references, what was checked and each difference found between them. `pytest -q` runs all of it on CPU in about eight minutes; the whole-brain comparison runs when Shiu et al.'s repository is next to sparx (`SPARX_SHIU_REPO`).
@@ -326,7 +326,7 @@ For a GPU or TPU, install the matching JAX build first (`jax[cuda12]` or `jax[tp
 - An associative-scan path for linear dynamics, if it wins on accelerators.
 - Spiking self-attention and spiking sequence models, and more neuromorphic datasets (SSC, N-MNIST, DVS Gesture).
 - GPU and TPU measurements of networks and connectomes, and fused kernels where they pay (design.md phase 7).
-- A weight scale for whole-brain models on the male CNS, and a published behaviour to validate it against.
+- Validating whole-brain models on the male CNS beyond one behaviour (its weight is calibrated to FlyWire's synapse counts, `matched_w_syn`).
 - Stateful serving in dew itself (AshishKumar4/dew#30), with `sparx.serve` as its first user.
 
 ## License

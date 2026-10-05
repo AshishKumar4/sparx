@@ -22,6 +22,7 @@ from sparx.dynamics.core import (
 )
 from sparx.dynamics.neurons import (
     IZHIKEVICH_2003,
+    IZHIKEVICH_2004,
     LIF,
     RECEPTORS,
     AdEx,
@@ -33,6 +34,7 @@ from sparx.dynamics.neurons import (
     LIFState,
     MgBlock,
     izhikevich_2003,
+    izhikevich_2004,
 )
 from sparx.dynamics.plasticity import (
     PairSTDP,
@@ -55,6 +57,7 @@ from sparx.dynamics.synapses import (
 
 __all__ = [
     "IZHIKEVICH_2003",
+    "IZHIKEVICH_2004",
     "LIF",
     "RECEPTORS",
     "AdEx",
@@ -87,6 +90,7 @@ __all__ = [
     "exact_linear",
     "integrate",
     "izhikevich_2003",
+    "izhikevich_2004",
     "response",
     "rk4",
     "substeps",

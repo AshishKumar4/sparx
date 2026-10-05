@@ -30,6 +30,7 @@ from sparx.surrogate import ATan, Surrogate, spike
 
 __all__ = [
     "IZHIKEVICH_2003",
+    "IZHIKEVICH_2004",
     "LIF",
     "RECEPTORS",
     "AdEx",
@@ -41,6 +42,7 @@ __all__ = [
     "LIFState",
     "MgBlock",
     "izhikevich_2003",
+    "izhikevich_2004",
 ]
 
 RECEPTORS: Mapping[str, float] = {"ampa": 0.0, "nmda": 0.0, "gaba_a": -80.0, "gaba_b": -95.0}
@@ -257,15 +259,21 @@ class Izhikevich:
 
     At `v >= v_th` (30 mV) it fires, `v` is set to `c` and `u` grows by
     `d`. `I` is in the model's own units, as in the paper. `scheme` names
-    the integration, both as NEST's `izhikevich` implements them:
-    `"published"` takes two half-steps of `v` and then one step of `u`
-    from the new `v`, the paper's code (at `dt = 1` it is that code
-    exactly, and its firing patterns are this scheme's); `"euler"` is the
-    forward Euler step of both from the old values, NEST's
-    `consistent_integration`. Synaptic current waveforms are read at the
-    start of the step and conductances at the voltage of each update. The
-    defaults are the regular spiking cell; the paper's classes are
-    `izhikevich_2003`.
+    the integration: `"published"` takes two half-steps of `v` and then
+    one step of `u` from the new `v`, the 2003 paper's code (at `dt = 1`
+    it is that code exactly, and its firing patterns are this scheme's);
+    `"euler"` is the forward Euler step of both from the old values,
+    NEST's `consistent_integration`; `"semi_implicit"` is one Euler step
+    of `v` and then one of `u` from the new `v`, the code of the 2004
+    paper's twenty firing patterns (`izhikevich_2004`). Synaptic current
+    waveforms are read at the start of the step and conductances at the
+    voltage of each update. The defaults are the regular spiking cell; the
+    2003 paper's classes are `izhikevich_2003`.
+
+    `quadratic` holds the coefficients of `v^2`, `v` and 1, and
+    `du/dt = a (b (v - v_u) - u_decay u)`: the defaults are the equations
+    above, and two of the 2004 patterns change them (class 1 excitability
+    and the integrator take `4.1 v + 108`, accommodation `du/dt = a b (v + 65)`).
     """
 
     a: jax.Array | float = 0.02
@@ -274,7 +282,11 @@ class Izhikevich:
     d: jax.Array | float = 8.0
     v_th: jax.Array | float = 30.0
     v_init: jax.Array | float = -65.0
-    scheme: Literal["published", "euler"] = struct.field(pytree_node=False, default="published")
+    v_u: jax.Array | float = 0.0
+    u_decay: jax.Array | float = 1.0
+    quadratic: tuple[float, float, float] = struct.field(pytree_node=False, default=(0.04, 5.0, 140.0))
+    scheme: Literal["published", "euler", "semi_implicit"] = struct.field(pytree_node=False,
+                                                                         default="published")
     reversal: Mapping[str, float] = struct.field(pytree_node=False, default_factory=lambda: dict(RECEPTORS))
     gates: Mapping[str, MgBlock] = struct.field(pytree_node=False,
                                                 default_factory=lambda: {"nmda": MgBlock()})
@@ -289,18 +301,27 @@ class Izhikevich:
              dt: float) -> tuple[IzhikevichState, Spikes]:
         current = inputs.current_at(0.0)
 
+        k2, k1, k0 = self.quadratic
+
         def dv(v, u):
             g, drive = _synaptic(self, inputs, v)
             # NEST's order of operations, `(0.04 v) v`; Izhikevich's code squares first.
-            return 0.04 * v * v + 5 * v + 140 - u + current + drive - g * v
+            return k2 * v * v + k1 * v + k0 - u + current + drive - g * v
+
+        def du(v, u):
+            # `dt a (...)` multiplies `dt a` first, as NEST and Izhikevich's code both do.
+            return dt * self.a * (self.b * (v - self.v_u) - self.u_decay * u)
 
         v, u = state
         if self.scheme == "euler":
-            v, u = v + dt * dv(v, u), u + dt * self.a * (self.b * v - u)
+            v, u = v + dt * dv(v, u), u + du(v, u)
+        elif self.scheme == "semi_implicit":
+            v = v + dt * dv(v, u)
+            u = u + du(v, u)
         else:
             v = v + dt / 2 * dv(v, u)
             v = v + dt / 2 * dv(v, u)
-            u = u + dt * self.a * (self.b * v - u)
+            u = u + du(v, u)
         v = v + inputs.jump
         fired = spike(v - self.v_th, self.surrogate)
         offset = jnp.where(fired > 0, crossing(state.v, v, self.v_th), 1.0)
@@ -325,6 +346,42 @@ IZHIKEVICH_2003: Mapping[str, tuple[float, float, float, float]] = {
     "resonator": (0.1, 0.26, -65.0, 2.0),
 }
 """`(a, b, c, d)` of each class in Izhikevich (2003), Figure 2."""
+
+
+def izhikevich_2004(pattern: str, **fields) -> Izhikevich:
+    """The neuron of one of the twenty firing patterns of Izhikevich (2004), Figure 1, by its name
+    (`IZHIKEVICH_2004`), integrated as the paper's code does (`scheme="semi_implicit"`)."""
+    return Izhikevich(**{"scheme": "semi_implicit", **IZHIKEVICH_2004[pattern], **fields})
+
+
+_CLASS_1 = {"quadratic": (0.04, 4.1, 108.0)}
+IZHIKEVICH_2004: Mapping[str, Mapping[str, float | tuple[float, float, float]]] = {
+    name: {"a": a, "b": b, "c": c, "d": d, **extra} for name, (a, b, c, d), extra in [
+        ("tonic_spiking", (0.02, 0.2, -65.0, 6.0), {}),
+        ("phasic_spiking", (0.02, 0.25, -65.0, 6.0), {}),
+        ("tonic_bursting", (0.02, 0.2, -50.0, 2.0), {}),
+        ("phasic_bursting", (0.02, 0.25, -55.0, 0.05), {}),
+        ("mixed_mode", (0.02, 0.2, -55.0, 4.0), {}),
+        ("spike_frequency_adaptation", (0.01, 0.2, -65.0, 8.0), {}),
+        ("class_1_excitable", (0.02, -0.1, -55.0, 6.0), _CLASS_1),
+        ("class_2_excitable", (0.2, 0.26, -65.0, 0.0), {}),
+        ("spike_latency", (0.02, 0.2, -65.0, 6.0), {}),
+        ("subthreshold_oscillations", (0.05, 0.26, -60.0, 0.0), {}),
+        ("resonator", (0.1, 0.26, -60.0, -1.0), {}),
+        ("integrator", (0.02, -0.1, -55.0, 6.0), _CLASS_1),
+        ("rebound_spike", (0.03, 0.25, -60.0, 4.0), {}),
+        ("rebound_burst", (0.03, 0.25, -52.0, 0.0), {}),
+        ("threshold_variability", (0.03, 0.25, -60.0, 4.0), {}),
+        ("bistability", (0.1, 0.26, -60.0, 0.0), {}),
+        ("depolarizing_after_potential", (1.0, 0.2, -60.0, -21.0), {}),
+        ("accommodation", (0.02, 1.0, -55.0, 4.0), {"v_u": -65.0, "u_decay": 0.0}),
+        ("inhibition_induced_spiking", (-0.02, -1.0, -60.0, 8.0), {}),
+        ("inhibition_induced_bursting", (-0.026, -1.0, -45.0, -2.0), {}),
+    ]
+}
+"""The fields of each of Izhikevich's (2004) twenty firing patterns, Figure 1 (A) to (T), as his code
+sets them. Each pattern also has its own input protocol and step, which `tests/test_simulators.py`
+reads from his code's run."""
 
 
 def _vtrap(x: jax.Array, y: float) -> jax.Array:
