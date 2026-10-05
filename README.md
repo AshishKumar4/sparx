@@ -283,8 +283,10 @@ All runs below are the example scripts as committed, on a 4-core x86 CPU with JA
 | SHD | `python examples/train_shd.py --steps 3000 --recurrent --surrogate superspike` | 256 recurrent ALIF | 45.23%, still rising at the last evaluation | 8 min |
 | SHD, channels pooled to 140 | `python examples/train_shd.py --steps 3000 --channels 140 --hidden 128` | 140-128 ALIF | 64.53% | 1 min 42 s |
 | SHD, channels pooled to 140 | `... --channels 140 --hidden 128 --delays 15` | the same, with a learned delay of 0 to 15 steps per input synapse | 74.56%, with every delay rounded to a whole step | 4 min 19 s |
+| SHD, channels pooled to 140 | `python examples/train_shd_eprop.py --rule eprop --epochs 5` | 140-128 recurrent ALIF (refractory 2 steps), leaky readout, trained online by e-prop | 53.14% (55.87% at epoch 3) | 39 min |
+| SHD, channels pooled to 140 | `... --rule bptt --epochs 5` | the same network by BPTT | 43.95% (51.86% at epoch 3) | 27 s |
 
-The last two rows differ only in the delays, which add 10 points. For scale, Cramer et al. (2020) report about 71% for recurrent and under 50% for feedforward LIF networks on SHD, and Hammouamri et al. (ICLR 2024) reach 95% with learned synaptic delays.
+The last two rows of the first five differ only in the delays, which add 10 points. The e-prop rows train the same network with the same optimizer: after five epochs e-prop scores 53% and BPTT 44%, and both move by several points from one epoch to the next (neither is tuned). e-prop's memory does not grow with the recording, but on a CPU it is about 90 times slower here: it advances an eligibility vector for every synapse, `B x N x (in + N) x 3` numbers, through each neuron's Jacobian every step, where BPTT does one backward pass. For scale, Cramer et al. (2020) report about 71% for recurrent and under 50% for feedforward LIF networks on SHD, and Hammouamri et al. (ICLR 2024) reach 95% with learned synaptic delays.
 
 The recurrent SHD run needs the steep SuperSpike surrogate. With ATan, backpropagation through the recurrence exploded once training grew the recurrent matrix's spectral radius from 1 to 5: the gradient norm passed 1e8 within 300 steps and test accuracy fell below 15%. `FastSigmoid(100)` kept the gradient norm below 10. The `Recurrent` docstring records this.
 
