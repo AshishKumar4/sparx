@@ -27,8 +27,17 @@ from flax import struct
 
 from sparx.dynamics.core import NeuronModel, Spikes, SynapticInput, Term, membrane_dtype
 
-__all__ = ["Alpha", "Arrivals", "BiExponential", "Delta", "Exponential", "PointNeuron", "Receptor",
-           "SynapseModel"]
+__all__ = [
+    "Alpha",
+    "Arrivals",
+    "BiExponential",
+    "Delta",
+    "Exponential",
+    "PointNeuron",
+    "Receptor",
+    "SynapseModel",
+    "jumps_first",
+]
 
 
 class SynapseModel[State](Protocol):
@@ -41,7 +50,17 @@ class SynapseModel[State](Protocol):
 
 @struct.dataclass
 class Delta:
-    """A voltage jump of the arriving weight (mV), with no kinetics: NEST's `iaf_psc_delta` input."""
+    """A voltage jump of the arriving weight (mV), with no kinetics.
+
+    By default the jump lands before the step's threshold test, as NEST's
+    `iaf_psc_delta` input does, so a jump due at the end of a step can fire
+    the neuron in that step. `after_threshold=True` lands it after the
+    test and before the reset, as Brian2's `on_pre="v += w"` does: it takes
+    effect from the next step, decaying over it first, and is lost if the
+    neuron fired.
+    """
+
+    after_threshold: bool = struct.field(pytree_node=False, default=False)
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> tuple[()]:
         return ()
@@ -51,6 +70,11 @@ class Delta:
 
     def step(self, state: tuple[()], arriving: jax.Array, dt: float) -> tuple[()]:
         return ()
+
+
+def jumps_first(synapse) -> bool:
+    """Whether arrivals on `synapse` land before the threshold test of their step (NEST's delta)."""
+    return isinstance(synapse, Delta) and not synapse.after_threshold
 
 
 @struct.dataclass
@@ -178,11 +202,23 @@ class PointNeuron:
     over the step, which makes the leak's decay over the step exact and the
     scheme second order. `"start"` is its value at the start of the step,
     Brian2's `exponential_euler`, first order.
+
+    Two options reproduce models that tie their synapses to the neuron's
+    spike, as Shiu et al.'s (2024) whole-brain model does in Brian2:
+    `reset_synapses` clears a neuron's synaptic state when it fires (after
+    the step's arrivals), and `freeze_synapses` holds it while the neuron
+    is refractory: it does not decay, and arrivals are discarded, which is
+    what Brian2's `(unless refractory)` flag on a synaptic variable does (a
+    conditional write that stops synaptic updates too). Neither is
+    physiology, where a synaptic current outlives the spike and input
+    during refractoriness is not lost; both are off by default.
     """
 
     neuron: Any
     receptors: Mapping[str, Receptor]
     hold: Literal["mean", "start"] = struct.field(pytree_node=False, default="mean")
+    reset_synapses: bool = struct.field(pytree_node=False, default=False)
+    freeze_synapses: bool = struct.field(pytree_node=False, default=False)
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> PointNeuronState:
         synapses = {name: r.synapse.init_state(shape, dtype) for name, r in self.receptors.items()}
@@ -207,19 +243,52 @@ class PointNeuron:
         cell, spikes = neuron.step(state.neuron, received, dt)
         return PointNeuronState(cell, state.synapses), spikes
 
-    def receive(self, state: PointNeuronState, arriving: Mapping[str, jax.Array],
-                dt: float) -> PointNeuronState:
-        """Decay the synapses over the step and add the weights due at its end (delta receptors hold none)."""
-        synapses = {name: r.synapse.step(state.synapses[name], arriving.get(name, 0.0), dt)
-                    for name, r in self.receptors.items()}
-        return PointNeuronState(state.neuron, synapses)
+    def receive(self, state: PointNeuronState, arriving: Mapping[str, jax.Array], dt: float,
+                fired: jax.Array | None = None, frozen: jax.Array | None = None) -> PointNeuronState:
+        """Decay the synapses over the step and add the weights due at its end (delta receptors hold none).
+
+        `fired` and `frozen` (where the neuron was refractory during the step)
+        serve `reset_synapses` and `freeze_synapses`.
+        """
+        synapses = {}
+        # Brian2 judges a step's arrivals by the refractoriness it set at the
+        # step's start, or by the spike that ended it.
+        dropped = None if frozen is None else frozen | (fired is not None and fired > 0)
+        for name, r in self.receptors.items():
+            incoming = arriving.get(name, 0.0)
+            old = state.synapses[name]
+            new = r.synapse.step(old, incoming, dt)
+            if self.freeze_synapses and frozen is not None and dropped is not None:
+                # Linear synapses: a step is the decay plus the arrivals' own response.
+                decayed = r.synapse.step(old, 0.0, dt)
+                added = jax.tree.map(lambda n, d: n - d, new, decayed)
+                kept = jax.tree.map(lambda o, d: jnp.where(frozen, o, d), old, decayed)
+                new = jax.tree.map(lambda k, a: k + jnp.where(dropped, 0.0, a), kept, added)
+            if self.reset_synapses and fired is not None:
+                new = jax.tree.map(lambda n: jnp.where(fired > 0, jnp.zeros_like(n), n), new)
+            synapses[name] = new
+        neuron = state.neuron
+        late = [name for name, r in self.receptors.items()
+                if isinstance(r.synapse, Delta) and r.synapse.after_threshold and name in arriving]
+        if late:
+            jump = sum((arriving[name] for name in late), jnp.zeros(()))
+            if fired is not None:
+                jump = jnp.where(fired > 0, 0.0, jump)  # the reset that follows overwrites it
+            neuron = neuron._replace(v=(neuron.v + jump).astype(neuron.v.dtype))
+        return PointNeuronState(neuron, synapses)
+
+    def frozen(self, state: PointNeuronState, dt: float) -> jax.Array | None:
+        """Where the neuron is refractory for the coming step, for `freeze_synapses`."""
+        refractory = getattr(state.neuron, "refractory", None)
+        return None if refractory is None else refractory > dt / 2
 
     def delta(self, arriving: Mapping[str, jax.Array]) -> jax.Array:
-        """The voltage jump (mV) of the weights arriving on delta receptors."""
-        deltas = [name for name, r in self.receptors.items() if isinstance(r.synapse, Delta)]
+        """The voltage jump (mV) of the weights arriving on delta receptors that land before the threshold."""
+        deltas = [name for name, r in self.receptors.items() if jumps_first(r.synapse)]
         jumps = (arriving.get(name, 0.0) for name in deltas)
         return jnp.asarray(sum(jumps, jnp.zeros(())))
 
     def step(self, state: PointNeuronState, inputs: Arrivals, dt: float) -> tuple[PointNeuronState, Spikes]:
+        frozen = self.frozen(state, dt)
         state, spikes = self.advance(state, inputs.current, self.delta(inputs.spikes), dt)
-        return self.receive(state, inputs.spikes, dt), spikes
+        return self.receive(state, inputs.spikes, dt, spikes.fired, frozen), spikes

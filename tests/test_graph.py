@@ -1,5 +1,6 @@
 """Networks: structure, timing, and recurrent networks against NEST spike for spike."""
 
+import dataclasses
 from pathlib import Path
 
 import jax
@@ -273,3 +274,43 @@ def test_a_layer_stack_is_the_same_network_through_sparx_nn_and_graph():
     np.testing.assert_array_equal(np.asarray(hidden[1:steps + 1]), h > 0)
     np.testing.assert_array_equal(np.asarray(output[2:]), out > 0)
     assert h.sum() > 50 and out.sum() > 20
+
+
+BRIAN2 = np.load(Path(__file__).parent / "fixtures" / "brian2.npz")
+
+
+def shiu_network(format):
+    case = {k[len("shiu/"):]: BRIAN2[k] for k in BRIAN2.files if k.startswith("shiu/")}
+    size = case["spikes"].shape[1]
+    stimulated = np.unique(case["stim_neuron"])
+    t_ref = np.full(size, 2.1)  # Brian2's 2.2 ms (it counts one step less)
+    t_ref[stimulated] = 0.0
+    # g_L = C / tau_m = 1 nS, so a synaptic current in pA is Brian2's g in mV.
+    neuron = LIF(tau_m=20.0, c_m=20.0, e_l=-52.0, v_th=-45.0, v_reset=-52.0, t_ref=jnp.asarray(t_ref))
+    population = Population("n", size, neuron, {"syn": Receptor(Exponential(5.0)),
+                                                "drive": Receptor(Delta(after_threshold=True))},
+                            reset_synapses=True, freeze_synapses=True)
+    projection = Projection("n", "n", FromEdges(case["pre"], case["post"]), weight=case["counts"] * 0.275,
+                            delay=1.8, receptor="syn", format=format, capacity=(64, 4096))
+    network = Network((population,), (projection,), inputs=(ArrivalInput("n", "stim", "drive"),), dt=DT,
+                      dtype=jnp.float64)
+    drive = np.zeros_like(case["spikes"])
+    np.add.at(drive, (case["stim_step"], case["stim_neuron"]), 68.75)
+    return network, drive, case["spikes"]
+
+
+@pytest.mark.parametrize("format", ["edges", "events"])
+def test_shius_neuron_model_fires_with_brian2_spike_for_spike(format):
+    network, drive, expected = shiu_network(format)
+    with jax.enable_x64(new_val=True):
+        result = simulate(network, network.init(jax.random.key(0)), duration=len(drive) * DT,
+                          drive={"stim": drive}, monitors=(Spikes("n"),))
+    np.testing.assert_array_equal(result.records[0], expected > 0)
+    assert expected[:, 10:].sum() > 40  # the network, not only the stimulated neurons, fires
+
+
+def test_event_projections_raise_when_over_capacity():
+    network, drive, _ = shiu_network("events")
+    network = network.clone(projections=(dataclasses.replace(network.projections[0], capacity=(2, 16)),))
+    with jax.enable_x64(new_val=True), pytest.raises(RuntimeError, match="capacity"):
+        simulate(network, network.init(jax.random.key(0)), duration=len(drive) * DT, drive={"stim": drive})

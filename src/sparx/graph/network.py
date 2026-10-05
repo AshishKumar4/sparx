@@ -34,11 +34,12 @@ single-neuron tests pin against NEST and Brian2 (`sparx.dynamics.core`):
 6. Monitors record.
 
 A spike sent in step `m` over a delay of `D` steps (`round(delay / dt)`)
-is due at the end of step `m + D`: NEST's timing for a delay of `D dt`, and
-Brian2's for a delay of `(D - 1) dt` (Brian2 lands a spike sent without
-delay at the end of its own step). Kinetic synapses take `D >= 0`; delta
-synapses need `D >= 1`, since a jump due in the step that sent it would
-feed back into that step's threshold test.
+is due at the end of step `m + D`: NEST's and Brian2's timing for a
+delay of `D dt` (they stamp the spike differently, NEST at the end of its
+step and Brian2 at the start, but deliver it alike). Kinetic synapses take
+`D >= 0`, Brian2's default being 0; delta synapses need `D >= 1`, since a
+jump due in the step that sent it would feed back into that step's
+threshold test.
 """
 
 from __future__ import annotations
@@ -53,7 +54,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from sparx.dynamics.plasticity import PairSTDP, TripletSTDP, TsodyksMarkram
-from sparx.dynamics.synapses import Delta, PointNeuron, PointNeuronState, Receptor
+from sparx.dynamics.synapses import PointNeuron, PointNeuronState, Receptor, jumps_first
 from sparx.graph.connectivity import Connectivity, EdgeList
 
 __all__ = ["ArrivalInput", "CurrentInput", "Monitor", "Network", "PoissonInput", "Population",
@@ -72,7 +73,8 @@ class Population:
 
     `initial(rng, state)` may replace the resting state each neuron starts
     from (random voltages, say); it gets a NumPy generator and the
-    `PointNeuronState` at rest, with `[size]` leaves.
+    `PointNeuronState` at rest, with `[size]` leaves. `reset_synapses` and
+    `freeze_synapses` are `PointNeuron`'s options.
     """
 
     name: str
@@ -81,10 +83,13 @@ class Population:
     receptors: Mapping[str, Receptor] = field(default_factory=dict)
     hold: Literal["mean", "start"] = "mean"
     initial: Callable[[np.random.Generator, PointNeuronState], PointNeuronState] | None = None
+    reset_synapses: bool = False
+    freeze_synapses: bool = False
 
     @property
     def cell(self) -> PointNeuron:
-        return PointNeuron(self.neuron, self.receptors, hold=self.hold)
+        return PointNeuron(self.neuron, self.receptors, hold=self.hold, reset_synapses=self.reset_synapses,
+                           freeze_synapses=self.freeze_synapses)
 
 
 @dataclass(frozen=True)
@@ -108,11 +113,16 @@ class Projection:
     short_term: TsodyksMarkram | None = None
     trainable: bool = False
     name: str | None = None
-    format: Literal["auto", "edges", "dense"] = "auto"
+    format: Literal["auto", "edges", "dense", "events"] = "auto"
     """How the projection is stored and delivered: an edge list gathered and summed per postsynaptic neuron,
     or a dense `[pre, post]` matrix multiplied by the spikes. `"auto"` takes the matrix for a projection with
     one delay and fixed weights when it has at most `DENSE_LIMIT` entries and a density of at least
-    `DENSE_DENSITY`, where a matrix product costs less than the gather on CPUs and accelerators."""
+    `DENSE_DENSITY`, where a matrix product costs less than the gather on CPUs and accelerators.
+    `"events"` visits only the edges of neurons that spiked, for large graphs with sparse activity
+    (connectomes): its cost per step is the spiking neurons' out-degree, not the edge count."""
+    capacity: tuple[int, int] = (1024, 262144)
+    """For `format="events"`: the most presynaptic neurons spiking in one step, and the most edges they
+    reach, that a step delivers. A step over capacity is counted, and `simulate` raises."""
 
     @property
     def key(self) -> str:
@@ -124,7 +134,8 @@ class PoissonInput:
     """`count` independent Poisson sources of `rate` Hz onto each neuron of `target`, through `receptor`.
 
     Brunel's (2000) external drive: their sum is one Poisson process of
-    `count * rate` Hz, sampled per neuron and step.
+    `count * rate` Hz, sampled per neuron and step. `neurons` limits the
+    input to those indices of `target`, as an optogenetic stimulus does.
     """
 
     target: str
@@ -132,6 +143,7 @@ class PoissonInput:
     weight: float
     receptor: str = "ex"
     count: int = 1
+    neurons: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -274,7 +286,7 @@ class Network(nn.Module):
             pre, post = populations[p.pre], populations[p.post]
             edges = p.connectivity.edges(rng, pre.size, post.size, p.pre == p.post)
             delays = np.rint(_per_edge(p.delay, rng, edges, f"{p.key} delay") / self.dt).astype(np.int32)
-            minimum = 1 if isinstance(post.receptors[p.receptor].synapse, Delta) else 0
+            minimum = 1 if jumps_first(post.receptors[p.receptor].synapse) else 0
             if len(delays) and delays.min() < minimum:
                 raise ValueError(f"{p.key}: delays must be at least {minimum} step(s) of {self.dt} ms "
                                  f"onto a {'delta' if minimum else 'kinetic'} synapse")
@@ -283,7 +295,17 @@ class Network(nn.Module):
             if len(delays) and np.all(delays == delays[0]):
                 delays = np.asarray(delays[0], np.int32)  # one delay: read one row of the ring per step
             weight = _per_edge(p.weight, rng, edges, f"{p.key} weight").astype(np.dtype(self.dtype))
-            if _dense(p, delays, len(edges), pre.size, post.size):
+            if p.format == "events":
+                if np.ndim(delays) or p.plasticity is not None or p.trainable:
+                    raise ValueError(f"{p.key}: an event projection needs one delay and fixed weights")
+                order = np.lexsort((edges.post, edges.pre))
+                counts = np.bincount(edges.pre, minlength=pre.size)
+                built[p.key] = {"delay": np.asarray(np.ravel(delays)[0] if np.size(delays) else 0, np.int32),
+                                "by_pre": edges.post[order],
+                                "start": np.append(np.cumsum(counts) - counts, 0).astype(np.int32),
+                                "count": np.append(counts, 0).astype(np.int32),
+                                "weight": weight[order]}
+            elif _dense(p, delays, len(edges), pre.size, post.size):
                 matrix = np.zeros((pre.size, post.size), weight.dtype)
                 np.add.at(matrix, (edges.pre, edges.post), weight)  # repeated pairs sum
                 built[p.key] = {"delay": np.asarray(np.ravel(delays)[0] if np.size(delays) else 0, np.int32),
@@ -324,7 +346,9 @@ class Network(nn.Module):
                 entry["buffer"] = jnp.zeros((lags[p.pre], pre), self.dtype)
             if entry:
                 plastic[p.key] = entry
-        return {"populations": out, "projections": plastic, "t": jnp.zeros((), jnp.int32)}
+        overflow = {p.key: jnp.zeros((), jnp.int32) for p in self.projections if p.format == "events"}
+        return {"populations": out, "projections": plastic, "overflow": overflow,
+                "t": jnp.zeros((), jnp.int32)}
 
     @nn.compact
     def __call__(self, drive: Mapping[str, Any] | None = None, *, steps: int | None = None,
@@ -380,11 +404,13 @@ class _Stepper:
             self.into[p.post].append(p)
 
     def is_delta(self, population: str, receptor: str) -> bool:
-        return isinstance(self.populations[population].receptors[receptor].synapse, Delta)
+        return jumps_first(self.populations[population].receptors[receptor].synapse)
 
     def deliver(self, t, p: Projection, weight, ring) -> jax.Array:
         """Weighted spikes of `p` due at the end of step `t`, summed per postsynaptic neuron."""
         e = self.edges[p.key]
+        if "by_pre" in e:
+            return self.events(p, e, weight, ring[(t - e["delay"]) % ring.shape[0]])
         if "pre" not in e:
             return ring[(t - e["delay"]) % ring.shape[0]] @ weight
         if e["delay"].ndim == 0:
@@ -393,6 +419,28 @@ class _Stepper:
             sent = ring[(t - e["delay"]) % ring.shape[0], e["pre"]]
         return jax.ops.segment_sum(weight * sent, e["post"], num_segments=self.populations[p.post].size,
                                    indices_are_sorted=True)
+
+    def events(self, p: Projection, e, weight, sent) -> jax.Array:
+        """Delivery that visits only the edges of neurons that spiked, up to `p.capacity`.
+
+        The spiking neurons' out-edges, contiguous when edges are sorted by
+        presynaptic neuron, are laid end to end into a fixed number of slots
+        by a prefix sum of their out-degrees; each slot finds its neuron by
+        binary search. Over capacity, the step is counted in the state.
+        """
+        neurons, slots = p.capacity
+        size = sent.shape[0]
+        active = jnp.nonzero(sent, size=neurons, fill_value=size)[0]
+        degree = e["count"][active]
+        ends = jnp.cumsum(degree)
+        slot = jnp.arange(slots)
+        owner = jnp.minimum(jnp.searchsorted(ends, slot, side="right"), neurons - 1)
+        edge = e["start"][active[owner]] + slot - (ends[owner] - degree[owner])
+        valid = slot < ends[-1]
+        edge = jnp.where(valid, edge, 0)
+        value = jnp.where(valid, weight[edge] * sent.at[active[owner]].get(mode="fill", fill_value=0), 0)
+        self.overflowed[p.key] = (jnp.sum(sent != 0) > neurons) | (ends[-1] > slots)
+        return jax.ops.segment_sum(value, e["by_pre"][edge], num_segments=self.populations[p.post].size)
 
     def external(self, t, drive_t):
         """This step's Poisson arrivals by population and receptor, and injected currents by population."""
@@ -411,8 +459,13 @@ class _Stepper:
             # jax.random.poisson loops per draw.
             table = jnp.asarray(_poisson_table(source.count * source.rate * self.dt / 1000.0), jnp.float32)
             key = jax.random.fold_in(jax.random.fold_in(self.key, t), i)
-            uniform = jax.random.uniform(key, (self.populations[source.target].size, 1))
-            draws = jnp.sum(uniform > table, axis=1)
+            size = self.populations[source.target].size
+            if source.neurons is None:
+                draws = jnp.sum(jax.random.uniform(key, (size, 1)) > table, axis=1)
+            else:
+                chosen = jnp.asarray(source.neurons, jnp.int32)
+                counts = jnp.sum(jax.random.uniform(key, (len(source.neurons), 1)) > table, axis=1)
+                draws = jnp.zeros(size, counts.dtype).at[chosen].add(counts)
             incoming = arrivals[source.target].get(source.receptor, 0.0)
             draws = draws.astype(self.network.dtype)
             arrivals[source.target][source.receptor] = incoming + source.weight * draws
@@ -442,6 +495,7 @@ class _Stepper:
 
     def __call__(self, state, drive_t):
         t, pops, plastic = state["t"], state["populations"], dict(state["projections"])
+        self.overflowed: dict[str, jax.Array] = {}
         projections = self.network.projections
         weights = {p.key: plastic[p.key]["weight"] if p.plasticity is not None else self.weights[p.key]
                    for p in projections}
@@ -453,6 +507,8 @@ class _Stepper:
 
         # 1-2. Delta jumps due now, then the membranes.
         cells, fired = {}, {}
+        frozen = {name: pop.cell.frozen(pops[name]["cell"], self.dt)
+                  for name, pop in self.populations.items()}
         before = rings({name: pops[name]["buffer"] for name in self.populations})
         for name, pop in self.populations.items():
             jumps = pop.cell.delta(self.gather(name, t, external[name], before, weights, delta=True))
@@ -476,9 +532,12 @@ class _Stepper:
         new_pops = {}
         for name, pop in self.populations.items():
             due = self.gather(name, t, external[name], after, weights, delta=False)
-            new_pops[name] = {"cell": pop.cell.receive(cells[name], due, self.dt), "buffer": buffers[name]}
+            cell = pop.cell.receive(cells[name], due, self.dt, fired[name], frozen[name])
+            new_pops[name] = {"cell": cell, "buffer": buffers[name]}
 
         # 5-6. Plasticity, then monitors.
         self.plasticity(t, plastic, fired, buffers)
         records = tuple(m.record(fired, {n: v["cell"] for n, v in new_pops.items()}) for m in self.monitors)
-        return {"populations": new_pops, "projections": plastic, "t": t + 1}, records
+        overflow = {k: v + self.overflowed.get(k, jnp.zeros((), bool)).astype(jnp.int32)
+                    for k, v in state["overflow"].items()}
+        return {"populations": new_pops, "projections": plastic, "overflow": overflow, "t": t + 1}, records

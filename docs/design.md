@@ -182,7 +182,7 @@ Every network advances in the same order, the order NEST uses, which the single-
 5. Plasticity updates traces and weights.
 6. Monitors record.
 
-A spike sent in step `m` over `D` steps is due at the end of step `m + D`: NEST's timing for a delay of `D dt`, Brian2's for `(D - 1) dt`. Kinetic synapses take `D = 0` (Brian2's default); delta synapses need `D >= 1`, since a jump due in its own step would feed back into that step's threshold test.
+A spike sent in step `m` over `D` steps is due at the end of step `m + D`: NEST's and Brian2's timing for a delay of `D dt` (they stamp spikes at the end and the start of their step, but deliver them alike). Kinetic synapses take `D = 0` (Brian2's default); delta synapses need `D >= 1`, since a jump due in its own step would feed back into that step's threshold test.
 
 ### 6.2 Connectivity kernels
 

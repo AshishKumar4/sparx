@@ -74,6 +74,10 @@ def simulate(network: Network, variables: Mapping[str, Any], *, duration: float,
         stop = min(start + per_chunk, steps)
         records, state = run(fixed, state, {name: value[start:stop] for name, value in drive.items()},
                              stop - start)
+        over = {k: int(v) for k, v in jax.device_get(state["network"]["overflow"]).items() if int(v)}
+        if over:
+            raise RuntimeError(f"event projections exceeded their capacity in {over} steps (by projection) "
+                               f"before {stop * network.dt} ms; raise Projection.capacity")
         chunks.append(jax.device_get(records))
     records = jax.tree.map(lambda *parts: np.concatenate(parts), *chunks) if chunks else ()
     return Simulation(tuple(records), {**fixed, "state": state}, network.dt)

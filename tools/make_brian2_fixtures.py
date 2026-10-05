@@ -68,6 +68,51 @@ def hodgkin_huxley(currents, dt, steps):
     return {"v": np.asarray(monitor.v / b2.mV).T, "currents": np.asarray(currents)}
 
 
+SHIU = """
+dv/dt = (v_0 - v + g) / t_mbr : volt (unless refractory)
+dg/dt = -g / tau : volt (unless refractory)
+rfc : second
+"""
+
+
+def shiu(seed=0, size=120, steps=3000):
+    """Shiu et al.'s (2024) whole-brain neuron model, as their `model.py` states it, on a small random graph.
+
+    Their equations, reset (`v = v_rst; g = 0`), refractoriness (`g`
+    frozen while refractory, none for stimulated neurons), synapses
+    (`g += w`, 1.8 ms delay, weight = signed synapse count x 0.275 mV), and
+    stimulation onto `v` (their `PoissonInput` weight, 68.75 mV), here
+    from fixed random trains so the run is deterministic.
+    """
+    rng = np.random.default_rng(seed)
+    b2.start_scope()
+    b2.prefs.codegen.target = "numpy"
+    b2.defaultclock.dt = 0.1 * b2.ms
+    namespace = {"v_0": -52 * b2.mV, "v_rst": -52 * b2.mV, "v_th": -45 * b2.mV, "t_mbr": 20 * b2.ms,
+                 "tau": 5 * b2.ms}
+    neurons = b2.NeuronGroup(size, SHIU, method="linear", threshold="v > v_th", reset="v = v_rst; g = 0 * mV",
+                             refractory="rfc", namespace=namespace)
+    neurons.v, neurons.g, neurons.rfc = -52 * b2.mV, 0 * b2.mV, 2.2 * b2.ms
+    stimulated = np.arange(10)
+    neurons.rfc[stimulated] = 0 * b2.ms
+    pre, post = np.nonzero(rng.random((size, size)) < 0.08)
+    counts = rng.integers(1, 30, len(pre)) * np.where(rng.random(len(pre)) < 0.75, 1, -1)
+    synapses = b2.Synapses(neurons, neurons, "w : volt", on_pre="g += w", delay=1.8 * b2.ms)
+    synapses.connect(i=pre, j=post)
+    synapses.w = counts * 0.275 * b2.mV
+    times = [(i, step) for i in stimulated for step in np.flatnonzero(rng.random(steps - 10) < 0.015)]
+    indices, stamp = np.array([t[0] for t in times]), np.array([t[1] for t in times])
+    generator = b2.SpikeGeneratorGroup(size, indices, stamp * 0.1 * b2.ms)
+    drive = b2.Synapses(generator, neurons, on_pre="v += 68.75 * mV")
+    drive.connect(j="i")
+    monitor = b2.SpikeMonitor(neurons)
+    b2.run(steps * 0.1 * b2.ms)
+    fired = np.zeros((steps, size))
+    fired[np.rint(np.asarray(monitor.t / b2.ms) / 0.1).astype(int), np.asarray(monitor.i)] = 1
+    return {"spikes": fired, "pre": pre, "post": post, "counts": counts, "stim_neuron": indices,
+            "stim_step": stamp}
+
+
 def run(equations, method, unit, arrivals, nest, model):
     b2.start_scope()
     b2.prefs.codegen.target = "numpy"
@@ -107,6 +152,8 @@ def main():
                       ("cuba", run(CUBA, "exact", b2.pA, cuba, nest, "iaf_psc_exp"))):
         cases.update({f"{name}/{k}": v for k, v in out.items()})
         print(name, "spikes per neuron", out["spikes"].sum(0))
+    cases.update({f"shiu/{k}": v for k, v in shiu().items()})
+    print("shiu spikes", cases["shiu/spikes"].sum())
     hh = hodgkin_huxley(list(nest["hh_currents/currents"]), 0.1, 1000)
     cases.update({f"hh/{k}": v for k, v in hh.items()})
     np.savez_compressed(OUT, **cases)

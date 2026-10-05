@@ -106,7 +106,8 @@ class LIF:
     e_l: jax.Array | float = -60.0
     v_th: jax.Array | float = -50.0
     v_reset: jax.Array | float = -60.0
-    t_ref: float = struct.field(pytree_node=False, default=5.0)
+    t_ref: jax.Array | float = 5.0
+    """Refractory period, ms; per neuron when an array."""
     reversal: Mapping[str, float] = struct.field(pytree_node=False, default_factory=lambda: dict(RECEPTORS))
     gates: Mapping[str, MgBlock] = struct.field(pytree_node=False,
                                                 default_factory=lambda: {"nmda": MgBlock()})
