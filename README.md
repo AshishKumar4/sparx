@@ -66,7 +66,7 @@ grads = jax.grad(loss)(params)
 
 ## How a network runs over time
 
-Time is the leading axis of every array inside a network: `[T, B, ...]`. Flax's `Dense`, `Conv`, `BatchNorm` and pooling treat every leading axis as a batch axis, so a synaptic layer applies to all time steps in one call, as one large matrix product. Only the neurons' elementwise recurrence runs step by step, as a `jax.lax.scan` inside each neuron layer. A convolutional network needs nothing extra:
+Time is the leading axis of every array inside a network: `[T, B, ...]`. Flax's `Dense`, `Conv`, `BatchNorm` and pooling treat every leading axis as a batch axis, so a synaptic layer applies to all time steps in one call, as one large matrix product. Only the neurons' elementwise recurrence runs step by step, as a `jax.lax.scan` inside each neuron layer. A neuron layer cannot tell time from batch, so `LIF()(x)` on a `[B, F]` array runs `B` as time steps without an error; give it `[T, B, F]`. A convolutional network needs nothing extra:
 
 ```python
 class ConvNet(nn.Module):
@@ -216,7 +216,7 @@ groups = {"delays": GroupAdam(("*/delay",), Cosine(peak=0.1, warmup_steps=0), bo
 
 SHD has no validation split. `sparx.dew.holdout(train, 0.1)` holds out part of the training set, and `trainer.fit(..., validation={"val": evaluation_pass(val, 256), "test": evaluation_pass(test, 256)})` scores both after each evaluation, every record of each (`evaluation_pass` fills the last batch with copies that weigh nothing). The objective logs the batch accuracy and every spiking layer's firing rate (`rate/<layer>`), updates BatchNorm statistics, passes `train` and dropout keys to a model that takes them, and evaluates to dew's `TokenScores`, which `sparx.dew.accuracy` reads. [`examples/train_shd.py`](examples/train_shd.py) is the full script; `--recipe snn-delays` runs Hammouamri et al.'s SHD recipe, and its docstring lists what still differs from their code.
 
-Sparx is a dew plugin. Its models, neurons, surrogates, encoders, objective and datasets are registered in dew's registry, so a run's `run.json` records a spiking model the way it records a transformer, and `dew.pipeline(run_dir)` loads a trained classifier back in a fresh process as a `SpikingClassification`:
+Sparx is a dew plugin. Its models, neurons, surrogates, encoders, objective and datasets are registered in dew's registry, so a run's `run.json` records a spiking model the way it records a transformer, and `dew.pipeline(run_dir)` loads a trained classifier back in a fresh process as a `SpikingClassification`. A model of your own trains without registering, but reloads only once its class carries `@dew.registry.models("name")`, as `SpikingMLP` does:
 
 ```python
 import dew

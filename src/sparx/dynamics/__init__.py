@@ -11,26 +11,13 @@ and ms with conductances, refractoriness and reversal potentials. Synapses
 with receptor kinetics and plasticity rules complete them; `sparx.nn` builds
 layers from these models and `sparx.graph` builds circuits and connectomes
 (design.md sections 4 and 5).
+
+This package exports the models and the contract. The arithmetic the
+models share (`fire`, `exact_linear`, `rk4`, `substeps` and the rest), which
+a new model is written with, stays in `sparx.dynamics.core`.
 """
 
-from sparx.dynamics.core import (
-    Model,
-    NeuronModel,
-    Reset,
-    Spikes,
-    SynapticInput,
-    Term,
-    crossing,
-    decay,
-    exact_linear,
-    fire,
-    jump_after_threshold,
-    membrane_dtype,
-    response,
-    rk4,
-    run,
-    substeps,
-)
+from sparx.dynamics.core import Model, NeuronModel, Reset, Spikes, SynapticInput, Term, decay, run
 from sparx.dynamics.ml import (
     ALIFCell,
     ALIFState,
@@ -123,16 +110,8 @@ __all__ = [
     "TripletTraces",
     "TsodyksMarkram",
     "TsodyksMarkramState",
-    "crossing",
     "decay",
-    "exact_linear",
-    "fire",
     "izhikevich_2003",
     "izhikevich_2004",
-    "jump_after_threshold",
-    "membrane_dtype",
-    "response",
-    "rk4",
     "run",
-    "substeps",
 ]

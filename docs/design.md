@@ -39,11 +39,12 @@ It adds six of its own:
 dew (platform)    Trainer . MeshSpec/Layout . Checkpoints . Dataset/Grain . Tracker . Profiler . registry . recipes/CLI/launch . pipeline . Server
                     ^ objectives, datasets, models, tasks register here
 sparx.dew         objectives (classification, sequence, activity fitting, online learning), dataset specs, tasks, recipes
-sparx.learn       surrogate gradients . exact event gradients (EventProp) . online rules (e-prop, OTTT) . local plasticity
-sparx.sim         simulate() . monitors . step order . delay buffers . connectivity kernels . sharding rules
+sparx.learn       exact event gradients (EventProp) . online rules (e-prop, OTTT) . conversion
 sparx.graph       Population . Projection . Connectivity . Network (a Flax module) . builders (random, spatial, connectome)
-sparx.nn          layers over time-major tensors: the dense fast path (today)
-sparx.dynamics    neuron models . synapse models . plasticity models . integrators . spike detection (today: sparx.cells)
+                  simulate() . monitors . step order . delay buffers . connectivity kernels . sharding rules
+sparx.nn          layers over time-major tensors: the dense fast path
+sparx.dynamics    neuron models . synapse models . plasticity models . integrators . spike detection
+sparx.surrogate   the spike and its surrogate gradients
 ```
 
 Each layer depends only on the ones below it. `sparx.dynamics` has no Flax dependency and can be used from plain JAX; everything above it is Flax and dew.
@@ -227,8 +228,8 @@ It compiles one chunk of the time loop, carries state between chunks, streams mo
 
 | Regime | How | Lives in |
 | --- | --- | --- |
-| Surrogate-gradient BPTT | `custom_jvp` spikes (today), with dew's remat policies over time chunks for memory | `sparx.learn.surrogate` |
-| Exact event-based gradients | EventProp (Wunderlich and Pehle 2021): adjoint dynamics over spike times; needs the in-step spike times of 4.2 | `sparx.learn.eventprop`, a custom VJP of the time loop |
+| Surrogate-gradient BPTT | `custom_jvp` spikes (today), with dew's remat policies over time chunks for memory | `sparx.surrogate` |
+| Exact event-based gradients | EventProp (Wunderlich and Pehle 2021): adjoint dynamics over spike times; needs the in-step spike times of 4.2 | `sparx.learn.events` |
 | Forward and online learning | forward-mode gradients through the `custom_jvp`; e-prop (Bellec et al. 2020) and OTTT (Xiao et al. 2022) as eligibility-trace updates every step, memory independent of `T` | `sparx.learn.online`, with a dew objective that updates every chunk |
 | Local plasticity | STDP and three-factor rules as state updates during simulation | `sparx.dynamics.plasticity` |
 | Fitting to recordings | gradient descent on network parameters against recorded spikes, rates or voltages, with spike-train distances (van Rossum 2001, Victor-Purpura 1996) and PSTH losses | `sparx.dew.ActivityFit` |

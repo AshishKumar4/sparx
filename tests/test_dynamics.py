@@ -21,9 +21,9 @@ from sparx.dynamics import (
     Receptor,
     SynapticInput,
     Term,
-    response,
     run,
 )
+from sparx.dynamics.core import response
 
 
 def lif_period(neuron: LIF, current: float) -> float:
