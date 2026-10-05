@@ -9,7 +9,7 @@ import reference
 
 import sparx
 from sparx.cells import LIFCell, run
-from sparx.nn import ALIF, IF, LI, LIF, RATES, STATE, Izhikevich, Recurrent, Synaptic
+from sparx.nn import ALIF, IF, LI, LIF, RATES, STATE, Flatten, Izhikevich, Recurrent, Synaptic
 
 T, B, D = 24, 4, 6
 
@@ -186,3 +186,11 @@ def test_positional_arguments_name_the_neuron_not_the_unroll():
     assert LIF(3.0).tau == 3.0
     assert Recurrent(ALIF()).neuron == ALIF()
     assert sparx.nn.decay(2.0) == math.exp(-0.5)
+
+
+def test_flatten_orders_features_as_pytorch_does():
+    x = np.arange(2 * 3 * 4 * 5 * 6, dtype=np.float32).reshape(2, 3, 4, 5, 6)  # [T, B, H, W, C]
+    nchw = np.moveaxis(x, -1, 2)  # PyTorch's layout of the same images
+    out = Flatten().apply({}, jnp.asarray(x))
+    np.testing.assert_array_equal(out, nchw.reshape(2, 3, -1))  # torch.flatten(x, start_dim=2)
+    np.testing.assert_array_equal(Flatten(ndim=1).apply({}, jnp.asarray(x)), x)

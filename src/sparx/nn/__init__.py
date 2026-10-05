@@ -16,6 +16,7 @@ from .neurons import (
     record_rates,
 )
 from .parallel import PSN, MaskedPSN, SlidingPSN, band_mask
+from .reshape import Flatten
 
 __all__ = [
     "ALIF",
@@ -26,6 +27,7 @@ __all__ = [
     "RATES",
     "STATE",
     "DelayedDense",
+    "Flatten",
     "Izhikevich",
     "MaskedPSN",
     "Neuron",
