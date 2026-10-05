@@ -32,7 +32,7 @@ def test_the_conv_network_runs_over_time_and_batch():
     exec(_block("class ConvNet"), scope)
     x = jnp.ones((4, 2, 8, 8, 1))
     net = scope["ConvNet"]()
-    out, _ = net.apply(net.init(jax.random.key(0), x), x, mutable=["batch_stats"])
+    out, _ = net.apply(net.init(jax.random.key(0), x), x, train=True, mutable=["batch_stats"])
     assert out.shape == (4, 2, 10)
 
 

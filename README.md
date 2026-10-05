@@ -69,8 +69,8 @@ Time is the leading axis of every array inside a network: `[T, B, ...]`. Flax's 
 ```python
 class ConvNet(nn.Module):
     @nn.compact
-    def __call__(self, x):                          # [T, B, H, W, C]
-        x = sparx.nn.LIF()(nn.BatchNorm(use_running_average=False)(nn.Conv(32, (3, 3))(x)))
+    def __call__(self, x, train: bool = False):     # [T, B, H, W, C]
+        x = sparx.nn.LIF()(nn.BatchNorm(use_running_average=not train)(nn.Conv(32, (3, 3))(x)))
         x = nn.max_pool(x, (2, 2), (2, 2))
         x = x.reshape(*x.shape[:2], -1)             # keep [T, B], flatten the rest
         return sparx.nn.LI()(nn.Dense(10)(x))
@@ -306,7 +306,7 @@ rates = run_converted(snn, snn_variables, images, steps=100)  # output firing ra
 
 - `sparx.graph.connectome` reads FlyWire (Shiu et al.'s tables) and the male CNS release into a `Connectome` and builds Shiu et al.'s (2024) whole-brain model; on FlyWire v630 it reproduces their published runs (rate correlation 0.999, MN9 at 67.1 Hz against their 67.0 +- 6.6) at about 30 s per simulated second on 4 CPU cores. On the male CNS, whose neurons receive about 1.7 times FlyWire's synapses, `matched_w_syn` rescales their weight (0.275 to 0.163 mV): sugar neurons then recruit about 670 neurons and drive MN9 at 81 Hz, against FlyWire's 400 and 67 Hz.
 - `simulate(trials=..., mesh=dew.MeshSpec(...))` spreads trials, or one network's neurons, over devices, with one device's results. The mesh is built as dew's `Trainer` builds it, and `sparx.graph.RULES` places the logical axes `trials` (on the data axis) and `neurons` (on fsdp, or on data when there is no trial axis): `MeshSpec()` partitions one network's neurons over every device, and `MeshSpec(fsdp=2)` runs trials over the data axis with each trial's neurons split in two.
-- `sparx.serve.StreamServer` serves streaming models to many sessions at once, each with its own neuron state in a slot of one batch; a session's outputs equal a direct call over its stream.
+- `sparx.serve.StreamServer` serves streaming models to many sessions at once, each with its own neuron state in a slot of one batch; a session's outputs equal a direct call over its stream. A reloaded run serves as `StreamServer(classifier.model, classifier.variables, slots=8, frame=10, sample_shape=(700,))`, fed frames of its encoder's output; any model whose outputs are time-major can be served, and one that cannot stream (a `PSN`, or a readout averaged over time) is refused when the server is built.
 - `sparx.nir` exchanges networks through NIR: dense and 2-d convolutional layers, `Flatten`, hard-reset `LIF` and `IF`, and `Recurrent(LIF)`. Dense, convolutional and recurrent networks exported by snnTorch run in sparx spike for spike and export back with the same parameters.
 
 ## Results
