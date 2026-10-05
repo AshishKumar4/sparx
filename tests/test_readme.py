@@ -70,3 +70,12 @@ def test_the_sew_resnet_snippet_returns_per_step_logits():
              "variables": net.init(jax.random.key(0), frames, train=False)}
     exec(_block("net = sparx.models.sew_resnet18"), scope)
     assert scope["logits"].shape == (2, 1, 10)
+
+
+def test_the_circuit_example_sustains_irregular_activity():
+    scope = {}
+    exec(_block("import jax\nfrom sparx.dynamics"), scope)
+    # Over 200 ms each neuron has few intervals, which biases the CV low;
+    # over 400 ms it is 1.2 (tests/test_graph.py).
+    rate, cv = (scope["firing_rates"](scope["spikes"], 0.1).mean(), scope["cv_isi"](scope["spikes"]).mean())
+    assert 12 < rate < 22 and 0.6 < cv < 1.0, (rate, cv)

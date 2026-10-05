@@ -4,6 +4,8 @@ Spiking neural networks in JAX and Flax.
 
 Sparx builds spiking networks out of ordinary Flax linen layers and a small set of neuron layers that run over time. Neuron dynamics are pure JAX, gradients pass through spikes by surrogate derivatives, and networks train with optax, with your own loop or with [dew](https://github.com/AshishKumar4/dew)'s `Trainer`. Everything is a JAX PyTree, so `jit`, `grad`, `vmap`, forward-mode `jvp` and sharding work as they do for any Flax model.
 
+Sparx also simulates circuits as neuroscience states them: neuron models in physical units (LIF, AdEx, Izhikevich, Hodgkin-Huxley), receptor kinetics and plasticity (`sparx.dynamics`), wired into populations and projections with delays (`sparx.graph`). These match NEST and Brian2, spike for spike where the models are deterministic and statistically where they are chaotic.
+
 APIs can change before 1.0.
 
 ## Contents
@@ -16,6 +18,7 @@ APIs can change before 1.0.
 - [Streaming](#streaming)
 - [Pure JAX cells](#pure-jax-cells)
 - [Training with dew](#training-with-dew)
+- [Simulating circuits](#simulating-circuits)
 - [Results](#results)
 - [Performance](#performance)
 - [Correctness](#correctness)
@@ -214,6 +217,42 @@ python recipes/snn/train.py data:shd --data.channels 140 --trainer.batch-size 64
 
 Training on several devices is dew's: `Trainer(..., mesh=MeshSpec(fsdp=2))` places the run, and a test checks that eight simulated CPU devices train the same parameters as one, within 1.8e-7.
 
+## Simulating circuits
+
+`sparx.dynamics` holds neuron, synapse and plasticity models in ms, mV, pA, nS and pF; `sparx.graph` wires them into a `Network`, a Flax module whose variables hold the connectome, trainable weights and the simulation state. This is Vogels and Abbott's network with conductance-based synapses, one of the benchmarks simulators are compared on:
+
+```python
+import jax
+from sparx.dynamics import LIF, Exponential, Receptor
+from sparx.graph import FixedProbability, Network, Population, PopulationRate, Projection, Spikes, simulate
+from sparx.graph.analysis import cv_isi, firing_rates
+
+neuron = LIF(tau_m=20.0, c_m=200.0, e_l=-60.0, v_th=-50.0, v_reset=-60.0, t_ref=5.0,
+             reversal={"ex": 0.0, "in": -80.0})
+receptors = {"ex": Receptor(Exponential(5.0), "conductance"), "in": Receptor(Exponential(10.0), "conductance")}
+
+def kick(rng, state):  # start from random voltages and conductances
+    v = rng.uniform(-60.0, -50.0, state.neuron.v.shape).astype("float32")
+    g = {"ex": rng.normal(40.0, 15.0, v.shape), "in": rng.normal(200.0, 120.0, v.shape)}
+    return state._replace(neuron=state.neuron._replace(v=v),
+                          synapses={k: x.astype("float32") for k, x in g.items()})
+
+network = Network(
+    populations=(Population("e", 3200, neuron, receptors, initial=kick),
+                 Population("i", 800, neuron, receptors, initial=kick)),
+    projections=tuple(Projection(pre, post, FixedProbability(0.02), weight=6.0 if pre == "e" else 67.0,
+                                 delay=0.0, receptor="ex" if pre == "e" else "in")
+                      for pre in ("e", "i") for post in ("e", "i")),
+    dt=0.1,
+)
+result = simulate(network, network.init(jax.random.key(0)), duration=300.0,
+                  monitors=(Spikes("e"), PopulationRate("e")))
+spikes = result.records[0][1000:]  # after the first 100 ms
+print(firing_rates(spikes, 0.1).mean(), cv_isi(spikes).mean())  # about 17 Hz, CV about 0.8
+```
+
+A step runs in NEST's order: synapses deliver what is due, membranes integrate (exactly where the equations are linear) and spike, spikes enter per-population ring buffers, kinetic synapses receive what arrives at the end of the step, plasticity updates, monitors record. `simulate` compiles one chunk of steps and carries the state between chunks, so a long run needs memory for one chunk of records, and a run continued from `result.variables` is the run it would have been unbroken. `sparx.graph.models` builds Brunel's (2000) network and the CUBA and COBA benchmarks; `Projection`s take per-edge weights and delays, pair and triplet STDP, and short-term plasticity.
+
 ## Results
 
 All runs below are the example scripts as committed, on a 4-core x86 CPU with JAX 0.11.2, float32, seed 0. They are short runs that show the library training real data end to end, not tuned results.
@@ -242,8 +281,10 @@ The design keeps the sequential part of a spiking network small: synapses run ov
 - Each surrogate's gradient and forward-mode tangent match its published formula, and its area matches its stated normalization.
 - Invariants are tested directly: a run in chunks equals one run for every cell and layer, a call without the state collection starts at rest, `init` creates only parameters, bfloat16 inputs keep exact spikes over a float32 membrane.
 - `SpikingClassifier` trains through dew's real `Trainer`, and its loss is checked against a manual computation.
+- The physical models match NEST 3.10 and Brian2 2.10 (`tools/make_nest_fixtures.py`, `tools/make_brian2_fixtures.py`, `tests/test_simulators.py`): current-based LIF with exponential, alpha and delta synapses to 1e-11 mV and spike for spike; conductance-based LIF, AdEx, Izhikevich (bit for bit, op by op) and Hodgkin-Huxley spike for spike or within a stated step; STDP, triplet STDP and Tsodyks-Markram synapses to every transmitted weight.
+- Recurrent networks with per-edge delays fire with NEST spike for spike; Brunel's four regimes and the CUBA and COBA benchmarks match NEST's and Brian2's rates, irregularity and synchrony within their spread over seeds (`tests/test_graph.py`).
 
-`pytest -q` runs all of it on CPU in about 90 seconds.
+[docs/fidelity.md](docs/fidelity.md) lists, for every model, its references, what was checked and each difference found between them. `pytest -q` runs all of it on CPU in about six minutes.
 
 ## Installation
 
@@ -266,6 +307,7 @@ For a GPU or TPU, install the matching JAX build first (`jax[cuda12]` or `jax[tp
 - An associative-scan path for linear dynamics, if it wins on accelerators.
 - Spiking self-attention and spiking sequence models, and more neuromorphic datasets (SSC, N-MNIST, DVS Gesture).
 - Online learning rules (e-prop, OTTT) that train without backpropagation through time.
+- Connectomes: FlyWire and the male CNS as networks, reproducing Shiu et al.'s (2024) whole-brain model; simulation sharded over devices.
 
 ## License
 
