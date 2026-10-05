@@ -34,7 +34,9 @@ sparx = "sparx.plugin"
 datasets = ["h5py"]
 # sparx.graph.connectome reads connectome tables (CSV and parquet).
 connectome = ["pyarrow"]
-test = ["pytest", "ruff==0.14.3", "h5py"]
+# sparx.nir exchanges networks through NIR.
+nir = ["nir"]
+test = ["pytest", "ruff==0.14.3", "h5py", "nir", "pyarrow"]
 
 [tool.setuptools.dynamic]
 version = { attr = "sparx.__version__" }
