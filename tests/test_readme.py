@@ -52,13 +52,13 @@ def test_the_streaming_snippet_continues_across_chunks():
     np.testing.assert_allclose(scope["out"], whole[5:], rtol=1e-6, atol=1e-6)
 
 
-def test_the_pure_jax_cell_snippet_runs():
+def test_the_pure_jax_model_snippet_runs():
     scope = {"sparx": __import__("sparx"),
              "currents": jax.random.normal(jax.random.key(0), (20, 4, 6)),
              "next_currents": jax.random.normal(jax.random.key(1), (5, 4, 6)),
              "weight": jnp.eye(6) * 0.1}
-    exec(_block("from sparx.cells import"), scope)
-    assert scope["spikes"].shape == (20, 4, 6) and scope["more"].shape == (5, 4, 6)
+    exec(_block("from sparx.dynamics import ALIFCell"), scope)
+    assert scope["spikes"].fired.shape == (20, 4, 6) and scope["more"].fired.shape == (5, 4, 6)
 
 
 def test_the_sew_resnet_snippet_returns_per_step_logits():

@@ -16,7 +16,7 @@ APIs can change before 1.0.
 - [Surrogate gradients](#surrogate-gradients)
 - [Encoding, losses and firing rates](#encoding-losses-and-firing-rates)
 - [Streaming](#streaming)
-- [Pure JAX cells](#pure-jax-cells)
+- [Pure JAX models](#pure-jax-models)
 - [Training with dew](#training-with-dew)
 - [Simulating circuits](#simulating-circuits)
 - [Learning beyond backpropagation through time](#learning-beyond-backpropagation-through-time)
@@ -80,7 +80,7 @@ Each neuron layer keeps its membrane in float32 whatever its input dtype, and re
 
 ## Neurons
 
-The LIF family (`LIF`, `IF`, `LI`, `Synaptic`, `ALIF`) shares one discrete-time convention with step `dt = 1` and per-step decay `exp(-1 / tau)`: `v[t] = decay * v[t-1] + x[t]`, a spike where `v[t] >= threshold`, then a reset. The input enters unscaled, as in snnTorch's `Leaky`.
+The LIF family (`LIF`, `IF`, `LI`, `Synaptic`, `ALIF`) shares one discrete-time convention with step `dt = 1` and per-step decay `exp(-1 / tau)`: `v[t] = decay * v[t-1] + x[t]`, a spike where `v[t] >= threshold`, then a reset. The input enters unscaled, as in snnTorch's `Leaky`. Every layer takes `dt`, the step in the unit of its time constants, so the default counts `tau` in steps; a step of `dt` decays by `exp(-dt / tau)`.
 
 | Layer | Dynamics | Learnable |
 | --- | --- | --- |
@@ -89,7 +89,8 @@ The LIF family (`LIF`, `IF`, `LI`, `Synaptic`, `ALIF`) shares one discrete-time 
 | `LI(tau)` | leaky integrator, never fires, returns its membrane | `learn_tau` |
 | `Synaptic(tau, tau_synapse, ...)` | current-based LIF: a decaying synaptic current charges the membrane | `learn_tau` (both) |
 | `ALIF(tau, tau_adapt, beta, ...)` | adaptive threshold that rises by `beta` per spike (Bellec et al. 2020) | `learn_tau` (both) |
-| `Izhikevich(a, b, c, d, dt)` | Izhikevich's two-variable neuron (2003) | |
+| `Izhikevich(a, b, c, d, dt)` | Izhikevich's two-variable neuron (2003) on input currents, `dt` in ms | |
+| `Dynamics(neuron=model, dt=dt)` | any neuron model of `sparx.dynamics`, such as `AdEx`, on input currents | |
 | `Recurrent(neuron)` | feeds any neuron's spikes back to its input through a learned `[F, F]` matrix | the matrix |
 | `PSN()` | parallel spiking neuron: `H = W X + b` over all `T x T` step pairs (Fang et al. 2023) | `W`, `b` |
 | `MaskedPSN(k)` | the PSN restricted to the `k` most recent steps | `W`, `b` |
@@ -158,21 +159,22 @@ for chunk in chunks:                               # each [t, B, ...]
 
 A call without `mutable=["state"]` starts every neuron at rest. `SlidingPSN` streams the same way; `PSN` and `MaskedPSN` read every step of a fixed `T` and refuse to.
 
-## Pure JAX cells
+## Pure JAX models
 
-The layers build cells from `sparx.cells`, which need no Flax. A cell holds its constants as PyTree leaves and its choices as static fields; `sparx.run` scans one over time:
+The layers build neuron models from `sparx.dynamics`, which run without Flax modules. Every model, from the dimensionless `LIFCell` to the physical `AdEx`, has `init_state(shape, dtype)` and `step(state, SynapticInput, dt) -> (state, Spikes)`, and `sparx.run` scans one over time. An array input is a jump of the membrane each step, the dimensionless family's input:
 
 ```python
-from sparx.cells import ALIFCell, LIFCell, RecurrentCell
+from sparx.dynamics import ALIFCell, LICell, LIFCell, RecurrentCell, Serial, decay
 
-cell = LIFCell(decay=0.9, threshold=1.0, reset="subtract")
-spikes, state = sparx.run(cell, currents)          # currents [T, ...]
+cell = LIFCell(decay=decay(tau=10.0), threshold=1.0, reset="subtract")
+spikes, state = sparx.run(cell, currents)          # currents [T, ...]; spikes.fired [T, ...]
 more, state = sparx.run(cell, next_currents, state)  # continues where it stopped
 
+synaptic = Serial(LICell(decay(5.0)), LIFCell(decay(10.0)))  # a synaptic current, then the membrane
 lsnn = RecurrentCell(ALIFCell(decay=0.95, adapt_decay=0.995, beta=1.8), weight)  # weight [F, F]
 ```
 
-Decays, thresholds and weights can be traced arrays, so they can be learned, swept with `vmap`, or sharded.
+A model stores its decay per unit of time and a step of `dt` (`sparx.run(..., dt=...)`, 1 by default) applies `decay ** dt`. Decays, thresholds and weights can be traced arrays, so they can be learned, swept with `vmap`, or sharded.
 
 ## Training with dew
 
@@ -227,7 +229,7 @@ Training on several devices is dew's: `Trainer(..., mesh=MeshSpec(fsdp=2))` plac
 ```python
 import jax
 from sparx.dynamics import LIF, Exponential, Receptor
-from sparx.graph import FixedProbability, Network, Population, PopulationRate, Projection, Spikes, simulate
+from sparx.graph import FixedProbability, Network, Population, PopulationRate, Projection, SpikeRaster, simulate
 from sparx.spiketrains import cv_isi, rates_hz
 
 neuron = LIF(tau_m=20.0, c_m=200.0, e_l=-60.0, v_th=-50.0, v_reset=-60.0, t_ref=5.0,
@@ -249,7 +251,7 @@ network = Network(
     dt=0.1,
 )
 result = simulate(network, network.init(jax.random.key(0)), duration=300.0,
-                  monitors=(Spikes("e"), PopulationRate("e")))
+                  monitors=(SpikeRaster("e"), PopulationRate("e")))
 spikes = result.records[0][1000:]  # after the first 100 ms
 print(rates_hz(spikes, 0.1).mean(), cv_isi(spikes).mean())  # about 17 Hz, CV about 0.8
 ```

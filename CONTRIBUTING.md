@@ -6,7 +6,7 @@ Sparx follows the same contract as [dew](https://github.com/AshishKumar4/dew/blo
 
 - Compose before you write. Look for the primitive first: `jax.lax.scan`, `jax.custom_jvp`, `flax.linen` layers (which already treat leading axes as batch axes), `optax` losses. A reimplementation needs a reason a reader can check, written where the code is.
 - One path. A capability has one implementation and one config field. No fallbacks or flags without a demonstrated need.
-- The seams are the contract. Neuron dynamics are pure JAX cells (`sparx.cells`) that know nothing about Flax. Layers (`sparx.nn`) build cells from attributes and parameters and run them over time. Synapses are ordinary Flax layers. Objectives (`sparx.dew`) own encoding, loss and evaluation; dew's `Trainer` owns everything else.
+- The seams are the contract. Neuron dynamics are pure JAX models (`sparx.dynamics`) with one contract, `init_state` and `step(state, SynapticInput, dt)`, that know nothing about Flax layers. Layers (`sparx.nn`) build models from attributes and parameters and run them over time with `sparx.dynamics.run`. Synapses are ordinary Flax layers. Objectives (`sparx.dew`) own encoding, loss and evaluation; dew's `Trainer` owns everything else.
 - Time is the leading axis, `[T, ...]`, everywhere inside a network.
 - Frozen at 1.0: parameter names and shapes, the `state` and `spike_rates` collections, cell field order, and the `SpikingClassifier` metric keys. Before 1.0 these change outright, with no compatibility path.
 
