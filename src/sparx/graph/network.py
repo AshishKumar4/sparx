@@ -56,8 +56,8 @@ from sparx.dynamics.plasticity import PairSTDP, TripletSTDP, TsodyksMarkram
 from sparx.dynamics.synapses import Delta, PointNeuron, PointNeuronState, Receptor
 from sparx.graph.connectivity import Connectivity, EdgeList
 
-__all__ = ["CurrentInput", "Monitor", "Network", "PoissonInput", "Population", "PopulationRate", "Projection",
-           "Spikes", "StateMonitor"]
+__all__ = ["ArrivalInput", "CurrentInput", "Monitor", "Network", "PoissonInput", "Population",
+           "PopulationRate", "Projection", "Spikes", "StateMonitor"]
 
 DENSE_LIMIT = 2 ** 25
 DENSE_DENSITY = 0.02
@@ -141,6 +141,16 @@ class CurrentInput:
 
     target: str
     name: str
+
+
+@dataclass(frozen=True)
+class ArrivalInput:
+    """Weights arriving on `receptor` of `target` at the end of each step, from the `drive` passed under
+    `name` (`[T, size]`): recorded spike trains replayed into a network, in the receptor's unit."""
+
+    target: str
+    name: str
+    receptor: str = "ex"
 
 
 class Monitor:
@@ -229,7 +239,7 @@ class Network(nn.Module):
 
     populations: Sequence[Population]
     projections: Sequence[Projection] = ()
-    inputs: Sequence[PoissonInput | CurrentInput] = ()
+    inputs: Sequence[PoissonInput | CurrentInput | ArrivalInput] = ()
     dt: float = 0.1
     dtype: Any = jnp.float32
     """The dtype of the state: membranes, synapses, traces and spike buffers."""
@@ -251,6 +261,9 @@ class Network(nn.Module):
         for source in self.inputs:
             if source.target not in populations:
                 raise ValueError(f"input onto unknown population {source.target!r}")
+            receptor = getattr(source, "receptor", None)
+            if receptor is not None and receptor not in populations[source.target].receptors:
+                raise ValueError(f"input onto receptor {receptor!r}, which {source.target!r} lacks")
         return populations
 
     def _build(self, populations: Mapping[str, Population]) -> dict[str, dict[str, np.ndarray]]:
@@ -388,6 +401,10 @@ class _Stepper:
         for i, source in enumerate(self.network.inputs):
             if isinstance(source, CurrentInput):
                 currents[source.target] = currents[source.target] + drive_t[source.name]
+                continue
+            if isinstance(source, ArrivalInput):
+                incoming = arrivals[source.target].get(source.receptor, 0.0)
+                arrivals[source.target][source.receptor] = incoming + drive_t[source.name]
                 continue
             assert self.key is not None
             # A static mean: invert its CDF, exact to 1e-16 and vectorized, where

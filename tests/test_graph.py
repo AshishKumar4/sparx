@@ -10,6 +10,7 @@ import pytest
 from sparx.dynamics import LIF, Delta, Exponential, Receptor
 from sparx.graph import (
     AllToAll,
+    ArrivalInput,
     CurrentInput,
     FixedInDegree,
     FixedProbability,
@@ -25,6 +26,7 @@ from sparx.graph import (
 )
 from sparx.graph.analysis import cv_isi, firing_rates, population_fano
 from sparx.graph.models import brunel, coba, cuba
+from sparx.nn import LIF as LayerLIF
 
 NEST = np.load(Path(__file__).parent / "fixtures" / "nest.npz")
 DT = float(NEST["meta/dt"])
@@ -238,3 +240,36 @@ def test_brette_benchmarks_match_brian2s_statistics(name):
         assert abs(got[k] - mean[k]) <= max(0.05 * mean[k], 4 * spread[k])
     assert abs(got[2] - mean[2]) <= 0.02 + 4 * spread[2]
     assert brian2[:, 3].min() / 2 <= got[3] <= brian2[:, 3].max() * 2
+
+
+def test_a_layer_stack_is_the_same_network_through_sparx_nn_and_graph():
+    # sparx.nn's LIF with a hard reset is a physical LIF at dt = 1 resting
+    # and resetting at 0 with threshold 1, driven through delta synapses;
+    # each projection adds its one-step delay.
+    rng = np.random.default_rng(0)
+    steps, sizes, tau = 60, (12, 20, 6), 2.0
+    x = (rng.random((steps, sizes[0])) < 0.3).astype(np.float64)
+    w1, w2 = rng.normal(0.6, 0.5, sizes[:2]), rng.normal(0.5, 0.6, sizes[1:])
+    with jax.enable_x64(new_val=True):
+        layer = LayerLIF(tau=tau, reset="zero")
+        h = layer.apply({}, jnp.asarray(x @ w1)[:, None])
+        out = np.asarray(layer.apply({}, h @ w2)[:, 0])
+        h = np.asarray(h[:, 0])
+
+        neuron = LIF(tau_m=tau, c_m=tau, e_l=0.0, v_th=1.0, v_reset=0.0, t_ref=0.0)
+        receptors = {"ex": Receptor(Delta())}
+        every = np.indices(sizes[:2]).reshape(2, -1)
+        network = Network(
+            (Population("in", sizes[0], neuron, receptors), Population("h", sizes[1], neuron, receptors),
+             Population("out", sizes[2], neuron, receptors)),
+            (Projection("in", "h", FromEdges(*every), weight=w1.ravel(), delay=1.0),
+             Projection("h", "out", FromEdges(*np.indices(sizes[1:]).reshape(2, -1)), weight=w2.ravel(),
+                        delay=1.0)),
+            inputs=(ArrivalInput("in", "spikes"),), dt=1.0, dtype=jnp.float64)
+        (inputs, hidden, output), _ = network.apply(
+            network.init(jax.random.key(0)), {"spikes": np.concatenate([x * 10, np.zeros((2, sizes[0]))])},
+            monitors=(Spikes("in"), Spikes("h"), Spikes("out")), mutable=["state"])
+    np.testing.assert_array_equal(np.asarray(inputs[:steps]), x > 0)
+    np.testing.assert_array_equal(np.asarray(hidden[1:steps + 1]), h > 0)
+    np.testing.assert_array_equal(np.asarray(output[2:]), out > 0)
+    assert h.sum() > 50 and out.sum() > 20

@@ -16,6 +16,7 @@ from sparx.graph.connectivity import (
     OneToOne,
 )
 from sparx.graph.network import (
+    ArrivalInput,
     CurrentInput,
     Monitor,
     Network,
@@ -30,6 +31,7 @@ from sparx.graph.simulate import Simulation, simulate
 
 __all__ = [
     "AllToAll",
+    "ArrivalInput",
     "Connectivity",
     "CurrentInput",
     "EdgeList",
