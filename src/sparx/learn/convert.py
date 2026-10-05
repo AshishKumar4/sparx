@@ -96,6 +96,13 @@ class _Gate:
         out = jnp.take_along_axis(_windows(spikes, self.window, self.strides), winner[..., None], -1)[..., 0]
         return state + spikes, Spikes(out, jnp.ones_like(out))
 
+    def is_refractory(self, state: jax.Array, dt: float) -> jax.Array:
+        return jnp.zeros(state.shape, bool)
+
+    def after_threshold(self, state: jax.Array, jump: jax.Array, fired: jax.Array) -> jax.Array:
+        # A gate holds counts, no membrane, so a jump after the threshold has nothing to move.
+        return state
+
 
 class SpikingMaxPool(Neuron):
     """Max pooling of spikes `[T, ..., H, W, C]` over unpadded `window` patches, gated by spike counts.
