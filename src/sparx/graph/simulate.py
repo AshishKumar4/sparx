@@ -1,7 +1,7 @@
 """Running a network for a long time: compiled chunks, state carried between them, records on the host.
 
     result = simulate(network, variables, duration=1000.0, key=key,
-                      monitors=(Spikes("e"), PopulationRate("e")), chunk=100.0)
+                      monitors=(SpikeRaster("e"), PopulationRate("e")), chunk=100.0)
     result.records[0]          # [steps, neurons] spikes of "e", a NumPy array
     result.variables           # the variables with the state after the run, to continue from
 

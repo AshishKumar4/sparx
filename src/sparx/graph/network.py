@@ -7,7 +7,7 @@
         dt=0.1,
     )
     variables = network.init(key)
-    outputs, updates = network.apply(variables, steps=10_000, monitors=(Spikes("e"),),
+    outputs, updates = network.apply(variables, steps=10_000, monitors=(SpikeRaster("e"),),
                                      rngs={"noise": key}, mutable=["state"])
 
 A `Network` is a Flax module, so dew trains, shards and checkpoints it. Its
@@ -53,12 +53,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from sparx.dynamics.core import NeuronModel
 from sparx.dynamics.plasticity import PairSTDP, TripletSTDP, TsodyksMarkram
 from sparx.dynamics.synapses import PointNeuron, PointNeuronState, Receptor, jumps_first
 from sparx.graph.connectivity import Connectivity, EdgeList
 
 __all__ = ["ArrivalInput", "CurrentInput", "Monitor", "Network", "PoissonInput", "Population",
-           "PopulationRate", "Projection", "SpikeCounts", "SpikeTimes", "Spikes", "StateMonitor"]
+           "PopulationRate", "Projection", "SpikeCounts", "SpikeRaster", "SpikeTimes", "StateMonitor"]
 
 DENSE_LIMIT = 2 ** 25
 EVENT_BLOCK = 4096
@@ -72,15 +73,18 @@ PerEdge = float | np.ndarray | Callable[[np.random.Generator, int], np.ndarray]
 class Population:
     """`size` neurons of one model, with the synapses onto them by receptor name.
 
-    `initial(rng, state)` may replace the resting state each neuron starts
-    from (random voltages, say); it gets a NumPy generator and the
-    `PointNeuronState` at rest, with `[size]` leaves. `reset_synapses` and
-    `freeze_synapses` are `PointNeuron`'s options.
+    `neuron` is any neuron model of `sparx.dynamics`, physical or
+    dimensionless; a dimensionless one (`ALIFCell`, say) takes its input
+    through delta receptors, as voltage jumps. `initial(rng, state)` may
+    replace the resting state each neuron starts from (random voltages,
+    say); it gets a NumPy generator and the `PointNeuronState` at rest, with
+    `[size]` leaves. `reset_synapses` and `freeze_synapses` are
+    `PointNeuron`'s options.
     """
 
     name: str
     size: int
-    neuron: Any
+    neuron: NeuronModel
     receptors: Mapping[str, Receptor] = field(default_factory=dict)
     hold: Literal["mean", "start"] = "mean"
     initial: Callable[[np.random.Generator, PointNeuronState], PointNeuronState] | None = None
@@ -88,7 +92,8 @@ class Population:
     freeze_synapses: bool = False
 
     @property
-    def cell(self) -> PointNeuron:
+    def point_neuron(self) -> PointNeuron:
+        """The population's neuron model and its synapses, stepped together."""
         return PointNeuron(self.neuron, self.receptors, hold=self.hold, reset_synapses=self.reset_synapses,
                            freeze_synapses=self.freeze_synapses)
 
@@ -181,7 +186,7 @@ class Monitor:
 
 
 @dataclass(frozen=True)
-class Spikes(Monitor):
+class SpikeRaster(Monitor):
     """Which neurons of `population` fired, as booleans."""
 
     population: str
@@ -363,10 +368,11 @@ class Network(nn.Module):
         rng = _seed(self.make_rng("params"))
         out = {}
         for name, pop in populations.items():
-            cell = pop.cell.init_state((pop.size,), self.dtype)
+            point_neuron = pop.point_neuron.init_state((pop.size,), self.dtype)
             if pop.initial is not None:
-                cell = pop.initial(rng, cell)
-            out[name] = {"cell": cell, "buffer": jnp.zeros((lags[name], pop.size), self.dtype)}
+                point_neuron = pop.initial(rng, point_neuron)
+            buffer = jnp.zeros((lags[name], pop.size), self.dtype)
+            out[name] = {"point_neuron": point_neuron, "buffer": buffer}
         plastic = {}
         for p in self.projections:
             pre, post = populations[p.pre].size, populations[p.post].size
@@ -504,12 +510,16 @@ class _Stepper:
         return jax.lax.fori_loop(0, blocks, block, out)
 
     def external(self, t, drive_t):
-        """This step's Poisson arrivals by population and receptor, and injected currents by population."""
+        """This step's Poisson arrivals by population and receptor, and injected currents by population.
+
+        A population no current is injected into has no entry, and its model reads no current.
+        """
         arrivals: dict[str, dict[str, jax.Array]] = {name: {} for name in self.populations}
-        currents = {name: jnp.zeros((), self.network.dtype) for name in self.populations}
+        currents: dict[str, jax.Array] = {}
         for i, source in enumerate(self.network.inputs):
             if isinstance(source, CurrentInput):
-                currents[source.target] = currents[source.target] + drive_t[source.name]
+                currents[source.target] = (currents.get(source.target, jnp.zeros((), self.network.dtype))
+                                           + drive_t[source.name])
                 continue
             if isinstance(source, ArrivalInput):
                 incoming = arrivals[source.target].get(source.receptor, 0.0)
@@ -567,13 +577,14 @@ class _Stepper:
                     for p in projections}
 
         # 1-2. Delta jumps due now, then the membranes.
-        cells, fired = {}, {}
-        frozen = {name: pop.cell.frozen(pops[name]["cell"], self.dt)
+        moved, fired = {}, {}
+        frozen = {name: pop.point_neuron.frozen(pops[name]["point_neuron"], self.dt)
                   for name, pop in self.populations.items()}
         before = rings({name: pops[name]["buffer"] for name in self.populations})
         for name, pop in self.populations.items():
-            jumps = pop.cell.delta(self.gather(name, t, external[name], before, weights, delta=True))
-            cells[name], spikes = pop.cell.advance(pops[name]["cell"], currents[name], jumps, self.dt)
+            jumps = pop.point_neuron.delta(self.gather(name, t, external[name], before, weights, delta=True))
+            moved[name], spikes = pop.point_neuron.advance(
+                pops[name]["point_neuron"], currents.get(name, 0.0), jumps, self.dt)
             fired[name] = spikes.fired
 
         # 3. Spikes into the ring buffers; short-term release scales them as they are sent.
@@ -593,12 +604,13 @@ class _Stepper:
         new_pops = {}
         for name, pop in self.populations.items():
             due = self.gather(name, t, external[name], after, weights, delta=False)
-            cell = pop.cell.receive(cells[name], due, self.dt, fired[name], frozen[name])
-            new_pops[name] = {"cell": cell, "buffer": buffers[name]}
+            point_neuron = pop.point_neuron.receive(moved[name], due, self.dt, fired[name], frozen[name])
+            new_pops[name] = {"point_neuron": point_neuron, "buffer": buffers[name]}
 
         # 5-6. Plasticity, then monitors.
         self.plasticity(t, plastic, fired, buffers)
-        records = tuple(m.record(fired, {n: v["cell"] for n, v in new_pops.items()}) for m in self.monitors)
+        records = tuple(m.record(fired, {n: v["point_neuron"] for n, v in new_pops.items()})
+                        for m in self.monitors)
         overflow = {k: v + self.overflowed.get(k, jnp.zeros((), bool)).astype(jnp.int32)
                     for k, v in state["overflow"].items()}
         return {"populations": new_pops, "projections": plastic, "overflow": overflow, "t": t + 1}, records

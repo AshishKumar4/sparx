@@ -25,7 +25,7 @@ from sparx.graph.network import (
     PopulationRate,
     Projection,
     SpikeCounts,
-    Spikes,
+    SpikeRaster,
     SpikeTimes,
     StateMonitor,
 )
@@ -50,8 +50,8 @@ __all__ = [
     "Projection",
     "Simulation",
     "SpikeCounts",
+    "SpikeRaster",
     "SpikeTimes",
-    "Spikes",
     "StateMonitor",
     "simulate",
 ]

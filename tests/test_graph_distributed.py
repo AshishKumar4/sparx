@@ -16,7 +16,7 @@ sys.path.insert(0, TESTS)
 jax.config.update("jax_enable_x64", True)
 from test_graph import nest_network
 from sparx.dynamics import LIF, Exponential, Receptor
-from sparx.graph import FixedProbability, Network, PoissonInput, Population, Projection, Spikes, simulate
+from sparx.graph import FixedProbability, Network, PoissonInput, Population, Projection, SpikeRaster, simulate
 
 mesh = Mesh(np.array(jax.devices()), ("x",)) if jax.device_count() > 1 else None
 out = {"devices": jax.device_count()}
@@ -26,9 +26,9 @@ network, case = nest_network("iaf_psc_exp")
 steps = 3000
 drive = {"dc": np.broadcast_to(case["current"], (steps, len(case["current"])))}
 result = simulate(network, network.init(jax.random.key(0)), duration=steps * 0.1, drive=drive,
-                  monitors=(Spikes("n"),), mesh=mesh)
+                  monitors=(SpikeRaster("n"),), mesh=mesh)
 out["neurons"] = np.flatnonzero(result.records[0].ravel()).tolist()
-v = result.variables["state"]["network"]["populations"]["n"]["cell"].neuron.v
+v = result.variables["state"]["network"]["populations"]["n"]["point_neuron"].neuron.v
 out["neuron_sharding"] = str(v.sharding.spec) if mesh is not None else None
 out["shards"] = len(v.addressable_shards)
 
@@ -37,7 +37,7 @@ net = Network((Population("a", 64, LIF(), {"ex": Receptor(Exponential(5.0))}),),
               (Projection("a", "a", FixedProbability(0.1), weight=20.0, delay=1.0),),
               inputs=(PoissonInput("a", rate=1000.0, weight=60.0, count=5),), dt=0.1, dtype=jnp.float64)
 result = simulate(net, net.init(jax.random.key(0)), duration=50.0, key=jax.random.key(1), trials=8,
-                  monitors=(Spikes("a"),), mesh=mesh)
+                  monitors=(SpikeRaster("a"),), mesh=mesh)
 out["trials"] = np.flatnonzero(result.records[0].ravel()).tolist()
 out["trial_shape"] = list(result.records[0].shape)
 print(json.dumps(out))

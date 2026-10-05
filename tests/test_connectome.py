@@ -15,7 +15,7 @@ from sparx.graph import (
     Population,
     Projection,
     SpikeCounts,
-    Spikes,
+    SpikeRaster,
     SpikeTimes,
     simulate,
 )
@@ -40,7 +40,8 @@ def test_spike_counts_and_times_agree_with_full_spike_records():
                       (Projection("a", "a", FixedProbability(0.05), weight=30.0, delay=1.0),),
                       inputs=(PoissonInput("a", rate=1000.0, weight=60.0, count=5),), dt=DT)
     result = simulate(network, network.init(jax.random.key(0)), duration=60.0, key=jax.random.key(1),
-                      monitors=(Spikes("a"), SpikeCounts("a"), SpikeTimes("a", capacity=300)), chunk=25.0)
+                      monitors=(SpikeRaster("a"), SpikeCounts("a"), SpikeTimes("a", capacity=300)),
+                      chunk=25.0)
     spikes, counts, times = result.records
     np.testing.assert_array_equal(counts, spikes.sum(0))
     rebuilt = np.zeros_like(spikes)
