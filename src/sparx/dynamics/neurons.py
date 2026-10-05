@@ -16,7 +16,7 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 
-from sparx.dynamics.core import Spikes, SynapticInput, crossing, exact_linear, membrane_dtype, response
+from sparx.dynamics.core import Spikes, SynapticInput, crossing, exact_linear, membrane_dtype, response, rk4
 from sparx.surrogate import ATan, Surrogate, spike
 
 __all__ = ["LIF", "RECEPTORS", "LIFState"]
@@ -112,3 +112,109 @@ class LIF:
         dtype = state.v.dtype
         return (LIFState(_reset(v, fired, self.v_reset).astype(dtype), refractory.astype(dtype)),
                 Spikes(fired, offset))
+
+
+def _synaptic(model, inputs: SynapticInput, v: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """The total held conductance (nS) and its drive `sum g E` (pA) at voltage `v`, gates applied."""
+    conductance = {name: g * model.gates[name](v) if name in model.gates else g
+                   for name, g in inputs.conductance.items()}
+    total = sum(conductance.values(), jnp.zeros(()))
+    drive = sum((g * model.reversal[name] for name, g in conductance.items()), jnp.zeros(()))
+    return total, drive
+
+
+class AdExState(NamedTuple):
+    v: jax.Array
+    w: jax.Array
+    """Adaptation current, pA."""
+    refractory: jax.Array
+
+
+@struct.dataclass
+class AdEx:
+    """The adaptive exponential integrate-and-fire neuron (Brette and Gerstner, J. Neurophysiol. 2005).
+
+        C dv/dt = -g_L (v - E_L) + g_L D_T exp((v - v_T) / D_T) - w + I + sum_k g_k (E_k - v)
+        tau_w dw/dt = a (v - E_L) - w
+
+    At `v >= v_peak` it fires, `v` is set to `v_reset` and `w` grows by `b`;
+    `v` then holds for `t_ref` (0 by default). The right-hand side reads the
+    voltage capped at `v_peak`, and reads `v_reset` while refractory, as
+    NEST's `aeif_*` models do, which keeps the exponential finite through
+    the upswing. Integrated by `substeps` RK4 steps per step, with synaptic
+    currents evaluated at each stage and conductances held; a spike is
+    detected and reset at the substep that crosses, and the rest of the step
+    continues from the reset, as NEST's adaptive integration does.
+
+    The upswing makes the equation stiff. Against NEST's adaptive RK45 at
+    `dt = 0.1` over 500 ms of Naud et al.'s patterns, spike times drift by
+    up to 5.3 ms with one substep, 0.4 ms with ten (the default) and
+    0.1 ms with a hundred (`tests/test_simulators.py`); an exponential
+    Rosenbrock step was less accurate than RK4 at every substep count
+    tried. Lower `substeps` to trade that accuracy for speed in large
+    networks. The defaults are
+    NEST's, the parameters of Brette and Gerstner's Figure 2.
+    """
+
+    c_m: jax.Array | float = 281.0
+    g_l: jax.Array | float = 30.0
+    e_l: jax.Array | float = -70.6
+    v_t: jax.Array | float = -50.4
+    delta_t: jax.Array | float = 2.0
+    v_peak: jax.Array | float = 0.0
+    v_reset: jax.Array | float = -60.0
+    a: jax.Array | float = 4.0
+    b: jax.Array | float = 80.5
+    tau_w: jax.Array | float = 144.0
+    t_ref: float = struct.field(pytree_node=False, default=0.0)
+    substeps: int = struct.field(pytree_node=False, default=10)
+    reversal: Mapping[str, float] = struct.field(pytree_node=False, default_factory=lambda: dict(RECEPTORS))
+    gates: Mapping[str, MgBlock] = struct.field(pytree_node=False,
+                                                default_factory=lambda: {"nmda": MgBlock()})
+    surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
+
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> AdExState:
+        dtype = membrane_dtype(dtype)
+        zeros = jnp.zeros(shape, dtype)
+        return AdExState(jnp.full(shape, self.e_l, dtype), zeros, zeros)
+
+    def step(self, state: AdExState, inputs: SynapticInput, dt: float) -> tuple[AdExState, Spikes]:
+        g_syn, syn_drive = _synaptic(self, inputs, state.v)
+        h = dt / self.substeps
+
+        def f(held):
+            def f(s, y):
+                v, w = y
+                v = jnp.where(held, self.v_reset, jnp.minimum(v, self.v_peak))
+                spike_current = self.g_l * self.delta_t * jnp.exp((v - self.v_t) / self.delta_t)
+                dv = (-self.g_l * (v - self.e_l) + spike_current - w + inputs.current_at(s)
+                      + syn_drive - g_syn * v) / self.c_m
+                return jnp.where(held, 0.0, dv), (self.a * (v - self.e_l) - w) / self.tau_w
+            return f
+
+        # A spike resets the membrane at the substep it crosses on, and the
+        # rest of the step integrates from the reset (refractory if t_ref > 0),
+        # as NEST's aeif models reset within their adaptive steps.
+        def detect(i, before, v, w, held, fired, offset):
+            crossed = spike(v - self.v_peak, self.surrogate) * (1 - held)
+            first = (crossed > 0) & (fired == 0)
+            offset = jnp.where(first, (i + crossing(before, v, self.v_peak)) / self.substeps, offset)
+            held = held | (crossed > 0) if self.t_ref > 0 else held
+            fired = fired + crossed * (1 - fired)
+            return _reset(v, crossed, self.v_reset), w + crossed * self.b, held, fired, offset
+
+        def substep(i, carry):
+            v, w, held, fired, offset = carry
+            after, w = rk4(f(held), (v, w), h, start=i * h)
+            return detect(i, v, after, w, held, fired, offset)
+
+        held = state.refractory > dt / 2
+        carry = (state.v, state.w, held, jnp.zeros_like(state.v), jnp.ones_like(state.v))
+        v, w, held, fired, offset = jax.lax.fori_loop(0, self.substeps, substep, carry)
+        # A delta synapse's jump lands at the end of the step, before the threshold test.
+        v, w, held, fired, offset = detect(self.substeps - 1, v, v + inputs.jump * (1 - held), w, held, fired,
+                                           offset)
+        v = jnp.where(held, self.v_reset, v)
+        refractory = jnp.where(fired > 0, self.t_ref, jnp.maximum(state.refractory - dt, 0))
+        dtype = state.v.dtype
+        return AdExState(v.astype(dtype), w.astype(dtype), refractory.astype(dtype)), Spikes(fired, offset)

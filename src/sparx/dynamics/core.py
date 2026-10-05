@@ -52,6 +52,7 @@ __all__ = [
     "integrate",
     "membrane_dtype",
     "response",
+    "rk4",
 ]
 
 
@@ -167,6 +168,22 @@ def response(term: Term, tau: jax.Array | float, dt: float) -> jax.Array:
     """
     x = -dt * (1 / jnp.asarray(term.tau) - 1 / jnp.asarray(tau))
     return jnp.exp(-dt / tau) * dt * (term.amplitude * _phi1(x) + term.slope * dt * _psi(x))
+
+
+def rk4[Y](f: Callable[[jax.Array | float, Y], Y], y: Y, h: float, steps: int = 1, start: float = 0.0) -> Y:
+    """`steps` classical Runge-Kutta steps of `h` ms of `dy/ds = f(s, y)` from `s = start`; `y` a pytree."""
+
+    def add(y, k, c):
+        return jax.tree.map(lambda a, b: a + c * b, y, k)
+
+    for i in range(steps):
+        s = start + i * h
+        k1 = f(s, y)
+        k2 = f(s + h / 2, add(y, k1, h / 2))
+        k3 = f(s + h / 2, add(y, k2, h / 2))
+        k4 = f(s + h, add(y, k3, h))
+        y = jax.tree.map(lambda y, a, b, c, d: y + h / 6 * (a + 2 * b + 2 * c + d), y, k1, k2, k3, k4)
+    return y
 
 
 def crossing(before: jax.Array, after: jax.Array, threshold: jax.Array | float) -> jax.Array:

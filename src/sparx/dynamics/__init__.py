@@ -17,8 +17,9 @@ from sparx.dynamics.core import (
     exact_linear,
     integrate,
     response,
+    rk4,
 )
-from sparx.dynamics.neurons import LIF, RECEPTORS, LIFState, MgBlock
+from sparx.dynamics.neurons import LIF, RECEPTORS, AdEx, AdExState, LIFState, MgBlock
 from sparx.dynamics.synapses import (
     Alpha,
     Arrivals,
@@ -30,6 +31,28 @@ from sparx.dynamics.synapses import (
     SynapseModel,
 )
 
-__all__ = ["LIF", "RECEPTORS", "Alpha", "Arrivals", "BiExponential", "Delta", "Exponential", "LIFState",
-           "MgBlock", "NeuronModel", "PointNeuron", "Receptor", "Spikes", "SynapseModel", "SynapticInput",
-           "Term", "crossing", "exact_linear", "integrate", "response"]
+__all__ = [
+    "LIF",
+    "RECEPTORS",
+    "AdEx",
+    "AdExState",
+    "Alpha",
+    "Arrivals",
+    "BiExponential",
+    "Delta",
+    "Exponential",
+    "LIFState",
+    "MgBlock",
+    "NeuronModel",
+    "PointNeuron",
+    "Receptor",
+    "Spikes",
+    "SynapseModel",
+    "SynapticInput",
+    "Term",
+    "crossing",
+    "exact_linear",
+    "integrate",
+    "response",
+    "rk4",
+]

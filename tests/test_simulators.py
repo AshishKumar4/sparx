@@ -16,6 +16,7 @@ import reference
 
 from sparx.dynamics import (
     LIF,
+    AdEx,
     Alpha,
     Arrivals,
     BiExponential,
@@ -23,6 +24,7 @@ from sparx.dynamics import (
     Exponential,
     PointNeuron,
     Receptor,
+    SynapticInput,
     integrate,
 )
 
@@ -150,3 +152,86 @@ def test_conductance_hold_converges_at_second_order_to_the_rk4_truth():
         errors.append(np.abs(np.asarray(v) - truth).max())
     assert errors[0] < 1e-3
     assert 3.5 < errors[0] / errors[1] < 4.5
+
+
+NAUD = sorted({key.split("/")[1] for key in NEST.files if key.startswith("naud/")})
+
+
+def naud_adex(name, **overrides):
+    def p(key):
+        return float(NEST[f"naud/{name}/param/{key}"])
+
+    fields = {"c_m": p("C_m"), "g_l": p("g_L"), "e_l": p("E_L"), "v_t": p("V_th"), "delta_t": p("Delta_T"),
+              "tau_w": p("tau_w"), "a": p("a"), "b": p("b"), "v_reset": p("V_reset"), "v_peak": p("V_peak")}
+    return AdEx(**{**fields, **overrides}), p("I_e")
+
+
+def naud_spikes(name, **overrides):
+    neuron, current = naud_adex(name, **overrides)
+    steps = len(NEST[f"naud/{name}/spikes"])
+    with jax.enable_x64(new_val=True):
+        spikes, _ = integrate(neuron, SynapticInput(jnp.full((steps, 1), current)), DT)
+    return np.flatnonzero(np.asarray(spikes.fired[:, 0]))
+
+
+@pytest.mark.parametrize("name", [name for name in NAUD if name != "irregular"])
+def test_adex_fires_naud_patterns_with_nest(name):
+    # NEST integrates adaptively; ten RK4 substeps keep every spike of these
+    # 500 ms runs within 0.8 ms of NEST's.
+    expected = np.flatnonzero(NEST[f"naud/{name}/spikes"])
+    got = naud_spikes(name)
+    assert len(got) == len(expected)
+    assert np.abs(got - expected).max() <= 8
+
+
+@pytest.mark.parametrize("name", ["tonic", "regular_bursting"])
+def test_adex_converges_to_nest_with_substeps(name):
+    expected = np.flatnonzero(NEST[f"naud/{name}/spikes"])
+    coarse = np.abs(naud_spikes(name, substeps=1) - expected).max()
+    fine = np.abs(naud_spikes(name, substeps=100) - expected).max()
+    assert fine <= 1 < coarse
+
+
+def test_adex_irregular_pattern_is_irregular_in_both():
+    # Naud's irregular parameters are chaotic: spike times part from NEST's
+    # after a few spikes, and the statistics are what is reproduced.
+    got, expected = naud_spikes("irregular"), np.flatnonzero(NEST["naud/irregular/spikes"])
+    assert abs(len(got) - len(expected)) <= 2
+    for train in (got, expected):
+        isi = np.diff(train)
+        assert isi.std() / isi.mean() > 0.3
+
+
+def test_adex_patterns_are_the_published_ones():
+    def isi(name):
+        return np.diff(naud_spikes(name)) * DT
+
+    tonic = isi("tonic")
+    assert tonic[-10:].std() / tonic[-10:].mean() < 0.02
+    adapting = isi("adapting")
+    assert np.all(np.diff(adapting) > -0.5) and adapting[-1] > 5 * adapting[0]
+    burst = isi("initial_burst")
+    assert np.all(burst[:2] < 10) and np.all(burst[2:] > 50)
+    bursting = isi("regular_bursting")
+    assert np.all(bursting[2::2] > 100) and np.all(bursting[3::2] < 10)
+    accelerating = isi("delayed_accelerating")
+    assert naud_spikes("delayed_accelerating")[0] * DT > 30 and np.all(np.diff(accelerating) < 0.5)
+    delayed = isi("delayed_regular_bursting")
+    assert naud_spikes("delayed_regular_bursting")[0] * DT > 50 and np.sum(delayed > 50) >= 3
+    transient = naud_spikes("transient") * DT
+    assert 1 <= len(transient) <= 3 and transient.max() < 100
+
+
+@pytest.mark.parametrize(("model", "kind"), [("aeif_psc_exp", "current"), ("aeif_cond_exp", "conductance")])
+def test_adex_with_synapses_fires_with_nest(model, kind):
+    neuron = AdEx(t_ref=param(model, "t_ref"), reversal=REVERSAL)
+    cell = PointNeuron(neuron, {"ex": Receptor(Exponential(param(model, "tau_syn_ex")), kind),
+                                "in": Receptor(Exponential(param(model, "tau_syn_in")), kind)})
+    fired, _ = run(cell, model, sign=-1.0 if kind == "conductance" else 1.0)
+    expected = NEST[f"{model}/spikes"]
+    for neuron in range(fired.shape[1]):
+        got, want = np.flatnonzero(fired[:, neuron]), np.flatnonzero(expected[:, neuron])
+        assert len(got) == len(want) >= 5
+        # Held conductances (second order) meet the stiff upswing: a spike
+        # can land up to 0.5 ms from NEST's adaptive solution.
+        assert np.abs(got - want).max() <= (2 if kind == "current" else 5)

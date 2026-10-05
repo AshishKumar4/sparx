@@ -34,7 +34,23 @@ CASES = {
     "iaf_cond_alpha": ({**COND, "tau_syn_ex": 2.0, "tau_syn_in": 5.0}, (1.0, 8.0)),
     "iaf_cond_beta": ({**COND, "tau_rise_ex": 0.5, "tau_decay_ex": 2.0, "tau_rise_in": 1.0,
                        "tau_decay_in": 5.0}, (1.0, 8.0)),
+    "aeif_psc_exp": ({"I_e": 800.0, "tau_syn_ex": 2.0, "tau_syn_in": 5.0, "t_ref": 0.0}, (50.0, 400.0)),
+    "aeif_cond_exp": ({"I_e": 800.0, "tau_syn_ex": 2.0, "tau_syn_in": 5.0, "t_ref": 1.0}, (1.0, 8.0)),
 }
+# Naud, Marcille, Clopath and Gerstner (Biol. Cybern. 2008), Table 1: the
+# firing patterns of AdEx under a current step. C pF, g_L nS, E_L mV,
+# V_T mV, Delta_T mV, tau_w ms, a nS, b pA, V_reset mV, I pA.
+NAUD = {
+    "tonic": (200, 10, -70, -50, 2, 30, 2, 0, -58, 500),
+    "adapting": (200, 12, -70, -50, 2, 300, 2, 60, -58, 500),
+    "initial_burst": (130, 18, -58, -50, 2, 150, 4, 120, -50, 400),
+    "regular_bursting": (200, 10, -58, -50, 2, 120, 2, 100, -46, 210),
+    "delayed_accelerating": (200, 12, -70, -50, 2, 300, -10, 0, -58, 300),
+    "delayed_regular_bursting": (100, 10, -65, -50, 2, 90, -10, 30, -47, 110),
+    "transient": (100, 10, -65, -50, 2, 90, 10, 100, -47, 180),
+    "irregular": (100, 12, -60, -50, 2, 130, -11, 30, -48, 160),
+}
+NAUD_STEPS = 5000
 
 
 def trains(rng, low, high):
@@ -80,6 +96,25 @@ def run(model, params, inputs):
     return {"v": v, "spikes": spikes, **{f"arrivals_{k}": a for k, a in arrivals.items()}}
 
 
+def naud(name, values):
+    """One `aeif_cond_exp` neuron at rest under Naud et al.'s current from t = 0."""
+    keys = ("C_m", "g_L", "E_L", "V_th", "Delta_T", "tau_w", "a", "b", "V_reset", "I_e")
+    params = {**dict(zip(keys, map(float, values), strict=True)), "V_peak": 0.0, "t_ref": 0.0}
+    nest.ResetKernel()
+    nest.resolution = DT
+    neuron = nest.Create("aeif_cond_exp", params={**params, "V_m": params["E_L"]})
+    meter = nest.Create("multimeter", params={"record_from": ["V_m", "w"], "interval": DT})
+    recorder = nest.Create("spike_recorder")
+    nest.Connect(meter, neuron)
+    nest.Connect(neuron, recorder)
+    nest.Simulate((NAUD_STEPS + 1) * DT)
+    keep = meter.events["times"] <= NAUD_STEPS * DT + DT / 2
+    spikes = np.zeros(NAUD_STEPS)
+    spikes[np.rint(recorder.events["times"] / DT).astype(int) - 1] = 1
+    return {"v": meter.events["V_m"][keep], "w": meter.events["w"][keep], "spikes": spikes,
+            **{f"param/{k}": np.array(v) for k, v in params.items()}}
+
+
 def main():
     nest.set_verbosity("M_ERROR")
     rng = np.random.default_rng(0)
@@ -89,6 +124,10 @@ def main():
         cases.update({f"{model}/{k}": v for k, v in out.items()})
         cases.update({f"{model}/param/{k}": np.array(v) for k, v in params.items()})
         print(model, "spikes per neuron", out["spikes"].sum(0))
+    for name, values in NAUD.items():
+        out = naud(name, values)
+        cases.update({f"naud/{name}/{k}": v for k, v in out.items()})
+        print("naud", name, "spikes", out["spikes"].sum())
     np.savez_compressed(OUT, **cases)
     print(f"wrote {OUT} (nest {nest.__version__})")
 
