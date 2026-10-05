@@ -42,12 +42,13 @@ from dew.registry import objectives, schedules as dew_schedules
 from dew.training.optim import ScheduleBase
 
 from sparx import encode
-from sparx.losses import per_step_cross_entropy
+from sparx.losses import per_step_cross_entropy, van_rossum
 from sparx.nn import RATES
 from sparx.rates import firing_rates, rate_penalty
 from sparx.registry import spike_encoders
 
 __all__ = [
+    "ActivityFit",
     "Direct",
     "Events",
     "Latency",
@@ -393,3 +394,79 @@ SpikingClassifier.saved_task = SpikingClassification
 accuracy = Mean(lambda scores, batch: scores.correct[:, 0], name="accuracy", better="higher",
                 reads=TokenScores)
 """Validation accuracy from a `SpikingClassifier`'s evaluation, as `val/accuracy`."""
+
+
+@objectives("activity_fit")
+class ActivityFit(Objective[Ratio]):
+    """Fit a network's spiking to recorded spike trains: model fitting to recordings.
+
+    Each example holds a stimulus, `[T, in]` under `stimulus.key`, and the
+    spikes recorded in response, `[T, N]` under `recording`; `model` maps
+    the time-major stimulus `[T, B, in]` to spikes `[T, B, N]` of the
+    recorded neurons (through surrogate gradients, so it trains).
+
+    `loss="van_rossum"` sums van Rossum's (2001) distance over neurons and
+    examples (`sparx.losses.van_rossum`, time constant `tau` ms, steps of
+    `dt` ms): it compares spike timing at the scale `tau`, and its
+    gradient moves spikes toward their recorded times. `loss="psth"` takes
+    the squared difference of the trial-averaged rates over the batch,
+    smoothed over `window` steps: for recordings repeated over trials,
+    where only the rate is reproducible. The loss is reported per example;
+    metrics give the model's and the recording's mean rates (spikes per step).
+    Evaluation returns one `TokenScores` row per example, its loss.
+    """
+
+    artifact = TokenScores
+    shown: Mapping[str, Shown] = {"distance": Shown(better="lower")}
+
+    def __init__(self, model: nn.Module, stimulus: Field, *, recording: str = "spikes",
+                 loss: Literal["van_rossum", "psth"] = "van_rossum", tau: float = 10.0, dt: float = 1.0,
+                 window: int = 10):
+        if loss not in ("van_rossum", "psth"):
+            raise ValueError(f"loss must be van_rossum or psth, not {loss!r}")
+        self.model = model
+        self.stimulus = stimulus
+        self.recording = recording
+        self.kind = loss
+        self.tau, self.dt, self.window = tau, dt, window
+        self.inputs = InputSpec(sample=stimulus)
+
+    def init(self, key: jax.Array, variables: Variables | None = None) -> Variables:
+        x = jnp.zeros((self.stimulus.shape[0], 1, *self.stimulus.shape[1:]), jnp.float32)
+        return dict(self.model.init(key, x))
+
+    def _distances(self, variables: Variables, batch: Batch) -> tuple[jax.Array, jax.Array, jax.Array]:
+        x = jnp.swapaxes(jnp.asarray(batch[self.stimulus.key], jnp.float32), 0, 1)
+        target = jnp.swapaxes(jnp.asarray(batch[self.recording], jnp.float32), 0, 1)
+        spikes = self.model.apply(variables, x)
+        assert not isinstance(spikes, tuple)
+        if self.kind == "van_rossum":
+            distance = jax.vmap(lambda s, r: van_rossum(s, r, self.tau, self.dt), in_axes=1)
+            per_example = distance(spikes, target)
+        else:
+            kernel = jnp.ones(self.window) / self.window
+
+            def smooth(train):
+                return jnp.convolve(train, kernel, mode="same")
+
+            def psth(trains):  # [T, B, N] -> [T, N]
+                return jax.vmap(smooth, in_axes=1, out_axes=1)(trains.mean(1))
+
+            error = jnp.sum((psth(spikes) - psth(target)) ** 2)
+            per_example = jnp.full(spikes.shape[1], error / spikes.shape[1])
+        return per_example, spikes, target
+
+    def loss(self, variables: Variables, batch: Batch, step: Step) -> tuple[Ratio, Aux]:
+        per_example, spikes, target = self._distances(variables, batch)
+        metrics = {"distance": jnp.mean(per_example), "rate": jnp.mean(spikes),
+                   "recorded_rate": jnp.mean(target)}
+        stats = Ratio(jnp.sum(per_example), jnp.asarray(per_example.shape[0], jnp.float32))
+        return stats, Aux(metrics=metrics)
+
+    def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
+        per_example, _, _ = self._distances(params if step.ema is None else step.ema, batch)
+        ones = jnp.ones_like(per_example)[:, None]
+        return TokenScores(losses=per_example[:, None], weights=ones, correct=jnp.zeros_like(ones, bool))
+
+    def inference_record(self) -> JSON:
+        return None

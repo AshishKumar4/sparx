@@ -12,7 +12,16 @@ from dew.objectives.base import Step
 from dew.training.optim import Linear
 
 import sparx
-from sparx.dew import Direct, Events, Rate, RateBand, SpikingClassification, SpikingClassifier, accuracy
+from sparx.dew import (
+    ActivityFit,
+    Direct,
+    Events,
+    Rate,
+    RateBand,
+    SpikingClassification,
+    SpikingClassifier,
+    accuracy,
+)
 from sparx.nn import LI, LIF
 
 LOADING = Loading(workers=0, threads=1, read_buffer=1)
@@ -170,3 +179,39 @@ def test_a_saved_run_loads_back_through_dew_pipeline_in_a_fresh_process(tmp_path
     name, logits = done.stdout.strip().split(" ", 1)
     assert name == SpikingClassification.__name__
     np.testing.assert_array_equal(np.asarray(json.loads(logits), np.float32), np.asarray(expected))
+
+
+def test_activity_fit_recovers_a_teachers_spiking():
+    # A teacher network's spikes are the recording; a student with other
+    # weights fits them by the van Rossum distance and gets closer to the
+    # teacher's weights' behavior than where it started.
+    class Net(nn.Module):
+        @nn.compact
+        def __call__(self, x):
+            return LIF(tau=4.0)(nn.Dense(6)(x))
+
+    rng = np.random.default_rng(0)
+    stimulus = (rng.random((32, 40, 8)) < 0.2).astype(np.float32)  # [B, T, in]
+    teacher = Net()
+    teacher_vars = teacher.init(jax.random.key(1), jnp.zeros((40, 1, 8)))
+    teacher_vars = jax.tree.map(lambda w: 2.5 * w, teacher_vars)
+    recording = np.swapaxes(np.asarray(teacher.apply(teacher_vars, jnp.swapaxes(stimulus, 0, 1))), 0, 1)
+    assert recording.mean() > 0.02
+    objective = ActivityFit(Net(), Field("stimulus", (40, 8)), recording="spikes", tau=5.0)
+    variables = objective.init(jax.random.key(2))
+    batch = {"stimulus": stimulus, "spikes": recording}
+    step = Step(jnp.asarray(0), jax.random.key(0), None)
+    optimizer = optax.adam(3e-2)
+    opt_state = optimizer.init(variables)
+
+    def total(variables):
+        stats, _ = objective.loss(variables, batch, step)
+        return stats.total / stats.mass
+
+    start = float(total(variables))
+    gradient = jax.jit(jax.grad(total))
+    for _ in range(150):
+        grads = gradient(variables)
+        updates, opt_state = optimizer.update(grads, opt_state)
+        variables = optax.apply_updates(variables, updates)
+    assert float(total(variables)) < 0.4 * start

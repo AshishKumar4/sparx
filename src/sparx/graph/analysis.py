@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["cv_isi", "firing_rates", "population_fano", "spike_steps"]
+__all__ = ["cv_isi", "firing_rates", "population_fano", "spike_steps", "victor_purpura"]
 
 
 def firing_rates(spikes: np.ndarray, dt: float) -> np.ndarray:
@@ -46,3 +46,23 @@ def population_fano(spikes: np.ndarray, dt: float, window: float = 1.0) -> float
     usable = spikes.shape[0] // per * per
     counts = spikes[:usable].sum(1).reshape(-1, per).sum(1)
     return float(counts.var() / counts.mean()) if counts.mean() > 0 else 0.0
+
+
+def victor_purpura(times_a: np.ndarray, times_b: np.ndarray, cost: float) -> float:
+    """Victor and Purpura's (J. Neurophysiol. 1996) distance between two spike trains (times in ms).
+
+    The cheapest way to turn one train into the other, at 1 to add or remove
+    a spike and `cost` per ms to move one: `cost = 0` counts the difference
+    in spike counts, a large `cost` counts unmatched spikes. Computed by
+    their dynamic program, `O(len(a) len(b))`; not differentiable.
+    """
+    a, b = np.sort(np.asarray(times_a, float)), np.sort(np.asarray(times_b, float))
+    table = np.zeros((len(a) + 1, len(b) + 1))
+    table[:, 0] = np.arange(len(a) + 1)
+    table[0, :] = np.arange(len(b) + 1)
+    for i in range(1, len(a) + 1):
+        moves = table[i - 1, :-1] + cost * np.abs(a[i - 1] - b)
+        row = table[i]
+        for j in range(1, len(b) + 1):
+            row[j] = min(table[i - 1, j] + 1, row[j - 1] + 1, moves[j - 1])
+    return float(table[-1, -1])
