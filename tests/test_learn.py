@@ -29,6 +29,10 @@ CELLS = {
                            surrogate=Triangle()),
     "alif": lambda: ALIFCell(decay=float(np.exp(-1 / 20)), adapt_decay=float(np.exp(-1 / 200)), beta=0.07,
                              threshold=0.6, detach_reset=True, surrogate=Triangle()),
+    # Their numerical verifications run with n_ref = 2.
+    "alif_refractory": lambda: ALIFCell(decay=float(np.exp(-1 / 20)), adapt_decay=float(np.exp(-1 / 200)),
+                                        beta=0.07, threshold=0.6, detach_reset=True, surrogate=Triangle(),
+                                        refractory=2),
 }
 
 

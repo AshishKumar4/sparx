@@ -180,6 +180,8 @@ class SynapticCell:
 class ALIFState(NamedTuple):
     v: jax.Array
     a: jax.Array
+    r: jax.Array
+    """Steps of refractoriness left."""
 
 
 @struct.dataclass
@@ -199,6 +201,11 @@ class ALIFCell:
     lands one step later, undecayed; the reset here lands at the spike, like
     every sparx cell, which makes this their model with a reset of
     `decay * threshold` (docs/fidelity.md). Gradients flow through `a`.
+
+    `refractory` is their `n_refractory`: a spike and the silence after it
+    span that many steps, during which the membrane integrates but cannot
+    fire, and no gradient passes the spike (they use 2 to 5 at 1 ms a
+    step). 0 and 1 leave the neuron free to fire on the next step.
     """
 
     decay: jax.Array | float
@@ -208,16 +215,22 @@ class ALIFCell:
     reset: Reset = struct.field(pytree_node=False, default="subtract")
     surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
     detach_reset: bool = struct.field(pytree_node=False, default=False)
+    refractory: int = struct.field(pytree_node=False, default=0)
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> ALIFState:
         zeros = jnp.zeros(shape, membrane_dtype(dtype))
-        return ALIFState(zeros, zeros)
+        return ALIFState(zeros, zeros, zeros)
 
     def step(self, state: ALIFState, x: jax.Array) -> tuple[ALIFState, jax.Array]:
         theta = self.threshold + self.beta * state.a
+        if self.refractory > 1:
+            # An infinite threshold fires nothing, resets nothing, and the
+            # surrogates' derivatives vanish there, as their forced zero does.
+            theta = jnp.where(state.r > 0, jnp.inf, theta)
         v = self.decay * state.v + x
         v, s = fire(v, theta, self.reset, self.surrogate, self.detach_reset, subtract=self.threshold)
-        return ALIFState(v, self.adapt_decay * state.a + s), s.astype(x.dtype)
+        r = jax.lax.stop_gradient(jnp.clip(state.r + self.refractory * s - 1, 0, max(self.refractory, 0)))
+        return ALIFState(v, self.adapt_decay * state.a + s, r), s.astype(x.dtype)
 
 
 class IzhikevichState(NamedTuple):

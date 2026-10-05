@@ -49,16 +49,19 @@ def synaptic(xs, decay, synapse_decay, threshold=1.0, reset="subtract"):
     return np.stack(spikes)
 
 
-def alif(xs, decay, adapt_decay, beta, threshold=1.0, reset="subtract"):
+def alif(xs, decay, adapt_decay, beta, threshold=1.0, reset="subtract", n_refractory=0):
+    """With `n_refractory`, Bellec et al.'s refractory counter (`models.py`, `EligALIF.__call__`)."""
     v = np.zeros(xs.shape[1:])
     a = np.zeros(xs.shape[1:])
+    r = np.zeros(xs.shape[1:])
     spikes = []
     for x in xs:
         theta = threshold + beta * a
         v = decay * v + x
-        s = (v >= theta).astype(np.float64)
+        s = np.where(r > 0, 0.0, (v >= theta).astype(np.float64))
         v = np.where(s > 0, 0.0, v) if reset == "zero" else v - s * threshold
         a = adapt_decay * a + s
+        r = np.clip(r + n_refractory * s - 1, 0, n_refractory)
         spikes.append(s)
     return np.stack(spikes)
 

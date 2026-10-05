@@ -216,13 +216,14 @@ class ALIF(Neuron):
     surrogate: Surrogate = ATan()
     detach_reset: bool = False
     learn_tau: bool = False
+    refractory: int = 0
 
     def build(self, x: jax.Array) -> ALIFCell:
         features = x.shape[-1]
         return ALIFCell(
             _decay(self, "decay", self.tau, self.learn_tau, features),
             _decay(self, "adapt_decay", self.tau_adapt, self.learn_tau, features),
-            self.beta, self.threshold, self.reset, self.surrogate, self.detach_reset)
+            self.beta, self.threshold, self.reset, self.surrogate, self.detach_reset, self.refractory)
 
 
 @neurons("izhikevich")

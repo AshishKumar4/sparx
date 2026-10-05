@@ -67,6 +67,21 @@ def test_alif_matches_the_reference_loop():
     assert spikes.sum() < lif_spikes.sum()
 
 
+def test_alif_refractoriness_is_bellecs_counter():
+    xs = currents(5, scale=1.5)
+    spikes, _ = run(ALIFCell(0.9, 0.97, beta=0.5, refractory=4), jnp.asarray(xs))
+    expected = reference.alif(xs.astype(np.float64), 0.9, 0.97, 0.5, n_refractory=4)
+    np.testing.assert_array_equal(spikes, expected)
+
+    def closest(spikes):
+        trains = np.asarray(spikes).reshape(len(spikes), -1).T
+        return min(np.diff(np.flatnonzero(train)).min() for train in trains if train.sum() > 1)
+
+    assert closest(spikes) >= 4  # a spike and three silent steps
+    free, _ = run(ALIFCell(0.9, 0.97, beta=0.5), jnp.asarray(xs))
+    assert closest(free) < 4
+
+
 def test_izhikevich_matches_his_published_loop_spike_for_spike_in_float64():
     # The quadratic membrane amplifies rounding chaotically over thousands of
     # noisy steps, and compiled XLA rounds its fused arithmetic differently
