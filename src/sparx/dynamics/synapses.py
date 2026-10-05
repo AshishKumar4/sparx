@@ -188,22 +188,38 @@ class PointNeuron:
         synapses = {name: r.synapse.init_state(shape, dtype) for name, r in self.receptors.items()}
         return PointNeuronState(self.neuron.init_state(shape, dtype), synapses)
 
-    def step(self, state: PointNeuronState, inputs: Arrivals, dt: float) -> tuple[PointNeuronState, Spikes]:
+    def advance(self, state: PointNeuronState, current: jax.Array | float, jump: jax.Array | float,
+                dt: float) -> tuple[PointNeuronState, Spikes]:
+        """Move the membrane over a step on the synapses' output, with `jump` (mV) landing at its end."""
         neuron: NeuronModel = self.neuron
         currents: list[Term] = []
         conductance: dict[str, jax.Array] = {}
-        jump = jnp.zeros(())
         for name, receptor in self.receptors.items():
             if isinstance(receptor.synapse, Delta):
-                jump = jump + inputs.spikes.get(name, 0.0)
-            elif receptor.kind == "current":
-                currents.extend(receptor.synapse.output(state.synapses[name]))
+                continue
+            terms = receptor.synapse.output(state.synapses[name])
+            if receptor.kind == "current":
+                currents.extend(terms)
             else:
-                terms = receptor.synapse.output(state.synapses[name])
                 held = (term.amplitude if self.hold == "start" else term.mean(dt) for term in terms)
                 conductance[name] = sum(held, jnp.zeros(()))
-        received = SynapticInput(inputs.current, tuple(currents), conductance, jump)
+        received = SynapticInput(current, tuple(currents), conductance, jump)
         cell, spikes = neuron.step(state.neuron, received, dt)
-        synapses = {name: r.synapse.step(state.synapses[name], inputs.spikes.get(name, 0.0), dt)
+        return PointNeuronState(cell, state.synapses), spikes
+
+    def receive(self, state: PointNeuronState, arriving: Mapping[str, jax.Array],
+                dt: float) -> PointNeuronState:
+        """Decay the synapses over the step and add the weights due at its end (delta receptors hold none)."""
+        synapses = {name: r.synapse.step(state.synapses[name], arriving.get(name, 0.0), dt)
                     for name, r in self.receptors.items()}
-        return PointNeuronState(cell, synapses), spikes
+        return PointNeuronState(state.neuron, synapses)
+
+    def delta(self, arriving: Mapping[str, jax.Array]) -> jax.Array:
+        """The voltage jump (mV) of the weights arriving on delta receptors."""
+        deltas = [name for name, r in self.receptors.items() if isinstance(r.synapse, Delta)]
+        jumps = (arriving.get(name, 0.0) for name in deltas)
+        return jnp.asarray(sum(jumps, jnp.zeros(())))
+
+    def step(self, state: PointNeuronState, inputs: Arrivals, dt: float) -> tuple[PointNeuronState, Spikes]:
+        state, spikes = self.advance(state, inputs.current, self.delta(inputs.spikes), dt)
+        return self.receive(state, inputs.spikes, dt), spikes

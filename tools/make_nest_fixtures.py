@@ -240,6 +240,38 @@ def plasticity(rng, model, synapse, neuron):
             "weights": weights["weights"], **params}
 
 
+NETWORK_SIZE, NETWORK_TIME = 60, 500.0
+
+
+def network(rng, model, params, weights):
+    """A random recurrent network of `model` neurons with per-edge weights and delays, under per-neuron
+    constant currents. Saves the edges so sparx can rebuild the same network."""
+    nest.ResetKernel()
+    nest.resolution = DT
+    steps = round(NETWORK_TIME / DT)
+    currents = rng.uniform(*params.pop("I_range"), NETWORK_SIZE)
+    neurons = nest.Create(model, NETWORK_SIZE, params=params)
+    for neuron, current in zip(neurons, currents, strict=True):
+        neuron.I_e = current
+    pre, post = np.nonzero(rng.random((NETWORK_SIZE, NETWORK_SIZE)) < 0.1)
+    keep = pre != post
+    pre, post = pre[keep], post[keep]
+    low, high = weights
+    excitatory = rng.random(len(pre)) < 0.8
+    weight = np.where(excitatory, rng.uniform(0, high, len(pre)), rng.uniform(low, 0, len(pre)))
+    delay = rng.integers(10, 31, len(pre)) * DT
+    first = neurons[0].global_id
+    nest.Connect(pre + first, post + first, "one_to_one", syn_spec={"weight": weight, "delay": delay})
+    recorder = nest.Create("spike_recorder")
+    nest.Connect(neurons, recorder)
+    nest.Simulate(NETWORK_TIME)
+    spikes = np.zeros((steps, NETWORK_SIZE))
+    sent = recorder.events
+    spikes[np.rint(sent["times"] / DT).astype(int) - 1, sent["senders"] - first] = 1
+    return {"spikes": spikes, "pre": pre, "post": post, "weight": weight, "delay": delay, "current": currents,
+            **{f"param/{k}": np.array(v) for k, v in params.items()}}
+
+
 def main():
     nest.set_verbosity("M_ERROR")
     rng = np.random.default_rng(0)
@@ -271,6 +303,15 @@ def main():
         out = izhikevich(IZHIKEVICH["regular_spiking"], 0.1, consistent, current=4.0, trains=delta)
         cases.update({f"izhikevich/delta_{label}/{k}": v for k, v in out.items()})
         print("izhikevich delta", label, "spikes", out["spikes"].sum(0))
+    for model, params, weights in (
+            ("iaf_psc_exp", {**COMMON, "I_e": 0.0, "tau_syn_ex": 2.0, "tau_syn_in": 5.0,
+                             "I_range": (300, 420)}, (-400.0, 150.0)),
+            ("iaf_psc_delta", {**COMMON, "I_e": 0.0, "I_range": (300, 420)}, (-3.0, 1.5)),
+            ("iaf_cond_exp", {**COND, "I_e": 0.0, "tau_syn_ex": 2.0, "tau_syn_in": 5.0,
+                              "I_range": (230, 320)}, (-8.0, 3.0))):
+        out = network(rng, model, dict(params), weights)
+        cases.update({f"network/{model}/{k}": v for k, v in out.items()})
+        print("network", model, "spikes", out["spikes"].sum(), "edges", len(out["pre"]))
     for name, (model, synapse, neuron) in PLASTICITY.items():
         out = plasticity(rng, model, synapse, neuron)
         cases.update({f"plasticity/{name}/{k}": v for k, v in out.items()})

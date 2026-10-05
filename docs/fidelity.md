@@ -37,6 +37,13 @@ Reference versions: SpikingJelly at commit c6cb8e46 (2026-10-03), snnTorch 1.0.0
 | `PairSTDP` | Guetig et al. 2003 (additive at `mu = 0`, Song et al. 2000; multiplicative at `mu = 1`); NEST `stdp_synapse` | Every transmitted weight within 1e-10 relative, additive and multiplicative, with a 1 ms dendritic delay | None. NEST evaluates the rule at presynaptic spikes from the postsynaptic history; sparx applies the same updates as the spikes happen, in the same order, including NEST's for coincident spikes (a spike pairs only with strictly earlier spikes of the other side, and potentiation precedes depression). |
 | `TripletSTDP` | Pfister and Gerstner 2006, all-to-all; NEST `stdp_triplet_synapse` | Every transmitted weight within 1e-10 relative | None. The defaults are the paper's visual cortex fit; NEST keeps the postsynaptic time constants on the neuron, with defaults of 20 and 110 ms rather than the fit's 33.7 and 125 ms. |
 
+## Networks
+
+| Network | Reference | Checked | Departures and choices |
+| --- | --- | --- | --- |
+| Recurrent `Network` (`sparx.graph`) | NEST, the same edges, weights and per-edge delays (1 to 3 ms) | 60 neurons, 10% connectivity, mixed-sign weights, per-neuron currents, 500 ms: spike for spike with `iaf_psc_exp` and `iaf_psc_delta` networks; with `iaf_cond_exp`, spike for spike until a held-conductance difference of 1e-3 mV moves one spike by one step (after 50 ms), and total activity within 5% (`tests/test_graph.py`) | A spike sent in step `m` over `D` steps lands at the end of step `m + D`, NEST's timing; Brian2's for a delay of `(D - 1) dt`. Kinetic synapses accept `D = 0` (Brian2's default); delta synapses need `D >= 1`. |
+| Plastic and short-term projections | — | — | A plastic weight is read when a spike arrives; NEST reads it when the spike is sent, so a weight change while a spike is in flight (within the delay) is applied to it in sparx and not in NEST. Short-term release is computed when the spike is sent and travels with it, as in NEST. |
+
 ## Encoders and losses
 
 | Function | Reference | Checked | Departures and choices |
