@@ -111,3 +111,60 @@ def eprop_alif(xs, alpha, rho, beta, v_th, reset):
         z = (v >= v_th + beta * a).astype(np.float64)
         spikes.append(z)
     return np.stack(spikes)
+
+
+def conductance_lif(arrivals, current, *, c_m, g_l, e_l, v_th, v_reset, t_ref, reversal, kernels, dt,
+                    substeps=200):
+    """A conductance-based LIF integrated by RK4 at `dt / substeps`, the ground truth.
+
+    `arrivals[name]` `[T, N]` are weights arriving at the end of each step on
+    receptor `name`, `kernels[name]` its conductance kernel as a function of
+    the time since arrival (summed over arrivals, so each kernel must be
+    linear: exponential, alpha or bi-exponential). Spikes are detected and
+    the voltage reset at step boundaries, refractoriness counts whole steps,
+    as NEST and sparx do; only the membrane between them is integrated
+    finely. Returns the voltage after each step and the spikes.
+    """
+    steps, n = current.shape
+    names = list(arrivals)
+    times = {name: [[] for _ in range(n)] for name in names}
+    v = np.full(n, float(e_l))
+    held = np.zeros(n, dtype=int)
+    hold_steps = round(t_ref / dt)
+    vs, spikes = [], []
+    h = dt / substeps
+
+    def conductance(name, i, t):
+        return sum(w * kernels[name](t - s) for s, w in times[name][i] if t >= s)
+
+    def dv(i, t, v, current):
+        g = {name: conductance(name, i, t) for name in names}
+        return (-g_l * (v - e_l) + sum(g[k] * (reversal[k] - v) for k in names) + current) / c_m
+
+    for step in range(steps):
+        t0 = step * dt
+        fired = np.zeros(n)
+        for i in range(n):
+            if held[i] > 0:
+                held[i] -= 1
+                v[i] = v_reset
+            else:
+                x = v[i]
+                for k in range(substeps):
+                    t = t0 + k * h
+                    k1 = dv(i, t, x, current[step, i])
+                    k2 = dv(i, t + h / 2, x + h / 2 * k1, current[step, i])
+                    k3 = dv(i, t + h / 2, x + h / 2 * k2, current[step, i])
+                    k4 = dv(i, t + h, x + h * k3, current[step, i])
+                    x = x + h / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+                v[i] = x
+                if x >= v_th:
+                    fired[i] = 1
+                    v[i] = v_reset
+                    held[i] = hold_steps
+            for name in names:
+                if arrivals[name][step, i] != 0:
+                    times[name][i].append(((step + 1) * dt, arrivals[name][step, i]))
+        vs.append(v.copy())
+        spikes.append(fired)
+    return np.stack(vs), np.stack(spikes)

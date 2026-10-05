@@ -16,7 +16,7 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 
-from sparx.dynamics.core import Spikes, SynapticInput, crossing, exact_linear, membrane_dtype
+from sparx.dynamics.core import Spikes, SynapticInput, crossing, exact_linear, membrane_dtype, response
 from sparx.surrogate import ATan, Surrogate, spike
 
 __all__ = ["LIF", "RECEPTORS", "LIFState"]
@@ -26,6 +26,23 @@ RECEPTORS: Mapping[str, float] = {"ampa": 0.0, "nmda": 0.0, "gaba_a": -80.0, "ga
 conductances against: AMPA and NMDA 0 mV, GABA-A -80 mV (Cl-), GABA-B
 -95 mV (K+), as in Brette et al.'s simulator benchmarks (2007) and the
 cortical models built on them."""
+
+
+@struct.dataclass
+class MgBlock:
+    """The fraction of NMDA receptors not blocked by magnesium at voltage `v` (mV).
+
+        B(v) = 1 / (1 + [Mg] / 3.57 exp(-0.062 v))
+
+    Jahr and Stevens (J. Neurosci. 1990), `mg` the extracellular
+    concentration in mM. A conductance-based model scales its `nmda`
+    conductance by `B` at the voltage at the start of each step.
+    """
+
+    mg: float = 1.0
+
+    def __call__(self, v: jax.Array) -> jax.Array:
+        return 1 / (1 + self.mg / 3.57 * jnp.exp(-0.062 * v))
 
 
 def _reset(v: jax.Array, fired: jax.Array, to: jax.Array | float) -> jax.Array:
@@ -49,8 +66,15 @@ class LIF:
     for `t_ref`. With the inputs constant over a step the equation is linear
     in `v`, and the update is its exact solution: `v` relaxes toward
     `(g_L E_L + sum g_k E_k + I) / (g_L + sum g_k)` with time constant
-    `C / (g_L + sum g_k)`. Conductances are read against `reversal`, by
-    receptor name. The defaults are the cortical cell of Brette et al.'s
+    `C / (g_L + sum g_k)`, and synaptic current waveforms are integrated
+    exactly against that time constant, as NEST's `iaf_psc_exp` and
+    `iaf_psc_alpha` do. Conductances are read against `reversal`, by
+    receptor name, held over the step as Brian2's `exponential_euler`
+    holds them; a receptor in `gates` is scaled by its gate at the voltage
+    at the start of the step (NMDA's magnesium block by default). A voltage
+    `jump` from delta synapses lands after the step's integration, before
+    the threshold test, and is lost during refractoriness, as in NEST's
+    `iaf_psc_delta`. The defaults are the cortical cell of Brette et al.'s
     benchmarks (2007): 20 ms, 200 pF, rest -60 mV, threshold -50 mV, reset
     -60 mV, 5 ms refractory.
     """
@@ -62,6 +86,8 @@ class LIF:
     v_reset: jax.Array | float = -60.0
     t_ref: float = struct.field(pytree_node=False, default=5.0)
     reversal: Mapping[str, float] = struct.field(pytree_node=False, default_factory=lambda: dict(RECEPTORS))
+    gates: Mapping[str, MgBlock] = struct.field(pytree_node=False,
+                                                default_factory=lambda: {"nmda": MgBlock()})
     surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> LIFState:
@@ -70,10 +96,14 @@ class LIF:
 
     def step(self, state: LIFState, inputs: SynapticInput, dt: float) -> tuple[LIFState, Spikes]:
         g_l = self.c_m / self.tau_m
-        g_total = g_l + sum((g for g in inputs.conductance.values()), jnp.zeros(()))
+        conductance = {name: g * self.gates[name](state.v) if name in self.gates else g
+                       for name, g in inputs.conductance.items()}
+        g_total = g_l + sum(conductance.values(), jnp.zeros(()))
         drive = g_l * self.e_l + inputs.current + sum(
-            (g * self.reversal[name] for name, g in inputs.conductance.items()), jnp.zeros(()))
-        integrated = exact_linear(state.v, drive / g_total, self.c_m / g_total, dt)
+            (g * self.reversal[name] for name, g in conductance.items()), jnp.zeros(()))
+        tau = self.c_m / g_total
+        integrated = exact_linear(state.v, drive / g_total, tau, dt) + sum(
+            (response(term, tau, dt) for term in inputs.currents), jnp.zeros(())) / self.c_m + inputs.jump
         held = state.refractory > dt / 2
         v = jnp.where(held, self.v_reset, integrated)
         fired = spike(v - self.v_th, self.surrogate) * (1 - held)

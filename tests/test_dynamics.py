@@ -6,8 +6,19 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from scipy.integrate import quad
 
-from sparx.dynamics import LIF, SynapticInput, integrate
+from sparx.dynamics import (
+    LIF,
+    Alpha,
+    BiExponential,
+    Exponential,
+    MgBlock,
+    SynapticInput,
+    Term,
+    integrate,
+    response,
+)
 
 
 def lif_period(neuron: LIF, current: float) -> float:
@@ -26,7 +37,7 @@ def test_one_long_step_equals_many_short_ones_below_threshold():
         current = jnp.asarray([10.0, 40.0])  # steady states -51.5 and -59.3 mV
         g = {"ampa": jnp.asarray([2.0, 0.5]), "gaba_a": jnp.asarray([1.0, 3.0])}
         def held(steps):
-            return SynapticInput(jnp.broadcast_to(current, (steps, 2)),
+            return SynapticInput(jnp.broadcast_to(current, (steps, 2)), conductance=
                                  {k: jnp.broadcast_to(v, (steps, 2)) for k, v in g.items()})
 
         long, long_state = integrate(neuron, held(1), 5.0)
@@ -42,7 +53,7 @@ def test_constant_conductances_relax_to_their_analytic_steady_state():
     v_inf = (g_l * neuron.e_l + g_e * 0.0 + g_i * -80.0) / (g_l + g_e + g_i)
     tau = neuron.c_m / (g_l + g_e + g_i)
     with jax.enable_x64(new_val=True):
-        _, state = integrate(neuron, SynapticInput(0.0, {"ampa": jnp.full((300, 1), g_e),
+        _, state = integrate(neuron, SynapticInput(0.0, conductance={"ampa": jnp.full((300, 1), g_e),
                                                          "gaba_a": jnp.full((300, 1), g_i)}), 0.1)
     expected = v_inf + (neuron.e_l - v_inf) * math.exp(-30.0 / tau)
     np.testing.assert_allclose(state.v[0], expected, rtol=1e-12)
@@ -99,3 +110,67 @@ def test_the_surrogate_passes_gradients_to_the_input_current():
         return jnp.sum(spikes.fired)
 
     assert float(jax.grad(rate)(400.0)) > 0
+
+
+def _impulse(synapse, steps=4000, dt=0.01, weight=3.0):
+    """A synapse's output over time after one arrival of `weight` at t = 0."""
+    with jax.enable_x64(new_val=True):
+        state = synapse.step(synapse.init_state((1,), jnp.float64), jnp.asarray([weight]), dt)
+
+        def step(state, _):
+            value = sum(term.amplitude for term in synapse.output(state))[0]
+            return synapse.step(state, jnp.zeros(1), dt), value
+
+        _, values = jax.lax.scan(step, state, length=steps)
+    return np.asarray(values), dt
+
+
+@pytest.mark.parametrize("synapse", [Alpha(2.0), BiExponential(0.5, 5.0), BiExponential(1.0, 1.5)])
+def test_peaked_synapses_peak_at_the_weight(synapse):
+    values, dt = _impulse(synapse)
+    assert abs(values.max() - 3.0) < 3e-5  # sampled every 0.01 ms, so the peak falls between samples
+    if isinstance(synapse, Alpha):
+        assert abs(np.argmax(values) * dt - 2.0) <= dt
+
+
+def test_exponential_synapse_jumps_by_the_weight_and_decays():
+    values, dt = _impulse(Exponential(4.0))
+    np.testing.assert_allclose(values, 3.0 * np.exp(-np.arange(len(values)) * dt / 4.0), rtol=1e-12)
+
+
+def test_bi_exponential_needs_a_rise_faster_than_its_decay():
+    with pytest.raises(ValueError, match="Alpha"):
+        BiExponential(5.0, 5.0)
+
+
+@pytest.mark.parametrize(("tau_s", "tau_m"),
+                         [(2.0, 10.0), (10.0, 10.0), (10.0, 9.999), (5.0, 0.5), (0.05, 20.0)])
+@pytest.mark.parametrize("dt", [0.1, 1.0])
+def test_the_response_integral_is_exact_at_equal_and_distant_time_constants(tau_s, tau_m, dt):
+    def current(s):
+        return (1.7 - 0.6 * s) * math.exp(-s / tau_s)
+
+    with jax.enable_x64(new_val=True):
+        term = Term(jnp.asarray(1.7), jnp.asarray(-0.6), tau_s)
+        exact = float(response(term, tau_m, dt))
+        mean = float(term.mean(dt))
+    expected, _ = quad(lambda s: current(s) * math.exp(-(dt - s) / tau_m), 0, dt, epsabs=0, epsrel=1e-13)
+    np.testing.assert_allclose(exact, expected, rtol=1e-12)
+    np.testing.assert_allclose(mean, quad(current, 0, dt, epsabs=0, epsrel=1e-13)[0] / dt, rtol=1e-12)
+
+
+def test_mg_block_is_jahr_and_stevens():
+    block = MgBlock()
+    np.testing.assert_allclose(float(block(jnp.asarray(0.0))), 1 / (1 + 1 / 3.57), rtol=1e-6)
+    assert float(block(jnp.asarray(-80.0))) < 0.05 < 0.5 < float(block(jnp.asarray(-10.0)))
+    assert float(MgBlock(mg=0.0)(jnp.asarray(-80.0))) == 1.0
+
+
+def test_nmda_conductance_is_scaled_by_the_block_at_the_start_of_the_step():
+    neuron = LIF()
+    with jax.enable_x64(new_val=True):
+        state = neuron.init_state((1,), jnp.float64)
+        nmda, _ = neuron.step(state, SynapticInput(conductance={"nmda": jnp.asarray([4.0])}), 0.1)
+        g = 4.0 * float(MgBlock()(jnp.asarray(neuron.e_l)))
+        ampa, _ = neuron.step(state, SynapticInput(conductance={"ampa": jnp.asarray([g])}), 0.1)
+    np.testing.assert_allclose(nmda.v, ampa.v, rtol=1e-12)

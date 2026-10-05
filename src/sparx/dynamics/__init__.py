@@ -8,8 +8,28 @@ and plasticity rules. They are what `sparx.graph` builds circuits and
 connectomes from (design.md sections 4 and 5).
 """
 
-from sparx.dynamics.core import NeuronModel, Spikes, SynapticInput, crossing, exact_linear, integrate
-from sparx.dynamics.neurons import LIF, RECEPTORS, LIFState
+from sparx.dynamics.core import (
+    NeuronModel,
+    Spikes,
+    SynapticInput,
+    Term,
+    crossing,
+    exact_linear,
+    integrate,
+    response,
+)
+from sparx.dynamics.neurons import LIF, RECEPTORS, LIFState, MgBlock
+from sparx.dynamics.synapses import (
+    Alpha,
+    Arrivals,
+    BiExponential,
+    Delta,
+    Exponential,
+    PointNeuron,
+    Receptor,
+    SynapseModel,
+)
 
-__all__ = ["LIF", "RECEPTORS", "LIFState", "NeuronModel", "Spikes", "SynapticInput", "crossing",
-           "exact_linear", "integrate"]
+__all__ = ["LIF", "RECEPTORS", "Alpha", "Arrivals", "BiExponential", "Delta", "Exponential", "LIFState",
+           "MgBlock", "NeuronModel", "PointNeuron", "Receptor", "Spikes", "SynapseModel", "SynapticInput",
+           "Term", "crossing", "exact_linear", "integrate", "response"]
