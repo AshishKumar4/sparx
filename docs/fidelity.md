@@ -48,6 +48,13 @@ Reference versions: SpikingJelly at commit c6cb8e46 (2026-10-03), snnTorch 1.0.0
 | Male CNS v0.9, `Connectome.from_malecns` | Janelia's release tables | The reader, on synthetic tables (`test_malecns_reader_keeps_neurons_and_signs_them_by_transmitter`): 165,899 neurons (`Traced` and `Anchor`), 25.6M connections, 124M synapses from the v0.9 release | No published model exists to compare a simulation with. Shiu et al.'s `w_syn` was fit to FlyWire, whose synapse counts differ: with it, driving the two giant fibres at 200 Hz recruits 17,000 neurons and 860,000 spikes a second, far beyond the sparse activity of the FlyWire runs; the weight scale for this connectome is an open question, not a reproduction. |
 | Plastic and short-term projections | — | — | A plastic weight is read when a spike arrives; NEST reads it when the spike is sent, so a weight change while a spike is in flight (within the delay) is applied to it in sparx and not in NEST. Short-term release is computed when the spike is sent and travels with it, as in NEST. |
 
+## Learning rules
+
+| Rule | Reference | Checked | Departures and choices |
+| --- | --- | --- | --- |
+| e-prop (`sparx.learn.eprop`) | Bellec et al. 2020; their numerical verifications (`numerical_verification_eprop_*.py` in IGITUGraz/eligibility_propagation) | Their two identities, for LIF and ALIF cells, to 1e-9 relative (`tests/test_learn.py`): the online gradients equal BPTT's with the gradient stopped at the recurrent spikes (their `stop_z_gradients=True`), and the eligibility traces weighted by the true learning signal equal BPTT's gradient (their equation 1) | Their code is TensorFlow 1 and does not run here, so the identities, which they use to verify their own code, are the reference. The eligibility traces are derived for any elementwise cell by forward-mode derivatives of its step, not hand-coded per model; a leaky readout's learning signal is handled by filtering the traces with its leak, which keeps the rule online and exact. |
+| OTTT (`sparx.learn.ottt`) | Xiao et al. 2022; their `OnlineLIFNode` and `WrapedSNNOp` (pkuxmq/OTTT-SNN) | Every weight and bias gradient of a two-hidden-layer network over 12 steps, against their modules run in PyTorch, to 1e-10 relative (`tools/make_ottt_fixtures.py`) | None found. Their trace starts at the first spike undecayed, which the recursion from zero reproduces. |
+
 ## Encoders and losses
 
 | Function | Reference | Checked | Departures and choices |
