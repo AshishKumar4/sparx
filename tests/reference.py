@@ -63,18 +63,25 @@ def alif(xs, decay, adapt_decay, beta, threshold=1.0, reset="subtract"):
     return np.stack(spikes)
 
 
-def izhikevich(xs, a=0.02, b=0.2, c=-65.0, d=8.0, dt=0.5):
+def izhikevich(xs, a=0.02, b=0.2, c=-65.0, d=8.0):
+    """Izhikevich (2003)'s published MATLAB loop at 1 ms a step, transcribed.
+
+    His loop finds the neurons that fired (v >= 30) at the start of each step
+    and resets them before integrating; a spike is returned here at the step
+    whose integration crossed, one step before his loop records it.
+    """
     v = np.full(xs.shape[1:], c)
     u = b * v
-    spikes = []
+    crossed = []
     for x in xs:
-        v = v + dt * (0.04 * v * v + 5 * v + 140 - u + x)
-        u = u + dt * a * (b * v - u)
-        s = (v >= 30.0).astype(np.float64)
-        v = np.where(s > 0, c, v)
-        u = u + s * d
-        spikes.append(s)
-    return np.stack(spikes)
+        fired = v >= 30
+        v = np.where(fired, c, v)
+        u = np.where(fired, u + d, u)
+        v = v + 0.5 * (0.04 * v ** 2 + 5 * v + 140 - u + x)
+        v = v + 0.5 * (0.04 * v ** 2 + 5 * v + 140 - u + x)
+        u = u + a * (b * v - u)
+        crossed.append((v >= 30).astype(np.float64))
+    return np.stack(crossed)
 
 
 def recurrent_lif(xs, weight, decay, threshold=1.0, reset="subtract"):

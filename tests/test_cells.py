@@ -67,14 +67,34 @@ def test_alif_matches_the_reference_loop():
     assert spikes.sum() < lif_spikes.sum()
 
 
-def test_izhikevich_matches_the_reference_loop():
-    xs = np.full((2000, 2, 3), 10.0, np.float32) + currents(6, 2.0, (2000, 2, 3))
-    spikes, _ = run(IzhikevichCell(), jnp.asarray(xs))
-    expected = reference.izhikevich(xs.astype(np.float64))
-    # The quadratic membrane amplifies float32 rounding near threshold over
-    # thousands of steps, so the counts are compared rather than every step.
-    np.testing.assert_allclose(spikes.sum(0), expected.sum(0), atol=1)
-    assert expected.sum() > 20
+def test_izhikevich_matches_his_published_loop_spike_for_spike_in_float64():
+    # The quadratic membrane amplifies rounding chaotically over thousands of
+    # noisy steps, and compiled XLA rounds its fused arithmetic differently
+    # from NumPy in the last bit (22% of elements of one step, measured). The
+    # comparison therefore runs op by op in float64, where the same
+    # arithmetic gives the same bits, and isolates the integration scheme.
+    xs = np.full((800, 2, 2), 10.0) + currents(6, 2.0, (800, 2, 2)).astype(np.float64)
+    with jax.enable_x64(True), jax.disable_jit():
+        spikes, _ = run(IzhikevichCell(), jnp.asarray(xs))
+        spikes = np.asarray(spikes)
+    expected = reference.izhikevich(xs)
+    np.testing.assert_array_equal(spikes, expected)
+    assert expected.sum() > 50
+
+
+def test_izhikevich_regular_spiking_fires_tonically_at_the_published_rate():
+    # Izhikevich (2003), Fig. 2: a regular-spiking cell under a constant
+    # input of 10 adapts, then fires tonically. In his scheme the first
+    # interval is 27 ms and the rest stay within 47 to 62 ms (spike times
+    # fall on 1 ms steps), about 18 Hz.
+    with jax.enable_x64(True), jax.disable_jit():
+        spikes, _ = run(IzhikevichCell(), jnp.full((600, 1), 10.0, jnp.float64))
+        times = np.flatnonzero(np.asarray(spikes[:, 0]))
+    expected = np.flatnonzero(reference.izhikevich(np.full((600, 1), 10.0))[:, 0])
+    np.testing.assert_array_equal(times, expected)
+    intervals = np.diff(times)
+    assert len(times) >= 10
+    assert intervals[0] < 30 and np.all((intervals[1:] >= 45) & (intervals[1:] <= 65))
 
 
 def test_recurrent_lif_matches_the_reference_loop():

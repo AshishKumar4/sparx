@@ -221,14 +221,18 @@ class IzhikevichState(NamedTuple):
 
 @struct.dataclass
 class IzhikevichCell:
-    """Izhikevich's two-variable neuron, Euler-integrated with step `dt` (ms).
+    """Izhikevich's two-variable neuron, stepped as his published code steps it.
 
         v' = 0.04 v^2 + 5 v + 140 - u + x
         u' = a (b v - u)
         at v >= 30: v <- c, u <- u + d
 
-    Izhikevich, "Simple Model of Spiking Neurons" (IEEE TNN 2003). The
-    defaults are its regular-spiking cortical cell; inputs are in its units,
+    Izhikevich, "Simple Model of Spiking Neurons" (IEEE TNN 2003). Each step
+    of `dt` ms advances `v` by two Euler half-steps, then `u` by one step
+    with the new `v`, as the paper's MATLAB code does at `dt = 1`; the firing
+    patterns the model is known for are those of this scheme
+    (docs/fidelity.md). The peak is not clipped at 30 mV. The defaults are
+    the regular-spiking cortical cell; inputs are in the model's units,
     where a constant 10 drives tonic spiking. The membrane starts at `c`.
     """
 
@@ -236,7 +240,7 @@ class IzhikevichCell:
     b: jax.Array | float = 0.2
     c: jax.Array | float = -65.0
     d: jax.Array | float = 8.0
-    dt: float = struct.field(pytree_node=False, default=0.5)
+    dt: float = struct.field(pytree_node=False, default=1.0)
     surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> IzhikevichState:
@@ -245,10 +249,14 @@ class IzhikevichCell:
 
     def step(self, state: IzhikevichState, x: jax.Array) -> tuple[IzhikevichState, jax.Array]:
         v, u = state
-        v = v + self.dt * (0.04 * v * v + 5 * v + 140 - u + x)
+        for _ in range(2):
+            v = v + self.dt / 2 * (0.04 * v ** 2 + 5 * v + 140 - u + x)
         u = u + self.dt * self.a * (self.b * v - u)
         s = spike(v - 30.0, self.surrogate)
-        return IzhikevichState(v + s * (self.c - v), u + s * self.d), s.astype(x.dtype)
+        # The reset sets v to c exactly (v + (c - v) rounds), with the same
+        # gradient through the spike as v + s (c - v).
+        reset = jnp.where(s > 0, self.c, v) + (s - jax.lax.stop_gradient(s)) * (self.c - v)
+        return IzhikevichState(reset, u + s * self.d), s.astype(x.dtype)
 
 
 class RecurrentState[State](NamedTuple):

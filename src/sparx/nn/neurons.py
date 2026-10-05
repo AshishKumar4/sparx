@@ -233,7 +233,7 @@ class Izhikevich(Neuron):
     b: float = 0.2
     c: float = -65.0
     d: float = 8.0
-    dt: float = 0.5
+    dt: float = 1.0
     surrogate: Surrogate = ATan()
 
     def build(self, x: jax.Array) -> IzhikevichCell:
