@@ -300,15 +300,31 @@ class Izhikevich(Neuron):
 class Dynamics(Neuron):
     """Any neuron model of `sparx.dynamics` as a layer, its fields fixed.
 
-    `Dynamics(neuron=AdEx(), dt=0.1)` runs AdEx in steps of 0.1 ms on input
-    currents `[T, ...]` in pA. `drive` names what the input is to the
+    `Dynamics(AdEx(), dt=0.1)` runs AdEx in steps of 0.1 ms on input
+    currents `[T, ...]` in pA; the model defaults to the physical `LIF`
+    with its defaults. `drive` names what the input is to the
     model: a `"current"` held over each step, the physical models' input,
     or a `"jump"` of the membrane, the dimensionless family's. A layer that
     learns a model's constants builds the model from its parameters, as
     `LIF` does.
+
+    Training through a physical model needs a steeper surrogate than the
+    default. The surrogate is the model's own (`AdEx(surrogate=...)`) and
+    reads `v - threshold` in mV, so its slope is per mV. Backpropagation
+    also runs through the membrane equation, and AdEx's exponential
+    upswing multiplies the gradient at every step a neuron spends near its
+    peak. A heavy-tailed surrogate passes gradient from all of those steps.
+    For AdEx at 40 Hz over 2000 steps of 0.1 ms, behind a dense layer, the
+    gradient norm reaching that layer was 7.9e8 with the default `ATan()`,
+    3.4 with `FastSigmoid(25)` and 0.42 with `FastSigmoid(100)`; the
+    physical `LIF`, which has no upswing, gave 0.28 with `FastSigmoid(25)`.
+    A wider surrogate (one normalized by a voltage scale, `ATan(0.1)`)
+    made AdEx's gradient larger, so a steep `FastSigmoid` is the
+    recommended start. `tests/test_nn.py` reruns the AdEx case with
+    `ATan()` and `FastSigmoid(100)`.
     """
 
-    neuron: NeuronModel = dataclasses.field(kw_only=True)
+    neuron: NeuronModel = dynamics.LIF()
     drive: Literal["current", "jump"] = "current"
 
     def inputs(self, x: jax.Array) -> SynapticInput:

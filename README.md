@@ -92,7 +92,7 @@ The LIF family (`LIF`, `IF`, `LI`, `Synaptic`, `ALIF`) shares one discrete-time 
 | `Synaptic(tau, tau_synapse, ...)` | current-based LIF: a decaying synaptic current charges the membrane | `learn_tau` (both) |
 | `ALIF(tau, tau_adapt, beta, ...)` | adaptive threshold that rises by `beta` per spike (Bellec et al. 2020) | `learn_tau` (both) |
 | `Izhikevich(a, b, c, d, dt)` | Izhikevich's two-variable neuron (2003) on input currents, `dt` in ms | |
-| `Dynamics(neuron=model, dt=dt)` | any neuron model of `sparx.dynamics`, such as `AdEx`, on input currents | |
+| `Dynamics(model, dt=dt)` | any neuron model of `sparx.dynamics`, such as `AdEx`, on input currents | |
 | `Recurrent(neuron)` | feeds any neuron's spikes back to its input through a learned `[F, F]` matrix | the matrix |
 | `PSN()` | parallel spiking neuron: `H = W X + b` over all `T x T` step pairs (Fang et al. 2023) | `W`, `b` |
 | `MaskedPSN(k)` | the PSN restricted to the `k` most recent steps | `W`, `b` |
@@ -120,6 +120,8 @@ A spike is the Heaviside step of `v - threshold`. Its derivative is zero almost 
 | `StraightThrough()` | 1 | |
 
 Pass one to any neuron: `sparx.nn.LIF(surrogate=sparx.surrogate.FastSigmoid(100.0))`.
+
+A physical model (`sparx.nn.Dynamics(AdEx(), dt=0.1)`) takes its surrogate as a field of the model, `AdEx(surrogate=...)`, and the surrogate reads `v - threshold` in mV, so its slope is per mV. Backpropagation also runs through the membrane equation, and AdEx's exponential upswing multiplies the gradient at every step a neuron spends near its peak. Behind a dense layer, over 2000 steps of 0.1 ms at 40 Hz, the gradient norm reaching that layer was 7.9e8 with the default `ATan()` and 0.42 with `FastSigmoid(100)`; a wider surrogate made it larger. Train physical models with a steep `FastSigmoid` (the `Dynamics` docstring has the measurements).
 
 ## Models
 

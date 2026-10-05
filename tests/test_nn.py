@@ -9,6 +9,7 @@ import reference
 
 from sparx.dynamics import AdEx, Izhikevich as IzhikevichModel, LIFCell, SynapticInput, decay, run
 from sparx.nn import ALIF, IF, LI, LIF, RATES, STATE, Dynamics, Flatten, Izhikevich, Recurrent, Synaptic
+from sparx.surrogate import ATan, FastSigmoid
 
 T, B, D = 24, 4, 6
 
@@ -199,7 +200,7 @@ def test_a_physical_model_runs_as_a_layer_and_streams():
     # AdEx on currents in pA, steps of 0.1 ms: the layer is the model run
     # alone, and chunks carried through the state collection are one run.
     x = jnp.asarray(np.random.default_rng(11).normal(900.0, 300.0, (1000, 2, 3)), jnp.float32)
-    layer = Dynamics(neuron=AdEx(), dt=0.1)
+    layer = Dynamics(AdEx(), dt=0.1)
     out = layer.apply({}, x)
     expected = run(AdEx(), SynapticInput(current=x), dt=0.1)[0].fired
     np.testing.assert_array_equal(out, expected)
@@ -207,6 +208,29 @@ def test_a_physical_model_runs_as_a_layer_and_streams():
     head, carried = layer.apply({}, x[:350], mutable=[STATE])
     tail, _ = layer.apply(carried, x[350:], mutable=[STATE])
     np.testing.assert_array_equal(jnp.concatenate([head, tail]), out)
+
+
+def _adex_gradient(surrogate):
+    """The gradient norm reaching the dense layer before an AdEx layer, the `Dynamics` docstring's case."""
+    class Hybrid(nn.Module):
+        @nn.compact
+        def __call__(self, x):
+            current = nn.Dense(32, kernel_init=nn.initializers.normal(1.0),
+                               bias_init=nn.initializers.constant(1.0))(x) * 1000.0  # pA
+            spikes = Dynamics(AdEx(substep=None, surrogate=surrogate), dt=0.1)(current)
+            return LI(tau=200.0)(nn.Dense(5)(spikes))
+
+    x = (jax.random.uniform(jax.random.key(0), (2000, 4, 10)) < 0.1).astype(jnp.float32)
+    model = Hybrid()
+    variables = model.init(jax.random.key(0), x)
+    grads = jax.grad(lambda p: model.apply({"params": p}, x).mean())(variables["params"])
+    return float(jnp.linalg.norm(grads["Dense_0"]["kernel"]))
+
+
+def test_a_steep_surrogate_keeps_the_gradient_through_adex_bounded():
+    # Measured 7.9e8 with ATan(), 0.42 with FastSigmoid(100).
+    assert _adex_gradient(ATan()) > 1e6
+    assert _adex_gradient(FastSigmoid(100.0)) < 10
 
 
 def test_izhikevich_layer_is_the_dynamics_model_on_currents():
