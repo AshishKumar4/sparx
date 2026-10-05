@@ -18,8 +18,9 @@ backwards. The rules here carry what the gradient needs forward instead:
   presynaptic trace, as their `WrapedSNNOp` does.
 
 Both work with any elementwise model of `sparx.dynamics.ml`, stepped at
-`dt = 1`, and take the loss as a function of each step's output, summed
-over steps.
+`dt`, and take the loss as a function of each step's output, summed over
+steps. Time constants (`tau`) are in the unit of `dt`, so with the default
+`dt = 1` they count steps.
 """
 
 from __future__ import annotations
@@ -29,19 +30,20 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from jax.extend.core import Jaxpr, Var
 
-from sparx.dynamics import NeuronModel, SynapticInput
+from sparx.dynamics import LICell, NeuronModel, RecurrentCell, SynapticInput, decay, membrane_dtype
 
-__all__ = ["EPropParams", "OTTTLayer", "accumulate", "bptt_loss", "eligibility_traces", "eprop", "ottt",
-           "ottt_dense"]
+__all__ = ["EPropParams", "OTTTLayer", "accumulate", "bptt_loss", "eligibility_traces", "eprop",
+           "eprop_forward", "ottt", "ottt_dense"]
 
 Loss = Callable[[jax.Array, jax.Array], jax.Array]
 """`loss(output_t, target_t)`: one step's loss, a scalar (averaged over the batch as the caller likes)."""
 
 
-def _step[State](cell: NeuronModel[State], state: State, x: jax.Array) -> tuple[State, jax.Array]:
+def _step[State](cell: NeuronModel[State], state: State, x: jax.Array, dt: float) -> tuple[State, jax.Array]:
     """One step of `cell` on the jump `x`; the new state and the spikes."""
-    state, spikes = cell.step(state, SynapticInput(jump=x), 1.0)
+    state, spikes = cell.step(state, SynapticInput(jump=x), dt)
     return state, spikes.fired
 
 
@@ -67,7 +69,7 @@ def accumulate[P, C, X](step: Callable[[P, C, X], tuple[jax.Array, C]], params: 
 
 class EPropParams(NamedTuple):
     """A recurrent layer, `x_t = u_t @ w_in + z_{t-1} @ w_rec`, and its leaky readout,
-    `y_t = kappa y_{t-1} + z_t @ w_out + b_out`."""
+    `y_t = decay(tau, dt) y_{t-1} + z_t @ w_out + b_out`."""
 
     w_in: jax.Array
     w_rec: jax.Array
@@ -75,127 +77,268 @@ class EPropParams(NamedTuple):
     b_out: jax.Array
 
 
-def _run(cell: NeuronModel, params: EPropParams, kappa: float, inputs: jax.Array, cut_recurrence: bool):
-    """The recurrent layer and readout over time-major `inputs` `[T, B, in]`; outputs `[T, B, out]`."""
-    batch, size = inputs.shape[1], params.w_rec.shape[0]
+def _readout(tau: float) -> LICell:
+    """The leaky readout of time constant `tau`, a decay per unit of time that the step raises to `dt`."""
+    return LICell(decay(tau))
 
+
+def eprop_forward(cell: NeuronModel, params: EPropParams, inputs: jax.Array, *, tau: float, dt: float = 1.0,
+                  cut_recurrence: bool = False) -> tuple[jax.Array, jax.Array]:
+    """The network `eprop` trains, over time-major `inputs` `[T, B, in]`: a `RecurrentCell` of `cell`
+    and an `LICell` readout of time constant `tau`, both stepped at `dt`.
+
+    Returns the readout `[T, B, out]` and the recurrent layer's spikes
+    `[T, B, N]`. With `cut_recurrence` the gradient stops at the fed-back
+    spikes, which makes BPTT's gradient e-prop's.
+    """
+    layer, readout = RecurrentCell(cell, params.w_rec, cut_gradient=cut_recurrence), _readout(tau)
+
+    # One scan over both models, with each step's products inside it. Two
+    # `run`s, the input and readout products taken over all steps at once,
+    # made BPTT's gradient 30 ms where this takes 23 ms, at
+    # `benchmarks/bench_eprop.py`'s shapes on a 4-core CPU.
     def step(carry, u):
-        state, z, y = carry
-        recurrent = jax.lax.stop_gradient(z) if cut_recurrence else z
-        state, z = _step(cell, state, u @ params.w_in + recurrent @ params.w_rec)
-        y = kappa * y + z @ params.w_out + params.b_out
-        return (state, z, y), (y, z)
+        state, y = carry
+        state, spikes = layer.step(state, SynapticInput(jump=u @ params.w_in), dt)
+        y, out = readout.step(y, SynapticInput(jump=spikes.fired @ params.w_out + params.b_out), dt)
+        return (state, y), (out.fired, spikes.fired)
 
-    carry = (cell.init_state((batch, size), inputs.dtype), jnp.zeros((batch, size), inputs.dtype),
-             jnp.zeros((batch, params.w_out.shape[1]), inputs.dtype))
-    _, (ys, zs) = jax.lax.scan(step, carry, inputs)
-    return ys, zs
-
-
-def bptt_loss(cell: NeuronModel, params: EPropParams, kappa: float, inputs: jax.Array, targets: jax.Array,
-              loss: Loss, cut_recurrence: bool = False) -> jax.Array:
-    """The summed loss of the layer `eprop` trains; its gradient is BPTT's, or e-prop's with
-    `cut_recurrence` (the gradient stopped at the recurrent spikes)."""
-    ys, _ = _run(cell, params, kappa, inputs, cut_recurrence)
-    return jnp.sum(jax.vmap(loss)(ys, targets))
+    batch, size = inputs.shape[1], params.w_rec.shape[0]
+    carry = (layer.init_state((batch, size), inputs.dtype),
+             readout.init_state((batch, params.w_out.shape[1]), inputs.dtype))
+    return jax.lax.scan(step, carry, inputs)[1]
 
 
-def _jacobians(cell: NeuronModel, state, x):
-    """Per-neuron derivatives of one step: the state Jacobian `[B, N, d, d]`, the state's and the
-    spike's derivatives by the input `[B, N, d]`, `[B, N]`, and the spike's by the state `[B, N, d]`."""
-    leaves, tree = jax.tree.flatten(state)
+def bptt_loss(cell: NeuronModel, params: EPropParams, inputs: jax.Array, targets: jax.Array, loss: Loss, *,
+              tau: float, dt: float = 1.0, cut_recurrence: bool = False) -> jax.Array:
+    """The summed loss of `eprop_forward`'s readout; its gradient is BPTT's, or e-prop's with
+    `cut_recurrence`."""
+    outputs, _ = eprop_forward(cell, params, inputs, tau=tau, dt=dt, cut_recurrence=cut_recurrence)
+    return jnp.sum(jax.vmap(loss)(outputs, targets))
 
-    def f(leaves, x):
-        new, z = _step(cell, jax.tree.unflatten(tree, leaves), x)
+
+def _sources(jaxpr: Jaxpr) -> list[frozenset[int]]:
+    """The inputs each output of `jaxpr` depends on, by index.
+
+    The walk is conservative: an equation's outputs depend on all of its
+    inputs, even when it holds a nested jaxpr that would say otherwise, so
+    a dependence may be claimed that is not there, never missed.
+    """
+    sources: dict[Var, frozenset[int]] = {v: frozenset([i]) for i, v in enumerate(jaxpr.invars)}
+
+    def of(v: object) -> frozenset[int]:
+        return sources.get(v, frozenset()) if isinstance(v, Var) else frozenset()
+
+    for eqn in jaxpr.eqns:
+        merged = frozenset().union(*(of(v) for v in eqn.invars))
+        for out in eqn.outvars:
+            sources[out] = merged
+    return [of(v) for v in jaxpr.outvars]
+
+
+class _Structure(NamedTuple):
+    """Which state variables of a model need an eligibility vector per synapse, and which need less.
+
+    The model has `d` state variables; index `d` stands for the input `x`
+    among the columns and for the spike among the rows. `general` variables
+    keep an eligibility vector per synapse, `[B, N, P]`. A `filtered`
+    variable `k` follows `h_k <- decay_k h_k + gain_k x` with constants the
+    same for every neuron, so its eligibility vector is `gain_k` times the
+    presynaptic activity filtered by `decay_k`, Bellec et al.'s `z_bar`,
+    `[B, P]`. The rest carry no eligibility: no input reaches them through
+    a gradient (the refractory count). `uses[k]` lists the columns row `k`
+    of the step's Jacobian can be nonzero in.
+    """
+
+    general: tuple[int, ...]
+    filtered: tuple[int, ...]
+    decays: tuple[jax.Array, ...]
+    gains: tuple[jax.Array, ...]
+    uses: tuple[frozenset[int], ...]
+
+
+def _structure(cell: NeuronModel, dtype: jnp.dtype, dt: float) -> _Structure:
+    """`cell`'s `_Structure`, read from the jaxpr of its step's forward derivative on one neuron.
+
+    The derivative of the new state by the old state and the input is
+    linear in their tangents, so an output tangent that does not depend on
+    an input tangent has a zero coefficient there, for every state; one
+    that depends on no primal value has constant coefficients. A model
+    whose constants are per neuron shapes the one-neuron outputs like
+    them, which keeps it off the `filtered` path, whose filter is shared
+    by every neuron.
+    """
+    leaves, tree = jax.tree.flatten(cell.init_state((), dtype))
+    d = len(leaves)
+    x = jnp.zeros((), dtype)
+
+    def step(leaves: list[jax.Array], x: jax.Array) -> tuple[list[jax.Array], jax.Array]:
+        new, z = _step(cell, jax.tree.unflatten(tree, leaves), x, dt)
         return jax.tree.leaves(new), z
 
+    def tangents(*args: jax.Array) -> list[jax.Array]:
+        primal, tangent = list(args[:d + 1]), list(args[d + 1:])
+        new, z = jax.jvp(step, (primal[:d], primal[d]), (tangent[:d], tangent[d]))[1]
+        return [*new, z]
+
+    rows = _sources(jax.make_jaxpr(tangents)(*leaves, x, *leaves, x).jaxpr)
+    uses = tuple(frozenset(j - d - 1 for j in row if j > d) for row in rows)
+    primal_free = [not any(j <= d for j in row) for row in rows]
+
+    silent = {k for k in range(d) if d not in uses[k]}
+    while any(not uses[k] <= silent for k in silent):
+        silent = {k for k in silent if uses[k] <= silent}
+    shapes = [jnp.shape(leaf) for leaf in jax.eval_shape(tangents, *leaves, x, *leaves, x)]
+    filtered = tuple(k for k in range(d) if k not in silent and primal_free[k] and shapes[k] == ()
+                     and uses[k] - silent <= {k, d})
+    general = tuple(k for k in range(d) if k not in silent and k not in filtered)
+
+    def coefficient(k: int, j: int) -> jax.Array:
+        unit = [jnp.ones_like(t) if i == j else jnp.zeros_like(t) for i, t in enumerate([*leaves, x])]
+        return tangents(*leaves, x, *unit)[k]
+
+    return _Structure(general, filtered, tuple(coefficient(k, k) for k in filtered),
+                      tuple(coefficient(k, d) for k in filtered), uses)
+
+
+class _Eligibility(NamedTuple):
+    """The eligibility vectors of the general state variables `[B, N, P]` and the filtered presynaptic
+    activity of the filtered ones `[B, P]`."""
+
+    vectors: tuple[jax.Array, ...]
+    presynaptic: tuple[jax.Array, ...]
+
+
+def _trace_step[State](cell: NeuronModel[State], structure: _Structure, dt: float, params: EPropParams,
+                       state: State, u: jax.Array, z: jax.Array,
+                       eligibility: _Eligibility) -> tuple[State, jax.Array, jax.Array, _Eligibility]:
+    """One step of the recurrent layer and of its synapses' eligibility, on the input `u` `[B, in]` and the
+    previous step's spikes `z` `[B, N]`, the presynaptic activity `pre = [u, z]`.
+
+    The eligibility vector of synapse `p -> n` is `eps_t = J_t eps_{t-1} +
+    dh_t/dx_t pre_t`, and its trace `e_t = dz_t/dh_{t-1} eps_{t-1} +
+    dz_t/dx_t pre_t`, with `J_t` the neuron's state Jacobian. A model is
+    elementwise, so one forward derivative with a tangent of ones on one
+    state variable gives that column of every neuron's Jacobian; the
+    columns are evaluated together. Returns the new state, the spikes, the
+    traces `[B, N, P]` and the new eligibility.
+    """
+    pre = jnp.concatenate([u, z], -1)
+    x = u @ params.w_in + z @ params.w_rec
+    leaves, tree = jax.tree.flatten(state)
     d = len(leaves)
-    zeros = [jnp.zeros_like(leaf) for leaf in leaves]
-    columns, dz_dh = [], []
-    for k in range(d):
-        tangent = [jnp.ones_like(leaf) if i == k else zero for i, (leaf, zero) in enumerate(zip(leaves, zeros,
-                                                                                                strict=True))]
-        _, (dnew, dz) = jax.jvp(f, (leaves, x), (tangent, jnp.zeros_like(x)))
-        columns.append(jnp.stack(dnew, -1))
-        dz_dh.append(dz)
-    _, (dnew, dz_dx) = jax.jvp(f, (leaves, x), (zeros, jnp.ones_like(x)))
-    return jnp.stack(columns, -1), jnp.stack(dnew, -1), dz_dx, jnp.stack(dz_dh, -1)
+
+    def step(leaves: list[jax.Array], x: jax.Array) -> tuple[list[jax.Array], jax.Array]:
+        new, z = _step(cell, jax.tree.unflatten(tree, leaves), x, dt)
+        return jax.tree.leaves(new), z
+
+    (new, z), linear = jax.linearize(step, leaves, x)
+    columns = (*structure.general, *structure.filtered, d)
+    basis = [jnp.stack([jnp.full_like(leaf, i == j) for j in columns]) for i, leaf in enumerate([*leaves, x])]
+
+    def column(*tangent: jax.Array) -> list[jax.Array]:
+        new, z = linear(list(tangent[:d]), tangent[d])
+        return [*new, z]
+
+    derivative = jax.vmap(column)(*basis)
+    coefficient = {(k, j): derivative[k][c] for k in range(d + 1) for c, j in enumerate(columns)}
+
+    def row(k: int) -> jax.Array:
+        """The eligibility of state variable `k` after this step, or the trace for `k = d`."""
+        out = coefficient[k, d][..., None] * pre[:, None, :]
+        for j, vector in zip(structure.general, eligibility.vectors, strict=True):
+            if j in structure.uses[k]:
+                out = out + coefficient[k, j][..., None] * vector
+        filtered = zip(structure.filtered, structure.gains, eligibility.presynaptic, strict=True)
+        for j, gain, activity in filtered:
+            if j in structure.uses[k]:
+                out = out + (coefficient[k, j] * gain)[..., None] * activity[:, None, :]
+        return out
+
+    trace = row(d)
+    presynaptic = zip(structure.decays, eligibility.presynaptic, strict=True)
+    updated = _Eligibility(tuple(row(k) for k in structure.general),
+                           tuple(decay * activity + pre for decay, activity in presynaptic))
+    return jax.tree.unflatten(tree, new), z, trace, updated
 
 
-def eprop(cell: NeuronModel, params: EPropParams, kappa: float, inputs: jax.Array, targets: jax.Array,
-          loss: Loss, feedback: jax.Array | None = None) -> tuple[jax.Array, EPropParams]:
-    """e-prop's gradients for a recurrent layer of `cell` and its leaky readout, computed online.
+def _start(structure: _Structure, batch: int, size: int, fan_in: int, dtype: jnp.dtype) -> _Eligibility:
+    return _Eligibility(tuple(jnp.zeros((batch, size, fan_in), dtype) for _ in structure.general),
+                        tuple(jnp.zeros((batch, fan_in), dtype) for _ in structure.filtered))
+
+
+def eprop(cell: NeuronModel, params: EPropParams, inputs: jax.Array, targets: jax.Array, loss: Loss, *,
+          tau: float, dt: float = 1.0, feedback: jax.Array | None = None) -> tuple[jax.Array, EPropParams]:
+    """e-prop's gradients for `eprop_forward`'s network, computed online.
 
     Each synapse `i -> j` keeps an eligibility vector, the derivative of
     neuron `j`'s state by the weight through `j`'s own dynamics, advanced
     every step by the neuron's state Jacobian; its eligibility trace is the
-    spike's derivative through it. The readout's leak `kappa` filters the
-    traces, so the learning signal `dloss_t/dy_t @ feedback.T` of each step
-    weights them directly. `feedback` is `w_out` (symmetric e-prop) unless
-    given (random e-prop). The readout's own gradients are exact.
+    spike's derivative through it. The readout's leak filters the traces,
+    so the learning signal `dloss_t/dy_t @ feedback.T` of each step weights
+    them directly. `feedback` is `w_out` (symmetric e-prop) unless given
+    (random e-prop). The readout's own gradients are exact.
 
-    Memory is `B x N x (in + N) x d` for `d` state variables per neuron,
-    whatever the sequence length. Returns the summed loss and the gradients.
+    The vectors are derived for any elementwise model from the forward
+    derivative of its step. A state variable whose input enters with
+    constant coefficients shared by all neurons (the membrane of a model
+    with a detached reset) needs only the filtered presynaptic activity,
+    and one the gradient never reaches (a refractory count) needs nothing.
+    Memory is `B x N x P` for the filtered traces, plus as much for each
+    remaining state variable, `P = in + N`, whatever the sequence length.
+    Returns the summed loss and the gradients.
     """
     batch, size = inputs.shape[1], params.w_rec.shape[0]
     fan_in = inputs.shape[2] + size
     feedback = params.w_out if feedback is None else feedback
-    state = cell.init_state((batch, size), inputs.dtype)
-    d = len(jax.tree.leaves(state))
+    dtype = membrane_dtype(inputs.dtype)
+    structure = _structure(cell, dtype, dt)
+    readout = _readout(tau)
+    kappa = readout.decay ** dt
 
     def step(carry, xs):
-        state, z, y, epsilon, filtered, z_bar, leak, total, grad_w, grad_out, grad_b = carry
+        state, z, y, eligibility, filtered, z_bar, leak, total, grad_w, grad_out, grad_b = carry
         u, target = xs
-        pre = jnp.concatenate([u, z], -1)  # [B, in + N]
-        x = u @ params.w_in + z @ params.w_rec
-        jacobian, dh_dx, dz_dx, dz_dh = _jacobians(cell, state, x)
-        # e_t = dz_t/dh_{t-1} eps_{t-1} + dz_t/dx_t pre_t, per synapse [B, N, P]
-        trace = jnp.einsum("bnd,bnpd->bnp", dz_dh, epsilon) + dz_dx[:, :, None] * pre[:, None, :]
-        epsilon = (jnp.einsum("bnde,bnpe->bnpd", jacobian, epsilon)
-                   + dh_dx[:, :, None, :] * pre[:, None, :, None])
-        state, z = _step(cell, state, x)
-        y = kappa * y + z @ params.w_out + params.b_out
-        value, dy = jax.value_and_grad(loss)(y, target)
+        state, z, trace, eligibility = _trace_step(cell, structure, dt, params, state, u, z, eligibility)
+        y, out = readout.step(y, SynapticInput(jump=z @ params.w_out + params.b_out), dt)
+        value, dy = jax.value_and_grad(loss)(out.fired, target)
         filtered = kappa * filtered + trace
         z_bar = kappa * z_bar + z
         leak = kappa * leak + 1  # the bias accumulates through the readout's leak too
         signal = dy @ feedback.T  # [B, N]
-        grad_w = grad_w + jnp.einsum("bn,bnp->pn", signal, filtered)
-        return (state, z, y, epsilon, filtered, z_bar, leak, total + value, grad_w,
+        # A product and a sum over the batch: XLA on CPU runs the einsum
+        # "bn,bnp->pn" as a batched matrix product, three times slower here.
+        grad_w = grad_w + (signal[..., None] * filtered).sum(0)
+        return (state, z, y, eligibility, filtered, z_bar, leak, total + value, grad_w,
                 grad_out + z_bar.T @ dy, grad_b + leak * dy.sum(0)), None
 
-    dtype = inputs.dtype
-    carry = (state, jnp.zeros((batch, size), dtype), jnp.zeros((batch, params.w_out.shape[1]), dtype),
-             jnp.zeros((batch, size, fan_in, d), dtype), jnp.zeros((batch, size, fan_in), dtype),
-             jnp.zeros((batch, size), dtype), jnp.zeros((), dtype), jnp.zeros((), dtype),
-             jnp.zeros((fan_in, size), dtype),
-             jnp.zeros_like(params.w_out), jnp.zeros_like(params.b_out))
+    carry = (cell.init_state((batch, size), inputs.dtype), jnp.zeros((batch, size), inputs.dtype),
+             readout.init_state((batch, params.w_out.shape[1]), inputs.dtype),
+             _start(structure, batch, size, fan_in, dtype), jnp.zeros((batch, size, fan_in), dtype),
+             jnp.zeros((batch, size), inputs.dtype), jnp.zeros((), inputs.dtype), jnp.zeros((), inputs.dtype),
+             jnp.zeros((size, fan_in), dtype), jnp.zeros_like(params.w_out), jnp.zeros_like(params.b_out))
     final, _ = jax.lax.scan(step, carry, (inputs, targets))
     total, grad_w, grad_out, grad_b = final[7:]
     n_in = inputs.shape[2]
+    grad_w = grad_w.T.astype(params.w_in.dtype)
     return total, EPropParams(grad_w[:n_in], grad_w[n_in:], grad_out, grad_b)
 
 
-def eligibility_traces(cell: NeuronModel, params: EPropParams, inputs: jax.Array) -> jax.Array:
+def eligibility_traces(cell: NeuronModel, params: EPropParams, inputs: jax.Array, *,
+                       dt: float = 1.0) -> jax.Array:
     """Every step's eligibility traces `dz_t/dW` through each neuron's own state, `[T, B, N, in + N]`,
     for analysis; `eprop` uses them as they are made instead of storing them."""
     batch, size = inputs.shape[1], params.w_rec.shape[0]
-    state = cell.init_state((batch, size), inputs.dtype)
-    d = len(jax.tree.leaves(state))
-    fan_in = inputs.shape[2] + size
+    dtype = membrane_dtype(inputs.dtype)
+    structure = _structure(cell, dtype, dt)
 
     def step(carry, u):
-        state, z, epsilon = carry
-        pre = jnp.concatenate([u, z], -1)
-        x = u @ params.w_in + z @ params.w_rec
-        jacobian, dh_dx, dz_dx, dz_dh = _jacobians(cell, state, x)
-        trace = jnp.einsum("bnd,bnpd->bnp", dz_dh, epsilon) + dz_dx[:, :, None] * pre[:, None, :]
-        epsilon = (jnp.einsum("bnde,bnpe->bnpd", jacobian, epsilon)
-                   + dh_dx[:, :, None, :] * pre[:, None, :, None])
-        state, z = _step(cell, state, x)
-        return (state, z, epsilon), trace
+        state, z, eligibility = carry
+        state, z, trace, eligibility = _trace_step(cell, structure, dt, params, state, u, z, eligibility)
+        return (state, z, eligibility), trace
 
-    carry = (state, jnp.zeros((batch, size), inputs.dtype), jnp.zeros((batch, size, fan_in, d), inputs.dtype))
+    carry = (cell.init_state((batch, size), inputs.dtype), jnp.zeros((batch, size), inputs.dtype),
+             _start(structure, batch, size, inputs.shape[2] + size, dtype))
     return jax.lax.scan(step, carry, inputs)[1]
 
 
@@ -223,22 +366,25 @@ class OTTTLayer(NamedTuple):
     bias: jax.Array
 
 
-def ottt(cells: Sequence[NeuronModel], layers: Sequence[OTTTLayer], decay: float, inputs: jax.Array,
-         targets: jax.Array, loss: Loss) -> tuple[jax.Array, list[OTTTLayer]]:
+def ottt(cells: Sequence[NeuronModel], layers: Sequence[OTTTLayer], inputs: jax.Array, targets: jax.Array,
+         loss: Loss, *, tau: float, dt: float = 1.0) -> tuple[jax.Array, list[OTTTLayer]]:
     """OTTT's gradients for a feedforward stack, computed online.
 
     `layers[k]` feeds `cells[k]`, and one more layer reads the last cell's
     spikes out, so `len(layers) == len(cells) + 1`. The first layer sees the
     input as it is; every later one sees spikes, and learns from their
-    trace `a_t = decay a_{t-1} + s_t` (their `rate_tracking`, `decay` being
-    their `1 - 1/tau`). Membranes carry no gradient between steps, so each
-    step's loss differentiates through that step alone; give the cells
+    trace `a_t = decay(tau, dt) a_{t-1} + s_t` (their `rate_tracking`).
+    Their trace decays by `1 - dt / tau`, the forward Euler step of the
+    same leak; `tau = -dt / log(1 - dt / tau_theirs)` gives their decay.
+    Membranes carry no gradient between steps, so each step's loss
+    differentiates through that step alone; give the cells
     `detach_reset=True`, as their `OnlineLIFNode` has.
     Returns the summed loss and the gradients.
     """
     if len(layers) != len(cells) + 1:
         raise ValueError("ottt needs one more layer than cells: the readout")
     batch = inputs.shape[1]
+    kept = decay(tau, dt)
 
     def step(params, carry, xs):
         # A spike's trace includes the spike itself, as their `rate_tracking`
@@ -252,9 +398,9 @@ def ottt(cells: Sequence[NeuronModel], layers: Sequence[OTTTLayer], decay: float
                 x = h @ layer.weight + layer.bias
             else:
                 x = ottt_dense(h, new_traces[k - 1], layer.weight) + layer.bias
-            state, h = _step(cell, states[k], x)
+            state, h = _step(cell, states[k], x, dt)
             new_states.append(state)
-            new_traces.append(decay * traces[k] + jax.lax.stop_gradient(h))
+            new_traces.append(kept * traces[k] + jax.lax.stop_gradient(h))
         x = ottt_dense(h, new_traces[-1], params[-1].weight) + params[-1].bias
         return loss(x, target), (new_states, new_traces)
 

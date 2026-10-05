@@ -266,10 +266,30 @@ The builders are registered in `sparx.registry.networks`, so a network is a reco
 
 `sparx.learn` holds the rules design.md section 7 names, each checked against what defines it (`tests/test_learn.py`):
 
-- `eprop`: e-prop (Bellec et al. 2020) for a recurrent layer of any sparx cell and a leaky readout, computed online in memory independent of the sequence length. It equals backpropagation with the recurrent spikes' gradient cut, and its eligibility traces with the true learning signal equal backpropagation, the two identities their own code verifies.
+- `eprop`: e-prop (Bellec et al. 2020) for a recurrent layer of any elementwise sparx model and a leaky readout, `eprop_forward`'s network (a `RecurrentCell` and an `LICell`), computed online in memory independent of the sequence length. It equals backpropagation with the recurrent spikes' gradient cut, and its eligibility traces with the true learning signal equal backpropagation, the two identities their own code verifies. Time constants are `tau` in the unit of `dt`.
 - `ottt`: online training through time (Xiao et al. 2022), matching their PyTorch modules' gradients to 1e-10.
-- `events.spike_times`: exact spike times of LIF networks with current synapses in continuous time, differentiable: the exact gradient EventProp (Wunderlich and Pehle 2021) computes, checked against finite differences.
-- `convert`: ReLU networks, CNNs with batch norm, average and max pooling included, to integrate-and-fire networks by robust threshold balancing (Rueckauer et al. 2017); against their toolbox (snntoolbox), the same weights, the same first-layer spikes and the same predictions.
+- `spike_times` with `EventLIF`: exact spike times of LIF networks with current synapses in continuous time (ms), differentiable: the exact gradient EventProp (Wunderlich and Pehle 2021) computes, checked against finite differences.
+- `convert`: a ReLU network written as a flax `nn.Sequential` (dense and convolutional layers, batch norm, average and max pooling, `sparx.nn.Flatten`) to a `sparx.nn` stack of the same layers with `IF` neurons and a gated `SpikingMaxPool`, balancing thresholds at a percentile of the activations (Rueckauer et al. 2017); against their toolbox (snntoolbox), the same weights, the same first-layer spikes and the same predictions. The result runs, records rates and trains like any `sparx.nn` stack, and with `reset="zero"` a dense one exports to NIR.
+
+```python
+from functools import partial
+
+import flax.linen as nn
+import jax
+
+from sparx.learn import convert, fold_batch_norm, normalize, run_converted
+from sparx.nn import Flatten
+
+# A ReLU network as a flax nn.Sequential; in practice, a trained one.
+ann = nn.Sequential([nn.Conv(8, (3, 3)), nn.BatchNorm(use_running_average=True), nn.relu,
+                     partial(nn.max_pool, window_shape=(2, 2), strides=(2, 2)), Flatten(), nn.Dense(10)])
+images = jax.random.uniform(jax.random.key(0), (16, 16, 16, 1))  # [B, H, W, C], values in [0, 1]
+variables = ann.init(jax.random.key(1), images)
+ann, variables = fold_batch_norm(ann, variables)
+variables = normalize(ann, variables, images)  # threshold balancing on calibration images
+snn, snn_variables = convert(ann, variables)   # Conv, IF, SpikingMaxPool, Flatten, Dense, IF
+rates = run_converted(snn, snn_variables, images, steps=100)  # output firing rates, [16, 10]
+```
 - `sparx.dew.ActivityFit` fits a network's spikes to recorded ones by van Rossum distance (`sparx.losses.van_rossum`, exact on the grid) or smoothed rates.
 
 ## Connectomes, serving and exchange
@@ -277,7 +297,7 @@ The builders are registered in `sparx.registry.networks`, so a network is a reco
 - `sparx.graph.connectome` reads FlyWire (Shiu et al.'s tables) and the male CNS release into a `Connectome` and builds Shiu et al.'s (2024) whole-brain model; on FlyWire v630 it reproduces their published runs (rate correlation 0.999, MN9 at 67.1 Hz against their 67.0 +- 6.6) at about 30 s per simulated second on 4 CPU cores. On the male CNS, whose neurons receive about 1.7 times FlyWire's synapses, `matched_w_syn` rescales their weight (0.275 to 0.163 mV): sugar neurons then recruit about 670 neurons and drive MN9 at 81 Hz, against FlyWire's 400 and 67 Hz.
 - `simulate(trials=..., mesh=dew.MeshSpec(...))` spreads trials, or one network's neurons, over devices, with one device's results. The mesh is built as dew's `Trainer` builds it, and `sparx.graph.RULES` places the logical axes `trials` (on the data axis) and `neurons` (on fsdp, or on data when there is no trial axis): `MeshSpec()` partitions one network's neurons over every device, and `MeshSpec(fsdp=2)` runs trials over the data axis with each trial's neurons split in two.
 - `sparx.serve.StreamServer` serves streaming models to many sessions at once, each with its own neuron state in a slot of one batch; a session's outputs equal a direct call over its stream.
-- `sparx.nir` exchanges networks through NIR: dense and 2-d convolutional layers, `Flatten`, hard-reset `LIF` and `Recurrent(LIF)`. Dense, convolutional and recurrent networks exported by snnTorch run in sparx spike for spike and export back with the same parameters.
+- `sparx.nir` exchanges networks through NIR: dense and 2-d convolutional layers, `Flatten`, hard-reset `LIF` and `IF`, and `Recurrent(LIF)`. Dense, convolutional and recurrent networks exported by snnTorch run in sparx spike for spike and export back with the same parameters.
 
 ## Results
 
@@ -290,10 +310,10 @@ All runs below are the example scripts as committed, on a 4-core x86 CPU with JA
 | SHD | `python examples/train_shd.py --steps 3000 --recurrent --surrogate superspike` | 256 recurrent ALIF | 45.23%, still rising at the last evaluation | 8 min |
 | SHD, channels pooled to 140 | `python examples/train_shd.py --steps 3000 --channels 140 --hidden 128` | 140-128 ALIF | 64.53% | 1 min 42 s |
 | SHD, channels pooled to 140 | `... --channels 140 --hidden 128 --delays 15` | the same, with a learned delay of 0 to 15 steps per input synapse | 74.56%, with every delay rounded to a whole step | 4 min 19 s |
-| SHD, channels pooled to 140 | `python examples/train_shd_eprop.py --rule eprop --epochs 5` | 140-128 recurrent ALIF (refractory 2 steps), leaky readout, trained online by e-prop | 53.14% (55.87% at epoch 3) | 39 min |
-| SHD, channels pooled to 140 | `... --rule bptt --epochs 5` | the same network by BPTT | 43.95% (51.86% at epoch 3) | 27 s |
+| SHD, channels pooled to 140 | `python examples/train_shd_eprop.py --rule eprop --epochs 5` | 140-128 recurrent ALIF (refractory 2 steps), leaky readout, trained online by e-prop | 53.36% (56.93% at epoch 3) | 3 min 30 s |
+| SHD, channels pooled to 140 | `... --rule bptt --epochs 5` | the same network by BPTT | 46.38% (53.80% at epoch 3) | 30 s |
 
-The last two rows of the first five differ only in the delays, which add 10 points. The e-prop rows train the same network with the same optimizer: after five epochs e-prop scores 53% and BPTT 44%, and both move by several points from one epoch to the next (neither is tuned). e-prop's memory does not grow with the recording, but on a CPU it is about 90 times slower here: it advances an eligibility vector for every synapse, `B x N x (in + N) x 3` numbers, through each neuron's Jacobian every step, where BPTT does one backward pass. For scale, Cramer et al. (2020) report about 71% for recurrent and under 50% for feedforward LIF networks on SHD, and Hammouamri et al. (ICLR 2024) reach 95% with learned synaptic delays.
+The last two rows of the first five differ only in the delays, which add 10 points. The e-prop rows train the same network with the same optimizer: after five epochs e-prop scores 53% and BPTT 46%, and both move by several points from one epoch to the next (neither is tuned). e-prop's memory does not grow with the recording, but on a CPU it is about 7 times slower here: it advances an eligibility trace for every synapse every step, `B x N x (in + N)` numbers for the readout's filter and as many for the adaptive threshold, where BPTT does one backward pass ([performance](docs/performance.md#e-prop)). For scale, Cramer et al. (2020) report about 71% for recurrent and under 50% for feedforward LIF networks on SHD, and Hammouamri et al. (ICLR 2024) reach 95% with learned synaptic delays.
 
 The recurrent SHD run needs the steep SuperSpike surrogate. With ATan, backpropagation through the recurrence exploded once training grew the recurrent matrix's spectral radius from 1 to 5: the gradient norm passed 1e8 within 300 steps and test accuracy fell below 15%. `FastSigmoid(100)` kept the gradient norm below 10. The `Recurrent` docstring records this.
 

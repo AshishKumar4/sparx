@@ -21,6 +21,8 @@ else refused:
 - `flax.linen.Conv` with a 2-d kernel, as `Conv2d`;
 - `sparx.nn.Flatten` over each example's whole shape, as `Flatten`;
 - `sparx.nn.LIF` with `reset="zero"` (NIR's reset) and one threshold, as `LIF`;
+- `sparx.nn.IF` with `reset="zero"`, as `IF`, whose `r = 1 / dt` makes a
+  step add its input to the membrane, under either discretization;
 - `sparx.nn.Recurrent(LIF(...))` on a flat input, as a `LIF` node with a
   `Linear` edge from its output back to its input.
 
@@ -72,7 +74,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from sparx.dynamics import decay
-from sparx.nn import LIF, Flatten, Recurrent
+from sparx.nn import IF, LIF, Flatten, Recurrent
 
 if TYPE_CHECKING:
     import nir
@@ -145,6 +147,15 @@ def _export_lif(layer: nn.Module, shape: tuple[int, ...], dt: float,
     ones = np.ones(_to_nir_shape(shape))
     return nir.LIF(tau=tau * ones, r=r * ones, v_leak=0 * ones,
                    v_threshold=layer.threshold * ones, v_reset=0 * ones)
+
+
+def _export_if(layer: IF, shape: tuple[int, ...], dt: float) -> nir.IF:
+    import nir
+
+    if layer.reset != "zero":
+        raise NotImplementedError("NIR's IF resets to v_reset: export IF(reset='zero')")
+    ones = np.ones(_to_nir_shape(shape))
+    return nir.IF(r=ones / dt, v_threshold=layer.threshold * ones, v_reset=0 * ones)
 
 
 def _export_dense(params: LayerParams, shape: tuple[int, ...]) -> nir.Affine:
@@ -222,6 +233,8 @@ def _export_layer(layer: nn.Module, params: LayerParams, name: str, shape: tuple
         node = _export_flatten(layer, shape)
     elif isinstance(layer, LIF):
         node = _export_lif(layer, shape, dt, discretization)
+    elif isinstance(layer, IF):
+        node = _export_if(layer, shape, dt)
     else:
         raise NotImplementedError(f"cannot export {type(layer).__name__} to NIR")
     return {name: node}, [], name
@@ -381,6 +394,28 @@ def _per_channel(values: np.ndarray, what: str) -> np.ndarray:
     return rows[0]
 
 
+def _fold_input_scale(previous: dict[str, np.ndarray] | None, scales: np.ndarray, bias: np.ndarray,
+                      kind: str) -> None:
+    """Fold a neuron node's input scale, and a constant input `bias`, into the weight layer before it."""
+    if previous is not None and "kernel" in previous:
+        # NIR's r scales the input current, which a constant feedback bias joins.
+        kernel = previous["kernel"]
+        previous["kernel"] = (kernel * scales).astype(kernel.dtype)
+        previous["bias"] = ((previous["bias"] + bias) * scales).astype(kernel.dtype)
+    elif not np.allclose(scales, 1) or np.any(bias != 0):
+        raise NotImplementedError(f"a {kind} node must follow an Affine, Linear or Conv2d node to import")
+
+
+def _import_if(node: nir.IF, previous: dict[str, np.ndarray] | None, dt: float) -> IF:
+    """The layer of an `IF` node, with `r dt` folded into `previous`."""
+    if not np.allclose(0.0 if node.v_reset is None else node.v_reset, 0):
+        raise NotImplementedError("only IF nodes with v_reset = 0 import")
+    if np.unique(node.v_threshold).size != 1:
+        raise NotImplementedError("an IF node imports with one threshold")
+    _fold_input_scale(previous, _per_channel(np.asarray(node.r), "r") * dt, np.zeros(()), "IF")
+    return IF(threshold=float(np.ravel(node.v_threshold)[0]), reset="zero")
+
+
 def _import_lif(node: nir.LIF, w_rec: nir.NIRNode | None, previous: dict[str, np.ndarray] | None,
                 dt: float, discretization: Discretization) -> tuple[nn.Module, dict[str, np.ndarray]]:
     """The layer of a `LIF` node, its feedback through `w_rec` if any, with `r` folded into `previous`."""
@@ -395,13 +430,7 @@ def _import_lif(node: nir.LIF, w_rec: nir.NIRNode | None, previous: dict[str, np
     kept, scale = _discrete(float(tau.ravel()[0]), 1.0, dt, discretization)
     scales = _per_channel(np.asarray(node.r), "r") * scale
     bias = np.asarray(w_rec.bias) if isinstance(w_rec, nir.Affine) else np.zeros(())
-    if previous is not None and "kernel" in previous:
-        # NIR's r scales the input current, which a constant feedback bias joins.
-        kernel = previous["kernel"]
-        previous["kernel"] = (kernel * scales).astype(kernel.dtype)
-        previous["bias"] = ((previous["bias"] + bias) * scales).astype(kernel.dtype)
-    elif not np.allclose(scales, 1) or np.any(bias != 0):
-        raise NotImplementedError("a LIF node must follow an Affine, Linear or Conv2d node to import")
+    _fold_input_scale(previous, scales, bias, "LIF")
     lif = LIF(tau=-1 / math.log(kept), threshold=float(np.ravel(node.v_threshold)[0]), reset="zero")
     if w_rec is None:
         return lif, {}
@@ -431,6 +460,8 @@ def from_nir(graph: nir.NIRGraph, *, dt: float, discretization: Discretization =
             layer, layer_params = _import_flatten(node), {}
         elif isinstance(node, nir.LIF):
             layer, layer_params = _import_lif(node, w_rec, params.get(f"layers_{k - 1}"), dt, discretization)
+        elif isinstance(node, nir.IF):
+            layer, layer_params = _import_if(node, params.get(f"layers_{k - 1}"), dt), {}
         else:
             raise NotImplementedError(f"cannot import NIR node {type(node).__name__}")
         layers.append(layer)

@@ -25,9 +25,14 @@ import numpy as np
 import optax
 
 from sparx.datasets import shd
-from sparx.dynamics import ALIFCell, SynapticInput, decay
-from sparx.learn import EPropParams, bptt_loss, eprop
+from sparx.dynamics import ALIFCell, decay
+from sparx.learn import EPropParams, bptt_loss, eprop, eprop_forward
 from sparx.surrogate import Triangle
+
+DT = 14.0
+"""One step of the binned recordings, in ms."""
+TAU_READOUT = 20.0
+"""The readout's time constant, in ms."""
 
 
 def pooled(split, channels):
@@ -36,25 +41,13 @@ def pooled(split, channels):
     return spikes.astype(np.float32), data["label"]
 
 
-def accuracy(cell, kappa, params, test):
+def accuracy(cell, params, test):
     """The share of `test` recordings whose readout, averaged over time, peaks at their class."""
 
     @jax.jit
     def predict(spikes):
-        inputs = jnp.swapaxes(spikes, 0, 1)
-
-        def step(carry, u):
-            cell_state, z, y = carry
-            jump = SynapticInput(jump=u @ params.w_in + z @ params.w_rec)
-            cell_state, spikes_t = cell.step(cell_state, jump, 1.0)
-            z = spikes_t.fired
-            y = kappa * y + z @ params.w_out + params.b_out
-            return (cell_state, z, y), y
-
-        batch, size = spikes.shape[0], params.w_rec.shape[0]
-        carry = (cell.init_state((batch, size), spikes.dtype), jnp.zeros((batch, size)),
-                 jnp.zeros((batch, 20)))
-        return jnp.argmax(jax.lax.scan(step, carry, inputs)[1].mean(0), -1)
+        outputs, _ = eprop_forward(cell, params, jnp.swapaxes(spikes, 0, 1), tau=TAU_READOUT, dt=DT)
+        return jnp.argmax(outputs.mean(0), -1)
 
     spikes, labels = test
     hits = sum(int((predict(jnp.asarray(spikes[i:i + 256])) == labels[i:i + 256]).sum())
@@ -74,12 +67,11 @@ def main():
     args = parser.parse_args()
 
     train, test = pooled("train", args.channels), pooled("test", args.channels)
-    # Steps of 14 ms, each one unit of the model's time, so a decay is over
-    # 14 ms: membrane 20 ms, adaptation 200 ms and readout 20 ms, as
-    # Bellec et al. take them for speech (TIMIT).
-    cell = ALIFCell(decay=decay(20.0, dt=14.0), adapt_decay=decay(200.0, dt=14.0), beta=0.2,
-                    detach_reset=True, surrogate=Triangle(scale=0.3), refractory=2)
-    kappa = decay(20.0, dt=14.0)
+    # Time in ms, in steps of 14 ms: membrane 20 ms, adaptation 200 ms and
+    # readout 20 ms, as Bellec et al. take them for speech (TIMIT), and two
+    # steps of refractoriness.
+    cell = ALIFCell(decay=decay(20.0), adapt_decay=decay(200.0), beta=0.2, detach_reset=True,
+                    surrogate=Triangle(scale=0.3), refractory=2 * DT)
     rng = np.random.default_rng(args.seed)
     n, h = args.channels, args.hidden
     w_rec = rng.normal(0, 1 / np.sqrt(h), (h, h))
@@ -101,8 +93,9 @@ def main():
         inputs = jnp.swapaxes(spikes, 0, 1)  # [T, B, channels]
         targets = jnp.broadcast_to(labels, (inputs.shape[0], *labels.shape))
         if args.rule == "bptt":
-            return jax.value_and_grad(lambda p: bptt_loss(cell, p, kappa, inputs, targets, loss))(params)
-        return eprop(cell, params, kappa, inputs, targets, loss, feedback=feedback)
+            return jax.value_and_grad(
+                lambda p: bptt_loss(cell, p, inputs, targets, loss, tau=TAU_READOUT, dt=DT))(params)
+        return eprop(cell, params, inputs, targets, loss, tau=TAU_READOUT, dt=DT, feedback=feedback)
 
     optimizer = optax.adam(args.learning_rate)
     state = optimizer.init(params)
@@ -122,7 +115,7 @@ def main():
             value, grads = gradients(params, jnp.asarray(train[0][index]), jnp.asarray(train[1][index]))
             params, state = update(params, state, grads)
             total += float(value)
-        score = accuracy(cell, kappa, params, test)
+        score = accuracy(cell, params, test)
         print(f"epoch {epoch + 1}: train loss {total / (len(order) // args.batch):.4f}, "
               f"test accuracy {score:.2%}, {time.time() - start:.0f} s", flush=True)
 

@@ -79,3 +79,12 @@ def test_the_circuit_example_sustains_irregular_activity():
     # over 400 ms it is 1.2 (tests/test_graph.py).
     rate, cv = (scope["rates_hz"](scope["spikes"], 0.1).mean(), scope["cv_isi"](scope["spikes"]).mean())
     assert 12 < rate < 22 and 0.6 < cv < 1.0, (rate, cv)
+
+
+def test_the_conversion_example_builds_a_spiking_stack():
+    scope = {}
+    exec(_block("from functools import partial"), scope)
+    assert [type(layer).__name__ for layer in scope["snn"].layers] == [
+        "Conv", "IF", "SpikingMaxPool", "Flatten", "Dense", "IF"]
+    rates = np.asarray(scope["rates"])
+    assert rates.shape == (16, 10) and rates.min() >= 0 and rates.max() <= 1

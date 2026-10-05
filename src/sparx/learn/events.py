@@ -5,9 +5,18 @@
 Neurons are leaky integrate-and-fire with exponential current synapses, in
 continuous time:
 
-    tau_mem dV/dt = -V + I,    tau_syn dI/dt = -I,    an input spike adds its weight to I,
+    tau_m dV/dt = -V + I,    tau_syn dI/dt = -I,    an input spike adds its weight to I,
 
-and a neuron fires when `V` reaches the threshold, after which `V` is 0.
+and a neuron fires when `V` reaches `v_th`, after which `V` is 0. Times
+are in ms, as in `sparx.dynamics`, and so are spike times. `V` is the
+membrane voltage in mV above rest, and `I` the synaptic current in pA
+through a membrane resistance of 1 GOhm, so a current of 1 pA held would
+settle the voltage at 1 mV. A weight is the jump of the current, in pA.
+`sparx.dynamics.LIF` with `c_m = tau_m` (a leak conductance of 1 nS),
+`e_l = v_reset = 0` and no refractory period, driven by an
+`Exponential(tau_syn)` synapse, is this neuron (`tests/test_learn.py`
+checks it on a 1 us grid).
+
 Between two input spikes the membrane is a sum of two exponentials, which
 has at most one maximum, so its first threshold crossing lies on a rising,
 monotone branch: bisection finds it to the precision of the dtype. One
@@ -34,26 +43,32 @@ __all__ = ["EventLIF", "first_spike_cross_entropy", "spike_times"]
 
 @dataclass(frozen=True)
 class EventLIF:
-    """Time constants in ms and the threshold; `crossings` bounds the spikes one neuron fires between two
-    consecutive input spikes, `iterations` the bisection steps that find each."""
+    """The membrane and synaptic time constants `tau_m` and `tau_syn` (ms), and the threshold `v_th` (mV
+    above rest).
 
-    tau_mem: float = 20.0
+    `crossings` bounds the spikes one neuron fires between two consecutive
+    input spikes, `iterations` the bisection steps that find each. The
+    closed form of the membrane divides by `tau_syn - tau_m`, so the two
+    must differ.
+    """
+
+    tau_m: float = 20.0
     tau_syn: float = 5.0
-    threshold: float = 1.0
+    v_th: float = 1.0
     crossings: int = 2
     iterations: int = 60
 
     def __post_init__(self):
-        if self.tau_mem == self.tau_syn:
-            raise ValueError("EventLIF needs tau_mem != tau_syn")
+        if self.tau_m == self.tau_syn:
+            raise ValueError("EventLIF needs tau_m != tau_syn")
 
 
 def _trajectory(neuron: EventLIF, v0, i0, delta):
     """`V` and `dV/dt` a time `delta` after a state `(v0, i0)`, with no input in between."""
-    c = i0 * neuron.tau_syn / (neuron.tau_syn - neuron.tau_mem)
+    c = i0 * neuron.tau_syn / (neuron.tau_syn - neuron.tau_m)
     a = v0 - c
-    em, es = jnp.exp(-delta / neuron.tau_mem), jnp.exp(-delta / neuron.tau_syn)
-    return a * em + c * es, -a * em / neuron.tau_mem - c * es / neuron.tau_syn
+    em, es = jnp.exp(-delta / neuron.tau_m), jnp.exp(-delta / neuron.tau_syn)
+    return a * em + c * es, -a * em / neuron.tau_m - c * es / neuron.tau_syn
 
 
 def _crossing(neuron: EventLIF, v0, i0, length):
@@ -64,21 +79,21 @@ def _crossing(neuron: EventLIF, v0, i0, length):
     so a crossing, if any, lies in `[0, min(peak, length)]` and the
     threshold is reached there at the bound or not at all.
     """
-    c = i0 * neuron.tau_syn / (neuron.tau_syn - neuron.tau_mem)
+    c = i0 * neuron.tau_syn / (neuron.tau_syn - neuron.tau_m)
     a = v0 - c
-    ratio = -(c * neuron.tau_mem) / jnp.where(a == 0, 1e-30, a * neuron.tau_syn)
-    rate = 1 / neuron.tau_syn - 1 / neuron.tau_mem
+    ratio = -(c * neuron.tau_m) / jnp.where(a == 0, 1e-30, a * neuron.tau_syn)
+    rate = 1 / neuron.tau_syn - 1 / neuron.tau_m
     peak = jnp.where(ratio > 0, jnp.log(jnp.where(ratio > 0, ratio, 1.0)) / rate, -1.0)
     upper = jnp.where((peak > 0) & (peak < length), peak, length)
-    upper = jnp.where(jnp.isfinite(upper), upper, 10 * neuron.tau_mem + 10 * neuron.tau_syn)
-    reaches = _trajectory(neuron, v0, i0, upper)[0] >= neuron.threshold
+    upper = jnp.where(jnp.isfinite(upper), upper, 10 * neuron.tau_m + 10 * neuron.tau_syn)
+    reaches = _trajectory(neuron, v0, i0, upper)[0] >= neuron.v_th
 
     stop = jax.lax.stop_gradient
 
     def bisect(_, bounds):
         low, high = bounds
         middle = (low + high) / 2
-        above = _trajectory(neuron, stop(v0), stop(i0), middle)[0] >= neuron.threshold
+        above = _trajectory(neuron, stop(v0), stop(i0), middle)[0] >= neuron.v_th
         return jnp.where(above, low, middle), jnp.where(above, middle, high)
 
     _, root = jax.lax.fori_loop(0, neuron.iterations, bisect, (jnp.zeros_like(upper), stop(upper)))
@@ -86,7 +101,7 @@ def _crossing(neuron: EventLIF, v0, i0, length):
     # One Newton step with the root held fixed: its value is the root, its
     # derivative the implicit function theorem's.
     value, slope = _trajectory(neuron, v0, i0, root)
-    time = root - (value - neuron.threshold) / stop(jnp.where(slope > 0, slope, 1.0))
+    time = root - (value - neuron.v_th) / stop(jnp.where(slope > 0, slope, 1.0))
     return jnp.where(reaches, time, jnp.inf)
 
 
@@ -95,7 +110,7 @@ def spike_times(inputs: jax.Array, weights: jax.Array, neuron: EventLIF, horizon
     """The output spike times of a layer of `neuron`s driven by input spike times.
 
     `inputs` `[B, M, K]` holds each input's spike times (ms, `inf` where
-    absent), `weights` `[M, N]`. Returns the spike times `[B, N, capacity]`
+    absent), `weights` `[M, N]` (pA). Returns the spike times `[B, N, capacity]`
     up to `horizon` ms, `inf` where absent, and the count of spikes beyond
     capacity `[B]`. Differentiable in the weights and the input times.
     """

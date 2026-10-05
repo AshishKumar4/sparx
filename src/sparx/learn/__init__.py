@@ -1,17 +1,7 @@
 """Learning rules beyond surrogate-gradient backpropagation through time (design.md section 7)."""
 
-from sparx.learn.convert import (
-    AvgPool,
-    ConvLayer,
-    DenseLayer,
-    Flatten,
-    Layer,
-    MaxPool,
-    fold_batch_norm,
-    normalize,
-    relu_forward,
-    run_converted,
-)
+from sparx.learn.convert import SpikingMaxPool, convert, fold_batch_norm, normalize, run_converted
+from sparx.learn.events import EventLIF, first_spike_cross_entropy, spike_times
 from sparx.learn.online import (
     EPropParams,
     OTTTLayer,
@@ -19,27 +9,27 @@ from sparx.learn.online import (
     bptt_loss,
     eligibility_traces,
     eprop,
+    eprop_forward,
     ottt,
     ottt_dense,
 )
 
 __all__ = [
-    "AvgPool",
-    "ConvLayer",
-    "DenseLayer",
     "EPropParams",
-    "Flatten",
-    "Layer",
-    "MaxPool",
+    "EventLIF",
     "OTTTLayer",
+    "SpikingMaxPool",
     "accumulate",
     "bptt_loss",
+    "convert",
     "eligibility_traces",
     "eprop",
+    "eprop_forward",
+    "first_spike_cross_entropy",
     "fold_batch_norm",
     "normalize",
     "ottt",
     "ottt_dense",
-    "relu_forward",
     "run_converted",
+    "spike_times",
 ]

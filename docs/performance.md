@@ -57,6 +57,27 @@ Steady-state steps per second as dew's display or the script reports them, on th
 The recurrent run differs in two ways, the `[64, 256] x [256, 256]` feedback product inside the time loop and the surrogate, and the cost of each has not been separated.
 
 
+## e-prop
+
+`python benchmarks/bench_eprop.py` times one batch of `examples/train_shd_eprop.py`'s network (T=100, B=64, 140 inputs, 128 recurrent neurons, 20 readout units) and reports the scratch memory of XLA's compiled program, where the eligibility traces live. The CPU was shared with other jobs (load average 5 to 8 on its 4 cores), so the times carry about 30% of noise.
+
+| Gradient of one batch | Time | Scratch memory |
+| --- | --- | --- |
+| BPTT, ALIF | 24.4 ms | 11.4 MiB |
+| e-prop, ALIF, a vector per state variable and synapse | 4887 ms | 84.2 MiB |
+| e-prop, ALIF, as shipped | 349 ms | 25.7 MiB |
+| BPTT, LIF | 19.7 ms | 10.5 MiB |
+| e-prop, LIF, a vector per state variable and synapse | 419 ms | 25.5 MiB |
+| e-prop, LIF, as shipped | 131 ms | 8.8 MiB |
+
+The first version (commit b11bb08, timed with the benchmark's two calls written in its API) advanced an eligibility vector `[B, N, in + N, d]` for the `d` state variables (three for ALIF: membrane, adaptation, refractory count) through each neuron's `d x d` Jacobian with an einsum every step, and took the Jacobian by `d + 1` forward derivatives. Three changes made it 14 times faster for ALIF and 3 times for LIF, with the same gradients (the identity tests hold at 1e-9):
+
+- The structure of the step's Jacobian is read once from its jaxpr. A state variable whose input enters with constant coefficients shared by all neurons, the membrane under a detached reset, keeps Bellec et al.'s filtered presynaptic trace `[B, in + N]` instead of a vector per synapse; one no gradient reaches, the refractory count, keeps nothing. ALIF keeps one vector per synapse, for the adaptation, where it kept three.
+- The remaining products are elementwise and fuse into one loop, and the Jacobian's columns come from one linearization of the step.
+- The weight gradient sums `signal[b, n] * filtered[b, n, p]` over the batch elementwise. XLA on this CPU ran the einsum `"bn,bnp->pn"` as a batched matrix product, three times slower (284 ms against 97 ms for 100 such steps alone).
+
+The readout's leak still needs one filtered trace per synapse, `B x N x (in + N)` numbers, since the learning signal of each step weights the traces of every earlier step. Training SHD for five epochs (`examples/train_shd_eprop.py --rule eprop`) went from 39 min to 3 min 30 s; BPTT takes 30 s.
+
 ## Networks and connectomes
 
 `sparx.graph` on the same 4-core CPU, float32, `dt = 0.1` ms, wall time per simulated second after compilation:
