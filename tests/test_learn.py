@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -10,12 +11,18 @@ import pytest
 
 from sparx.cells import ALIFCell, LIFCell
 from sparx.learn import (
+    AvgPool,
+    ConvLayer,
     DenseLayer,
     EPropParams,
+    Flatten,
+    Layer,
+    MaxPool,
     OTTTLayer,
     bptt_loss,
     eligibility_traces,
     eprop,
+    fold_batch_norm,
     normalize,
     ottt,
     relu_forward,
@@ -176,6 +183,151 @@ def test_a_converted_network_approaches_its_anns_accuracy():
     activations = relu_forward(converted, test_x)
     hidden = np.clip(np.asarray(activations[0]).ravel(), 0, 1)
     assert np.corrcoef(np.asarray(rates[0]).ravel(), hidden)[0, 1] > 0.99
+
+
+class _CNN(nn.Module):
+    """Conv, batch norm, ReLU, max pool, conv, batch norm, ReLU, average pool, dense: every layer kind
+    Rueckauer et al. convert."""
+
+    @nn.compact
+    def __call__(self, x, train=False):
+        x = nn.Conv(8, (3, 3))(x)
+        x = nn.relu(nn.BatchNorm(use_running_average=not train, momentum=0.9)(x))
+        x = nn.max_pool(x, (2, 2), (2, 2))
+        x = nn.Conv(16, (3, 3), padding="VALID")(x)
+        x = nn.relu(nn.BatchNorm(use_running_average=not train, momentum=0.9)(x))
+        x = nn.avg_pool(x, (2, 2), (1, 1))
+        return nn.Dense(4)(x.reshape(x.shape[0], -1))
+
+
+def _converted_layers(variables) -> list[Layer]:
+    params, stats = variables["params"], variables["batch_stats"]
+
+    def conv(name, bn, padding):
+        layer = ConvLayer(params[name]["kernel"], params[name]["bias"], padding=padding)
+        return fold_batch_norm(layer, stats[bn]["mean"], stats[bn]["var"], params[bn]["scale"],
+                               params[bn]["bias"])
+
+    return [conv("Conv_0", "BatchNorm_0", "SAME"), MaxPool(), conv("Conv_1", "BatchNorm_1", "VALID"),
+            AvgPool((2, 2), (1, 1)), Flatten(),
+            DenseLayer(params["Dense_0"]["kernel"], params["Dense_0"]["bias"])]
+
+
+def _bars(n, seed):
+    """8x8 images of one bar, horizontal, vertical or on either diagonal, at a random place, in noise."""
+    rng = np.random.default_rng(seed)
+    labels = rng.integers(0, 4, n)
+    images = rng.uniform(0, 0.3, (n, 8, 8, 1))
+    for image, label, (a, b) in zip(images, labels, rng.integers(0, 6, (n, 2)), strict=True):
+        for t in range(3):
+            i, j = [(a, b + t), (a + t, b), (a + t, b + t), (a + t, b + 2 - t)][label]
+            image[i, j, 0] = rng.uniform(0.7, 1.0)
+    return jnp.asarray(images, jnp.float32), jnp.asarray(labels)
+
+
+def test_folding_batch_norm_keeps_the_networks_outputs():
+    # Random statistics, so the fold is exercised away from mean 0, variance 1.
+    x, _ = _bars(64, seed=1)
+    variables = _CNN().init(jax.random.key(1), x)
+    leaves, tree = jax.tree.flatten(variables)
+    keys = jax.random.split(jax.random.key(2), len(leaves))
+    variables = jax.tree.unflatten(tree, [jax.random.uniform(k, v.shape, v.dtype, 0.2, 1.5)
+                                          for k, v in zip(keys, leaves, strict=True)])
+    unfolded = _CNN().apply(variables, x)
+    folded = relu_forward(_converted_layers(variables), x)[-1]
+    np.testing.assert_allclose(folded, unfolded, rtol=1e-5, atol=1e-5)
+    assert float(jnp.std(unfolded)) > 0.1
+
+
+def test_a_converted_cnn_keeps_its_anns_predictions():
+    x, y = _bars(1500, seed=0)
+    model = _CNN()
+    variables = model.init(jax.random.key(0), x[:1])
+    optimizer = optax.adam(1e-2)
+    state = optimizer.init(variables["params"])
+
+    @jax.jit
+    def train(params, stats, state):
+        def loss(params):
+            logits, updates = model.apply({"params": params, "batch_stats": stats}, x[:1000], train=True,
+                                          mutable=["batch_stats"])
+            return optax.softmax_cross_entropy_with_integer_labels(logits, y[:1000]).mean(), updates
+
+        grads, updates = jax.grad(loss, has_aux=True)(params)
+        steps, state = optimizer.update(grads, state)
+        return optax.apply_updates(params, steps), updates["batch_stats"], state
+
+    params, stats = variables["params"], variables["batch_stats"]
+    for _ in range(150):
+        params, stats, state = train(params, stats, state)
+    variables = {"params": params, "batch_stats": stats}
+    test_x, test_y = x[1000:], y[1000:]
+    ann = model.apply(variables, test_x).argmax(-1)
+    converted = normalize(_converted_layers(variables), x[:1000])
+    snn = {steps: run_converted(converted, test_x, steps) for steps in (5, 300)}
+    agreement = {steps: float(jnp.mean(rates[-1].argmax(-1) == ann)) for steps, rates in snn.items()}
+    assert float(jnp.mean(ann == test_y)) > 0.95
+    assert agreement[300] > 0.97 and agreement[5] < agreement[300]
+    # Hidden rates follow the normalized activations: the first convolution's within the IF bound,
+    # the second's after a gated max pool.
+    activations = relu_forward(converted, test_x)
+    for layer, threshold in ((0, 0.99), (2, 0.95)):
+        hidden = np.clip(np.asarray(activations[layer]).ravel(), 0, 1)
+        assert np.corrcoef(np.asarray(snn[300][layer]).ravel(), hidden)[0, 1] > threshold
+
+
+def test_max_pool_gating_passes_the_most_active_inputs_spikes():
+    # A 1x1 identity convolution makes each pixel an IF neuron firing at its drive; the gated pool
+    # should fire at the largest rate in each 2x2 window, which is neither their sum nor their mean.
+    rng = np.random.default_rng(3)
+    drive = jnp.asarray(rng.uniform(0, 1, (16, 4, 4, 1)), jnp.float32)
+    layers = [ConvLayer(jnp.ones((1, 1, 1, 1)), jnp.zeros(1)), MaxPool()]
+    expected = np.asarray(drive).reshape(16, 2, 2, 2, 2, 1).max(axis=(2, 4))
+    assert np.abs(expected - np.asarray(drive).reshape(16, 2, 2, 2, 2, 1).mean(axis=(2, 4))).max() > 0.5
+    for steps in (200, 2000, 20000):
+        _, pooled = run_converted(layers, drive, steps)
+        # The gate passes one input's spikes at a time, so it never outfires the most active one.
+        np.testing.assert_array_less(np.asarray(pooled), expected + 1 / steps + 1e-6)
+        # Until the counts rank the inputs, the gate may follow a slower one, for longer the closer
+        # the rates; that costs a fixed number of spikes, so the error falls as 1 / T. The closest
+        # pair of rates here differs by 0.003.
+        assert np.abs(np.asarray(pooled) - expected).max() < 100 / steps
+
+
+STB = np.load(Path(__file__).parent / "fixtures" / "snntoolbox.npz")
+
+
+def test_conversion_matches_rueckauer_et_als_toolbox():
+    # Their SNN toolbox on a Keras CNN with batch norm, max and average pooling
+    # (tools/make_snntoolbox_fixtures.py), at its defaults: the 99.9th percentile,
+    # analog input, reset by subtraction, max pooling gated by spike counts.
+    def conv(name, bn, padding):
+        weight, bias = jnp.asarray(STB[f"{name}/weight"]), jnp.asarray(STB[f"{name}/bias"])
+        layer = ConvLayer(weight, bias, padding=padding)
+        return fold_batch_norm(layer, STB[f"{bn}/mean"], STB[f"{bn}/var"], STB[f"{bn}/scale"],
+                               STB[f"{bn}/offset"], float(STB[f"{bn}/epsilon"]))
+
+    layers = [conv("conv0", "bn0", "SAME"), MaxPool(), conv("conv1", "bn1", "VALID"), AvgPool((2, 2), (1, 1)),
+              Flatten(), DenseLayer(jnp.asarray(STB["dense/weight"]), jnp.asarray(STB["dense/bias"]))]
+    converted = normalize(layers, jnp.asarray(STB["x_norm"]))
+    # Folding and normalization give the weights their simulator runs.
+    for k, layer in enumerate(layer for layer in converted if isinstance(layer, ConvLayer | DenseLayer)):
+        np.testing.assert_allclose(layer.weight, STB[f"normalized/{k}/weight"], rtol=1e-5, atol=1e-6)
+        np.testing.assert_allclose(layer.bias, STB[f"normalized/{k}/bias"], rtol=1e-5, atol=1e-6)
+    steps = int(STB["steps"])
+    rates = run_converted(converted, jnp.asarray(STB["x_test"]), steps)
+    theirs = [STB[name] / steps for name in sorted((n for n in STB.files if n.startswith("counts/")),
+                                                   key=lambda n: int(n.split("/")[-1]))]
+    # The first layer fires the same spikes.
+    np.testing.assert_array_equal(np.round(np.asarray(rates[0]) * steps), STB["counts/SpikeConv2D/0"])
+    # Their gate counts the current step's spikes, so an input can win a tie with the spike it fires
+    # now; their pool then outfires its most active input, here by up to 0.26. Ours does not, so the
+    # layers after it differ by those spikes, and the predictions agree.
+    most_active = theirs[0].reshape(-1, 4, 2, 4, 2, 8).max(axis=(2, 4))
+    assert (theirs[1] - most_active).max() > 0.2
+    np.testing.assert_array_less(np.asarray(rates[1]), most_active + 1e-6)
+    assert np.corrcoef(np.asarray(rates[-1]).ravel(), theirs[-1].ravel())[0, 1] > 0.99
+    assert np.array_equal(np.asarray(rates[-1]).argmax(-1), theirs[-1].argmax(-1))
 
 
 def _event_problem(seed=0, batch=3, inputs=6, outputs=4):
