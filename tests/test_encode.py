@@ -79,3 +79,22 @@ def test_events_pass_uint8_spike_counts_unscaled():
 def test_every_encoder_rebuilds_from_its_record(encoder):
     record = _to_json(encoder, SpikeEncoder)
     assert spike_encoders.from_record(record) == encoder
+
+
+ENCODERS = [Direct(3), Rate(3), Latency(3), Delta(0.1), Events()]
+
+
+@pytest.mark.parametrize("encoder", ENCODERS)
+def test_every_encoder_refuses_swapped_arguments_and_int_seeds(encoder):
+    x = np.random.default_rng(0).random((2, 3, 4)).astype(np.float32)
+    for first, second in ((x, KEY), (0, x)):
+        with pytest.raises(TypeError, match=r"encoder\(key, x\) with a JAX PRNG key"):
+            encoder(first, second)
+
+
+@pytest.mark.parametrize("encoder", ENCODERS)
+def test_every_encoder_takes_typed_raw_and_traced_keys(encoder):
+    x = np.random.default_rng(0).random((2, 3, 4)).astype(np.float32)
+    expected = encoder(KEY, x)
+    np.testing.assert_array_equal(jax.jit(encoder)(KEY, x), expected)
+    np.testing.assert_array_equal(encoder(jax.random.key_data(KEY), x), expected)

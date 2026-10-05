@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax.typing import ArrayLike
 
 from sparx.registry import spike_encoders
@@ -41,11 +42,32 @@ class SpikeEncoder(ABC):
     """Turns one batch field `[B, ...]` into the network's time-major input `[T, B, ...]`.
 
     `key` drives the random encoders (`Rate`); the others ignore it, so
-    every encoder is called the same way.
+    every encoder is called the same way. It is a JAX PRNG key, as
+    `jax.random`'s functions take, never an int seed: an encoder runs inside
+    jitted training steps, where the caller splits one key per step. The
+    entry points called from outside JAX (dew's `Trainer`,
+    `SpikingClassification.logits`) take an int seed, as dew's do, and
+    make the key. A subclass implements `encode`.
     """
 
+    def __call__(self, key: jax.Array, x: ArrayLike) -> jax.Array:
+        if not _is_key(key):
+            given = f"{jnp.asarray(key).dtype}{list(jnp.shape(key))}"
+            raise TypeError(f"{type(self).__name__} is called as encoder(key, x) with a JAX PRNG key such as "
+                            f"jax.random.key(0); its first argument was {given}")
+        return self.encode(key, x)
+
     @abstractmethod
-    def __call__(self, key: jax.Array, x: ArrayLike) -> jax.Array: ...
+    def encode(self, key: jax.Array, x: ArrayLike) -> jax.Array: ...
+
+
+def _is_key(key: object) -> bool:
+    """A typed key (`jax.random.key`) or a raw one (`jax.random.PRNGKey`, uint32 `[..., 2]`)."""
+    if not isinstance(key, jax.Array | np.ndarray):
+        return False
+    if jnp.issubdtype(key.dtype, jax.dtypes.prng_key):
+        return True
+    return key.dtype == jnp.uint32 and key.ndim >= 1 and key.shape[-1] == 2
 
 
 def _intensities(x: ArrayLike) -> jax.Array:
@@ -63,7 +85,7 @@ class Direct(SpikeEncoder):
 
     steps: int
 
-    def __call__(self, key: jax.Array, x: ArrayLike) -> jax.Array:
+    def encode(self, key: jax.Array, x: ArrayLike) -> jax.Array:
         x = _intensities(x)
         return jnp.broadcast_to(x, (self.steps, *x.shape))
 
@@ -81,7 +103,7 @@ class Rate(SpikeEncoder):
 
     steps: int
 
-    def __call__(self, key: jax.Array, x: ArrayLike) -> jax.Array:
+    def encode(self, key: jax.Array, x: ArrayLike) -> jax.Array:
         p = jnp.clip(_intensities(x), 0, 1)
         return jax.random.bernoulli(key, p, (self.steps, *p.shape)).astype(jnp.float32)
 
@@ -100,7 +122,7 @@ class Latency(SpikeEncoder):
     steps: int
     threshold: float = 0.01
 
-    def __call__(self, key: jax.Array, x: ArrayLike) -> jax.Array:
+    def encode(self, key: jax.Array, x: ArrayLike) -> jax.Array:
         x = jnp.clip(_intensities(x), 0, 1)
         when = jnp.round((1 - x) * (self.steps - 1)).astype(jnp.int32)
         times = jnp.arange(self.steps).reshape((self.steps,) + (1,) * x.ndim)
@@ -127,7 +149,7 @@ class Delta(SpikeEncoder):
     off_spikes: bool = False
     time_axis: int = 0
 
-    def __call__(self, key: jax.Array, x: ArrayLike) -> jax.Array:
+    def encode(self, key: jax.Array, x: ArrayLike) -> jax.Array:
         xs = _time_major(_intensities(x), self.time_axis)
         change = jnp.diff(xs, axis=0, prepend=jnp.zeros_like(xs[:1]))
         out = (change >= self.threshold).astype(jnp.float32)
@@ -148,5 +170,5 @@ class Events(SpikeEncoder):
 
     time_axis: int = 0
 
-    def __call__(self, key: jax.Array, x: ArrayLike) -> jax.Array:
+    def encode(self, key: jax.Array, x: ArrayLike) -> jax.Array:
         return _time_major(jnp.asarray(x), self.time_axis).astype(jnp.float32)
