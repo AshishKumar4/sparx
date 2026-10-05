@@ -261,19 +261,23 @@ class RecurrentCell[State]:
 
     Wrapping `ALIFCell` gives the recurrent adaptive network (LSNN) of Bellec
     et al. (2020). The product runs at `precision`, the matrix product
-    precision of `jax.lax.dot`.
+    precision of `jax.lax.dot`. `cut_gradient` stops the gradient at the
+    fed-back spikes (the weight still receives its gradient), which is the
+    gradient e-prop computes online (their `stop_z_gradients`).
     """
 
     inner: NeuronModel[State]
     weight: jax.Array
     precision: jax.lax.Precision | None = struct.field(pytree_node=False, default=None)
+    cut_gradient: bool = struct.field(pytree_node=False, default=False)
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> RecurrentState[State]:
         return RecurrentState(self.inner.init_state(shape, dtype), jnp.zeros(shape, dtype))
 
     def step(self, state: RecurrentState[State], inputs: SynapticInput,
              dt: float) -> tuple[RecurrentState[State], Spikes]:
-        feedback = jnp.matmul(state.spikes.astype(self.weight.dtype), self.weight, precision=self.precision)
+        fed_back = jax.lax.stop_gradient(state.spikes) if self.cut_gradient else state.spikes
+        feedback = jnp.matmul(fed_back.astype(self.weight.dtype), self.weight, precision=self.precision)
         fed = dataclasses.replace(inputs, jump=inputs.jump + feedback)
         inner, spikes = self.inner.step(state.inner, fed, dt)
         # The feedback promotes the step's input, so the spikes are cast back
