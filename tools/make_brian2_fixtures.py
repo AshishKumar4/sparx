@@ -32,6 +32,42 @@ dii/dt = -ii / tau_in : amp
 """
 
 
+HH = """
+dv/dt = (g_na * m**3 * h * (e_na - v) + g_k * n**4 * (e_k - v) + g_l * (e_l - v) + i_e) / c_m : volt
+dm/dt = alpha_m * (1 - m) - beta_m * m : 1
+dh/dt = alpha_h * (1 - h) - beta_h * h : 1
+dn/dt = alpha_n * (1 - n) - beta_n * n : 1
+alpha_m = 0.1 * (v / mV + 40) / (1 - exp(-(v / mV + 40) / 10)) / ms : Hz
+beta_m = 4 * exp(-(v / mV + 65) / 18) / ms : Hz
+alpha_h = 0.07 * exp(-(v / mV + 65) / 20) / ms : Hz
+beta_h = 1 / (1 + exp(-(v / mV + 35) / 10)) / ms : Hz
+alpha_n = 0.01 * (v / mV + 55) / (1 - exp(-(v / mV + 55) / 10)) / ms : Hz
+beta_n = 0.125 * exp(-(v / mV + 65) / 80) / ms : Hz
+i_e : amp
+"""
+
+
+def hodgkin_huxley(currents, dt, steps):
+    """NEST's `hh_psc_alpha` membrane in Brian2 by `exponential_euler`, at rest under each current."""
+    b2.start_scope()
+    b2.prefs.codegen.target = "numpy"
+    b2.defaultclock.dt = dt * b2.ms
+    namespace = {"g_na": 12000 * b2.nS, "g_k": 3600 * b2.nS, "g_l": 30 * b2.nS, "e_na": 50 * b2.mV,
+                 "e_k": -77 * b2.mV, "e_l": -54.402 * b2.mV, "c_m": 100 * b2.pF}
+    group = b2.NeuronGroup(len(currents), HH, method="exponential_euler", namespace=namespace)
+    rest = -65.0
+    rates = {"m": (0.1 * (rest + 40) / (1 - np.exp(-(rest + 40) / 10)), 4 * np.exp(-(rest + 65) / 18)),
+             "h": (0.07 * np.exp(-(rest + 65) / 20), 1 / (1 + np.exp(-(rest + 35) / 10))),
+             "n": (0.01 * (rest + 55) / (1 - np.exp(-(rest + 55) / 10)), 0.125 * np.exp(-(rest + 65) / 80))}
+    group.v = rest * b2.mV
+    for gate, (alpha, beta) in rates.items():
+        setattr(group, gate, alpha / (alpha + beta))
+    group.i_e = np.asarray(currents) * b2.pA
+    monitor = b2.StateMonitor(group, "v", record=True, when="end")
+    b2.run(steps * dt * b2.ms)
+    return {"v": np.asarray(monitor.v / b2.mV).T, "currents": np.asarray(currents)}
+
+
 def run(equations, method, unit, arrivals, nest, model):
     b2.start_scope()
     b2.prefs.codegen.target = "numpy"
@@ -71,6 +107,8 @@ def main():
                       ("cuba", run(CUBA, "exact", b2.pA, cuba, nest, "iaf_psc_exp"))):
         cases.update({f"{name}/{k}": v for k, v in out.items()})
         print(name, "spikes per neuron", out["spikes"].sum(0))
+    hh = hodgkin_huxley(list(nest["hh_currents/currents"]), 0.1, 1000)
+    cases.update({f"hh/{k}": v for k, v in hh.items()})
     np.savez_compressed(OUT, **cases)
     print(f"wrote {OUT} (brian2 {b2.__version__})")
 

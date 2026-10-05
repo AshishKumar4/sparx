@@ -36,7 +36,9 @@ CASES = {
                        "tau_decay_in": 5.0}, (1.0, 8.0)),
     "aeif_psc_exp": ({"I_e": 800.0, "tau_syn_ex": 2.0, "tau_syn_in": 5.0, "t_ref": 0.0}, (50.0, 400.0)),
     "aeif_cond_exp": ({"I_e": 800.0, "tau_syn_ex": 2.0, "tau_syn_in": 5.0, "t_ref": 1.0}, (1.0, 8.0)),
+    "hh_psc_alpha": ({"I_e": 500.0, "tau_syn_ex": 2.0, "tau_syn_in": 5.0}, (50.0, 600.0)),
 }
+HH_CURRENTS = (700.0, 1000.0, 2000.0, 4000.0)
 # Naud, Marcille, Clopath and Gerstner (Biol. Cybern. 2008), Table 1: the
 # firing patterns of AdEx under a current step. C pF, g_L nS, E_L mV,
 # V_T mV, Delta_T mV, tau_w ms, a nS, b pA, V_reset mV, I pA.
@@ -159,6 +161,30 @@ def izhikevich(values, dt, consistent, current=10.0, trains=None):
     return {"v": v, "u": u, "spikes": spikes, "arrivals": arrivals}
 
 
+def hh_currents():
+    """`hh_psc_alpha` neurons at rest under each of `HH_CURRENTS`, with the voltage recorded."""
+    nest.ResetKernel()
+    nest.resolution = DT
+    neurons = nest.Create("hh_psc_alpha", len(HH_CURRENTS))
+    for neuron, current in zip(neurons, HH_CURRENTS, strict=True):
+        neuron.I_e = current
+    meter = nest.Create("multimeter", params={"record_from": ["V_m"], "interval": DT})
+    recorder = nest.Create("spike_recorder")
+    nest.Connect(meter, neurons)
+    nest.Connect(neurons, recorder)
+    nest.Simulate((STEPS + 1) * DT)
+    first = neurons[0].global_id
+    v = np.zeros((STEPS, len(HH_CURRENTS)))
+    keep = meter.events["times"] <= STEPS * DT + DT / 2
+    rows = np.rint(meter.events["times"][keep] / DT).astype(int) - 1
+    v[rows, meter.events["senders"][keep] - first] = meter.events["V_m"][keep]
+    spikes = np.zeros((STEPS, len(HH_CURRENTS)))
+    sent = recorder.events
+    keep = sent["times"] <= STEPS * DT + DT / 2
+    spikes[np.rint(sent["times"][keep] / DT).astype(int) - 1, sent["senders"][keep] - first] = 1
+    return {"v": v, "spikes": spikes, "currents": np.array(HH_CURRENTS)}
+
+
 def main():
     nest.set_verbosity("M_ERROR")
     rng = np.random.default_rng(0)
@@ -168,6 +194,8 @@ def main():
         cases.update({f"{model}/{k}": v for k, v in out.items()})
         cases.update({f"{model}/param/{k}": np.array(v) for k, v in params.items()})
         print(model, "spikes per neuron", out["spikes"].sum(0))
+    cases.update({f"hh_currents/{k}": v for k, v in hh_currents().items()})
+    print("hh currents spikes", cases["hh_currents/spikes"].sum(0))
     for name, values in NAUD.items():
         out = naud(name, values)
         cases.update({f"naud/{name}/{k}": v for k, v in out.items()})

@@ -16,10 +16,32 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 
-from sparx.dynamics.core import Spikes, SynapticInput, crossing, exact_linear, membrane_dtype, response, rk4
+from sparx.dynamics.core import (
+    Spikes,
+    SynapticInput,
+    crossing,
+    exact_linear,
+    membrane_dtype,
+    response,
+    rk4,
+    substeps,
+)
 from sparx.surrogate import ATan, Surrogate, spike
 
-__all__ = ["LIF", "RECEPTORS", "LIFState"]
+__all__ = [
+    "IZHIKEVICH_2003",
+    "LIF",
+    "RECEPTORS",
+    "AdEx",
+    "AdExState",
+    "HodgkinHuxley",
+    "HodgkinHuxleyState",
+    "Izhikevich",
+    "IzhikevichState",
+    "LIFState",
+    "MgBlock",
+    "izhikevich_2003",
+]
 
 RECEPTORS: Mapping[str, float] = {"ampa": 0.0, "nmda": 0.0, "gaba_a": -80.0, "gaba_b": -95.0}
 """Reversal potentials (mV) of the common receptors, the defaults models read
@@ -141,18 +163,18 @@ class AdEx:
     `v` then holds for `t_ref` (0 by default). The right-hand side reads the
     voltage capped at `v_peak`, and reads `v_reset` while refractory, as
     NEST's `aeif_*` models do, which keeps the exponential finite through
-    the upswing. Integrated by `substeps` RK4 steps per step, with synaptic
+    the upswing. Integrated by RK4 in substeps of at most `substep` ms, with synaptic
     currents evaluated at each stage and conductances held; a spike is
     detected and reset at the substep that crosses, and the rest of the step
     continues from the reset, as NEST's adaptive integration does.
 
-    The upswing makes the equation stiff. Against NEST's adaptive RK45 at
-    `dt = 0.1` over 500 ms of Naud et al.'s patterns, spike times drift by
-    up to 5.3 ms with one substep, 0.4 ms with ten (the default) and
-    0.1 ms with a hundred (`tests/test_simulators.py`); an exponential
-    Rosenbrock step was less accurate than RK4 at every substep count
-    tried. Lower `substeps` to trade that accuracy for speed in large
-    networks. The defaults are
+    The upswing makes the equation stiff. Against NEST's adaptive RK45
+    over 500 ms of Naud et al.'s patterns, spike times drift by up to
+    5.3 ms with substeps of 0.1 ms, 0.4 ms with 0.01 ms (the default) and
+    0.1 ms with 0.001 ms (`tests/test_simulators.py`); an exponential
+    Rosenbrock step was less accurate than RK4 at every length tried.
+    Lengthen `substep` (None: one per step) to trade that accuracy for
+    speed in large networks. The defaults are
     NEST's, the parameters of Brette and Gerstner's Figure 2.
     """
 
@@ -167,7 +189,7 @@ class AdEx:
     b: jax.Array | float = 80.5
     tau_w: jax.Array | float = 144.0
     t_ref: float = struct.field(pytree_node=False, default=0.0)
-    substeps: int = struct.field(pytree_node=False, default=10)
+    substep: float | None = struct.field(pytree_node=False, default=0.01)
     reversal: Mapping[str, float] = struct.field(pytree_node=False, default_factory=lambda: dict(RECEPTORS))
     gates: Mapping[str, MgBlock] = struct.field(pytree_node=False,
                                                 default_factory=lambda: {"nmda": MgBlock()})
@@ -180,7 +202,8 @@ class AdEx:
 
     def step(self, state: AdExState, inputs: SynapticInput, dt: float) -> tuple[AdExState, Spikes]:
         g_syn, syn_drive = _synaptic(self, inputs, state.v)
-        h = dt / self.substeps
+        count = substeps(dt, self.substep)
+        h = dt / count
 
         def f(held):
             def f(s, y):
@@ -198,7 +221,7 @@ class AdEx:
         def detect(i, before, v, w, held, fired, offset):
             crossed = spike(v - self.v_peak, self.surrogate) * (1 - held)
             first = (crossed > 0) & (fired == 0)
-            offset = jnp.where(first, (i + crossing(before, v, self.v_peak)) / self.substeps, offset)
+            offset = jnp.where(first, (i + crossing(before, v, self.v_peak)) / count, offset)
             held = held | (crossed > 0) if self.t_ref > 0 else held
             fired = fired + crossed * (1 - fired)
             return _reset(v, crossed, self.v_reset), w + crossed * self.b, held, fired, offset
@@ -210,9 +233,9 @@ class AdEx:
 
         held = state.refractory > dt / 2
         carry = (state.v, state.w, held, jnp.zeros_like(state.v), jnp.ones_like(state.v))
-        v, w, held, fired, offset = jax.lax.fori_loop(0, self.substeps, substep, carry)
+        v, w, held, fired, offset = jax.lax.fori_loop(0, count, substep, carry)
         # A delta synapse's jump lands at the end of the step, before the threshold test.
-        v, w, held, fired, offset = detect(self.substeps - 1, v, v + inputs.jump * (1 - held), w, held, fired,
+        v, w, held, fired, offset = detect(count - 1, v, v + inputs.jump * (1 - held), w, held, fired,
                                            offset)
         v = jnp.where(held, self.v_reset, v)
         refractory = jnp.where(fired > 0, self.t_ref, jnp.maximum(state.refractory - dt, 0))
@@ -301,3 +324,140 @@ IZHIKEVICH_2003: Mapping[str, tuple[float, float, float, float]] = {
     "resonator": (0.1, 0.26, -65.0, 2.0),
 }
 """`(a, b, c, d)` of each class in Izhikevich (2003), Figure 2."""
+
+
+def _vtrap(x: jax.Array, y: float) -> jax.Array:
+    """`x / (1 - exp(-x / y))`, continuous through `x = 0` where it is `y`."""
+    near = jnp.abs(x / y) < 1e-6
+    safe = jnp.where(near, 1.0, x)
+    return jnp.where(near, y + x / 2, safe / -jnp.expm1(-safe / y))
+
+
+class HodgkinHuxleyState(NamedTuple):
+    v: jax.Array
+    m: jax.Array
+    h: jax.Array
+    n: jax.Array
+    refractory: jax.Array
+
+
+@struct.dataclass
+class HodgkinHuxley:
+    """The squid giant axon (Hodgkin and Huxley, J. Physiol. 1952), as NEST's `hh_psc_alpha` states it.
+
+        C dv/dt = -g_Na m^3 h (v - E_Na) - g_K n^4 (v - E_K) - g_L (v - E_L) + I
+        dx/dt = alpha_x(v) (1 - x) - beta_x(v) x,    x in m, h, n
+
+    with the rates (1/ms) in the modern convention, rest near -65 mV:
+    `alpha_n = 0.01 (v + 55) / (1 - exp(-(v + 55) / 10))`,
+    `beta_n = 0.125 exp(-(v + 65) / 80)`,
+    `alpha_m = 0.1 (v + 40) / (1 - exp(-(v + 40) / 10))`,
+    `beta_m = 4 exp(-(v + 65) / 18)`, `alpha_h = 0.07 exp(-(v + 65) / 20)`,
+    `beta_h = 1 / (1 + exp(-(v + 35) / 10))`. Conductances are NEST's,
+    for a 100 pF membrane (1 uF/cm^2 over 1e-4 cm^2).
+
+    The membrane has no reset; a spike is its peak. As in NEST, a spike is
+    reported at the step where the voltage is at or above `v_spike` (0 mV)
+    and has begun to fall, and none is reported within `t_ref` of one.
+
+    `scheme` names the integration, in substeps of at most `substep` ms:
+
+    - `"strang"` (the default): half a substep of each gate with the
+      voltage held (exact, Rush and Larsen 1978), a substep of the voltage
+      with the gates held (exact), and half a substep of the gates again.
+      Second order, and stable at any substep, since each part is solved
+      exactly. At 0.01 ms (the default) it fires with NEST's adaptive
+      solution within a step.
+    - `"rk4"`: classical RK4 of the whole system. At 0.025 ms it is within
+      0.01 mV of NEST, but the gates grow stiff under hyperpolarization
+      (`beta_m` is 130/ms at -128 mV) and RK4 diverges there; shorter
+      substeps only move the limit.
+    - `"exponential_euler"`: gates and voltage each advanced exactly from
+      the start of the substep, Brian2's `exponential_euler` (with
+      `substep=None`, Brian2's step exactly); stable and first order.
+    """
+
+    c_m: jax.Array | float = 100.0
+    g_na: jax.Array | float = 12000.0
+    g_k: jax.Array | float = 3600.0
+    g_l: jax.Array | float = 30.0
+    e_na: jax.Array | float = 50.0
+    e_k: jax.Array | float = -77.0
+    e_l: jax.Array | float = -54.402
+    v_init: jax.Array | float = -65.0
+    v_spike: jax.Array | float = 0.0
+    t_ref: float = struct.field(pytree_node=False, default=2.0)
+    scheme: Literal["strang", "rk4", "exponential_euler"] = struct.field(pytree_node=False, default="strang")
+    substep: float | None = struct.field(pytree_node=False, default=0.01)
+    reversal: Mapping[str, float] = struct.field(pytree_node=False, default_factory=lambda: dict(RECEPTORS))
+    gates: Mapping[str, MgBlock] = struct.field(pytree_node=False,
+                                                default_factory=lambda: {"nmda": MgBlock()})
+    surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
+
+    @staticmethod
+    def rates(v: jax.Array) -> tuple[tuple[jax.Array, jax.Array], ...]:
+        """`(alpha, beta)` of m, h and n at `v`, in 1/ms."""
+        m = (0.1 * _vtrap(v + 40, 10.0), 4 * jnp.exp(-(v + 65) / 18))
+        h = (0.07 * jnp.exp(-(v + 65) / 20), 1 / (1 + jnp.exp(-(v + 35) / 10)))
+        n = (0.01 * _vtrap(v + 55, 10.0), 0.125 * jnp.exp(-(v + 65) / 80))
+        return m, h, n
+
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> HodgkinHuxleyState:
+        dtype = membrane_dtype(dtype)
+        v = jnp.full(shape, self.v_init, dtype)
+        m, h, n = (alpha / (alpha + beta) for alpha, beta in self.rates(v))
+        return HodgkinHuxleyState(v, m, h, n, jnp.zeros(shape, dtype))
+
+    def step(self, state: HodgkinHuxleyState, inputs: SynapticInput,
+             dt: float) -> tuple[HodgkinHuxleyState, Spikes]:
+        g_syn, syn_drive = _synaptic(self, inputs, state.v)
+        count = substeps(dt, self.substep)
+        step = dt / count
+
+        def f(s, y):
+            v, m, h, n = y
+            (am, bm), (ah, bh), (an, bn) = self.rates(v)
+            current = (-self.g_na * m ** 3 * h * (v - self.e_na) - self.g_k * n ** 4 * (v - self.e_k)
+                       - self.g_l * (v - self.e_l) + syn_drive - g_syn * v + inputs.current_at(s))
+            return current / self.c_m, am * (1 - m) - bm * m, ah * (1 - h) - bh * h, an * (1 - n) - bn * n
+
+        def exponential_euler(i, y):
+            v, m, h, n = y
+            g_na, g_k = self.g_na * m ** 3 * h, self.g_k * n ** 4
+            g_total = g_na + g_k + self.g_l + g_syn
+            drive = (g_na * self.e_na + g_k * self.e_k + self.g_l * self.e_l + syn_drive
+                     + inputs.current_at(i * step))
+            gates = [exact_linear(x, alpha / (alpha + beta), 1 / (alpha + beta), step)
+                     for x, (alpha, beta) in zip((m, h, n), self.rates(v), strict=True)]
+            return exact_linear(v, drive / g_total, self.c_m / g_total, step), *gates
+
+        def gates_over(m, h, n, v, length):
+            return [exact_linear(x, alpha / (alpha + beta), 1 / (alpha + beta), length)
+                    for x, (alpha, beta) in zip((m, h, n), self.rates(v), strict=True)]
+
+        def strang(i, y):
+            v, m, h, n = y
+            m, h, n = gates_over(m, h, n, v, step / 2)
+            g_na, g_k = self.g_na * m ** 3 * h, self.g_k * n ** 4
+            g_total = g_na + g_k + self.g_l + g_syn
+            drive = (g_na * self.e_na + g_k * self.e_k + self.g_l * self.e_l + syn_drive
+                     + inputs.current_at((i + 0.5) * step))
+            v = exact_linear(v, drive / g_total, self.c_m / g_total, step)
+            return v, *gates_over(m, h, n, v, step / 2)
+
+        y = (state.v, state.m, state.h, state.n)
+        if self.scheme == "strang":
+            v, m, h, n = strang(0, y) if count == 1 else jax.lax.fori_loop(0, count, strang, y)
+        elif self.scheme == "rk4":
+            v, m, h, n = rk4(f, y, step, count)
+        else:
+            v, m, h, n = (exponential_euler(0, y) if count == 1
+                          else jax.lax.fori_loop(0, count, exponential_euler, y))
+        v = v + inputs.jump
+        free = state.refractory <= dt / 2
+        fired = spike(v - self.v_spike, self.surrogate) * (v < state.v) * free
+        refractory = jnp.where(fired > 0, self.t_ref, jnp.maximum(state.refractory - dt, 0))
+        dtype = state.v.dtype
+        new = HodgkinHuxleyState(*(x.astype(dtype) for x in (v, m, h, n, refractory)))
+        # The peak is found a step late, so the spike is stamped at the step's end.
+        return new, Spikes(fired, jnp.ones_like(fired))

@@ -23,6 +23,7 @@ from sparx.dynamics import (
     BiExponential,
     Delta,
     Exponential,
+    HodgkinHuxley,
     PointNeuron,
     Receptor,
     SynapticInput,
@@ -189,8 +190,8 @@ def test_adex_fires_naud_patterns_with_nest(name):
 @pytest.mark.parametrize("name", ["tonic", "regular_bursting"])
 def test_adex_converges_to_nest_with_substeps(name):
     expected = np.flatnonzero(NEST[f"naud/{name}/spikes"])
-    coarse = np.abs(naud_spikes(name, substeps=1) - expected).max()
-    fine = np.abs(naud_spikes(name, substeps=100) - expected).max()
+    coarse = np.abs(naud_spikes(name, substep=0.1) - expected).max()
+    fine = np.abs(naud_spikes(name, substep=0.001) - expected).max()
     assert fine <= 1 < coarse
 
 
@@ -289,3 +290,64 @@ def test_izhikevich_delta_input_matches_nest(scheme):
                                    record=lambda state: state.v)
     np.testing.assert_array_equal(np.asarray(spikes.fired), NEST[f"{case}/spikes"])
     np.testing.assert_allclose(np.asarray(v), NEST[f"{case}/v"], atol=1e-9)
+
+
+def hh_under_currents(steps, **fields):
+    currents = jnp.asarray(NEST["hh_currents/currents"])
+    with jax.enable_x64(new_val=True):
+        inputs = SynapticInput(jnp.broadcast_to(jnp.asarray(currents, jnp.float64), (steps, len(currents))))
+        (spikes, v), _ = integrate(HodgkinHuxley(**fields), inputs, DT, record=lambda state: state.v)
+    return np.asarray(spikes.fired), np.asarray(v)
+
+
+def spike_shift(fired, expected):
+    """The largest shift, in steps, between matching spikes of each neuron; None if a count differs."""
+    shifts = []
+    for neuron in range(fired.shape[1]):
+        got, want = np.flatnonzero(fired[:, neuron]), np.flatnonzero(expected[:, neuron])
+        if len(got) != len(want):
+            return None
+        shifts.append(np.abs(got - want).max(initial=0))
+    return max(shifts)
+
+
+def test_hodgkin_huxley_fires_with_nest():
+    # Four currents from just above rheobase to 4 nA, 300 ms each.
+    fired, _ = hh_under_currents(3000)
+    assert spike_shift(fired, NEST["hh_currents/spikes"]) <= 1
+    assert fired.sum() >= 90
+
+
+def test_hodgkin_huxley_rk4_is_closest_to_nest_without_strong_inhibition():
+    fired, v = hh_under_currents(3000, scheme="rk4", substep=0.025)
+    np.testing.assert_array_equal(fired, NEST["hh_currents/spikes"])
+    np.testing.assert_allclose(v, NEST["hh_currents/v"], atol=2e-2)
+
+
+def test_hodgkin_huxley_strang_is_second_order():
+    _, truth = hh_under_currents(200, scheme="rk4", substep=0.001)
+    errors = [np.abs(hh_under_currents(200, substep=step)[1] - truth).max() for step in (0.02, 0.01)]
+    assert 3.5 < errors[0] / errors[1] < 4.5
+
+
+def test_hodgkin_huxley_exponential_euler_is_brian2s():
+    _, v = hh_under_currents(1000, scheme="exponential_euler", substep=None)
+    np.testing.assert_allclose(v[:100], BRIAN2["hh/v"][:100], atol=1e-10)
+    # Later, rounding differences carried through each spike's upswing grow.
+    np.testing.assert_allclose(v, BRIAN2["hh/v"], atol=1e-4)
+
+
+@pytest.mark.parametrize("scheme", ["strang", "rk4"])
+def test_hodgkin_huxley_with_alpha_synapses(scheme):
+    # Inhibition drives one neuron below -128 mV, where RK4 at 0.025 ms
+    # diverges and the splitting does not.
+    model = "hh_psc_alpha"
+    cell = PointNeuron(HodgkinHuxley(scheme=scheme, substep=0.01 if scheme == "strang" else 0.025),
+                       {"ex": Receptor(Alpha(param(model, "tau_syn_ex"))),
+                        "in": Receptor(Alpha(param(model, "tau_syn_in")))})
+    fired, v = run(cell, model)
+    if scheme == "rk4":
+        assert np.isnan(v).any()
+        return
+    assert v.min() < -125
+    np.testing.assert_array_equal(fired, NEST[f"{model}/spikes"])

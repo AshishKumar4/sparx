@@ -18,6 +18,7 @@ from sparx.dynamics.core import (
     integrate,
     response,
     rk4,
+    substeps,
 )
 from sparx.dynamics.neurons import (
     IZHIKEVICH_2003,
@@ -25,6 +26,8 @@ from sparx.dynamics.neurons import (
     RECEPTORS,
     AdEx,
     AdExState,
+    HodgkinHuxley,
+    HodgkinHuxleyState,
     Izhikevich,
     IzhikevichState,
     LIFState,
@@ -53,6 +56,8 @@ __all__ = [
     "BiExponential",
     "Delta",
     "Exponential",
+    "HodgkinHuxley",
+    "HodgkinHuxleyState",
     "Izhikevich",
     "IzhikevichState",
     "LIFState",
@@ -70,4 +75,5 @@ __all__ = [
     "izhikevich_2003",
     "response",
     "rk4",
+    "substeps",
 ]
