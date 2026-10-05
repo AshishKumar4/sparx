@@ -79,5 +79,12 @@ def simulate(network: Network, variables: Mapping[str, Any], *, duration: float,
             raise RuntimeError(f"event projections exceeded their capacity in {over} steps (by projection) "
                                f"before {stop * network.dt} ms; raise Projection.capacity")
         chunks.append(jax.device_get(records))
-    records = jax.tree.map(lambda *parts: np.concatenate(parts), *chunks) if chunks else ()
+    if not chunks:
+        return Simulation((), {**fixed, "state": state}, network.dt)
+    def join(monitor, parts):
+        if monitor.accumulate:
+            return sum(parts[1:], parts[0])
+        return jax.tree.map(lambda *xs: np.concatenate(xs), *parts)
+
+    records = tuple(join(m, parts) for m, parts in zip(monitors, zip(*chunks, strict=True), strict=True))
     return Simulation(tuple(records), {**fixed, "state": state}, network.dt)

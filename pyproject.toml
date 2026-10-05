@@ -32,6 +32,8 @@ sparx = "sparx"
 [project.optional-dependencies]
 # sparx.datasets reads the published HDF5 files.
 datasets = ["h5py"]
+# sparx.graph.connectome reads connectome tables (CSV and parquet).
+connectome = ["pyarrow"]
 test = ["pytest", "ruff==0.14.3", "h5py"]
 
 [tool.setuptools.dynamic]

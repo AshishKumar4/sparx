@@ -58,9 +58,10 @@ from sparx.dynamics.synapses import PointNeuron, PointNeuronState, Receptor, jum
 from sparx.graph.connectivity import Connectivity, EdgeList
 
 __all__ = ["ArrivalInput", "CurrentInput", "Monitor", "Network", "PoissonInput", "Population",
-           "PopulationRate", "Projection", "Spikes", "StateMonitor"]
+           "PopulationRate", "Projection", "SpikeCounts", "SpikeTimes", "Spikes", "StateMonitor"]
 
 DENSE_LIMIT = 2 ** 25
+EVENT_BLOCK = 4096
 DENSE_DENSITY = 0.02
 
 PerEdge = float | np.ndarray | Callable[[np.random.Generator, int], np.ndarray]
@@ -120,9 +121,9 @@ class Projection:
     `DENSE_DENSITY`, where a matrix product costs less than the gather on CPUs and accelerators.
     `"events"` visits only the edges of neurons that spiked, for large graphs with sparse activity
     (connectomes): its cost per step is the spiking neurons' out-degree, not the edge count."""
-    capacity: tuple[int, int] = (1024, 262144)
-    """For `format="events"`: the most presynaptic neurons spiking in one step, and the most edges they
-    reach, that a step delivers. A step over capacity is counted, and `simulate` raises."""
+    capacity: int = 4096
+    """For `format="events"`: the most presynaptic neurons spiking in one step that a step delivers. A step
+    over capacity is counted, and `simulate` raises. Their edges have no limit."""
 
     @property
     def key(self) -> str:
@@ -166,7 +167,13 @@ class ArrivalInput:
 
 
 class Monitor:
-    """Something recorded every step: `record(spikes, states)` with both keyed by population."""
+    """Something recorded every step: `record(spikes, states)` with both keyed by population.
+
+    A monitor with `accumulate = True` is summed over the steps of a run
+    instead of stacked, so its memory does not grow with the run.
+    """
+
+    accumulate: bool = False
 
     def record(self, spikes: Mapping[str, jax.Array],
                states: Mapping[str, PointNeuronState]) -> Any:  # noqa: ANN401 - a monitor's record is any pytree
@@ -181,6 +188,30 @@ class Spikes(Monitor):
 
     def record(self, spikes, states):
         return spikes[self.population] > 0
+
+
+@dataclass(frozen=True)
+class SpikeCounts(Monitor):
+    """Each neuron's spike count over the run, summed as it goes: rates of large populations."""
+
+    population: str
+    accumulate = True
+
+    def record(self, spikes, states):
+        return (spikes[self.population] > 0).astype(jnp.int32)
+
+
+@dataclass(frozen=True)
+class SpikeTimes(Monitor):
+    """The indices of up to `capacity` neurons of `population` that fired each step, padded with -1:
+    a raster of a large population at the cost of `capacity` integers per step."""
+
+    population: str
+    capacity: int = 64
+
+    def record(self, spikes, states):
+        fired = spikes[self.population] > 0
+        return jnp.nonzero(fired, size=self.capacity, fill_value=-1)[0].astype(jnp.int32)
 
 
 @dataclass(frozen=True)
@@ -292,7 +323,9 @@ class Network(nn.Module):
                                  f"onto a {'delta' if minimum else 'kinetic'} synapse")
             if p.plasticity is not None and np.ndim(delays) and len(np.unique(delays)) > 1:
                 raise ValueError(f"{p.key}: a plastic projection needs one delay for all its edges")
-            if len(delays) and np.all(delays == delays[0]):
+            if not len(delays):
+                delays = np.asarray(minimum, np.int32)  # no edges: any delay will do
+            elif np.all(delays == delays[0]):
                 delays = np.asarray(delays[0], np.int32)  # one delay: read one row of the ring per step
             weight = _per_edge(p.weight, rng, edges, f"{p.key} weight").astype(np.dtype(self.dtype))
             if p.format == "events":
@@ -378,18 +411,36 @@ class Network(nn.Module):
         if self.is_initializing():
             return ()
         drive = dict(drive or {})
-        if steps is None:
-            timed = [np.shape(v)[0] for v in jax.tree.leaves(drive) if np.ndim(v) > 0]
-            if not timed:
-                raise ValueError("pass `steps` or a time-major `drive`")
-            steps = timed[0]
+        timed = [int(np.shape(v)[0]) for v in jax.tree.leaves(drive) if np.ndim(v) > 0]
+        if steps is None and not timed:
+            raise ValueError("pass `steps` or a time-major `drive`")
+        length: int = steps if steps is not None else timed[0]
         key = self.make_rng("noise") if any(isinstance(s, PoissonInput) for s in self.inputs) else None
         stepper = _Stepper(self, populations, edges, weights, tuple(monitors), key)
-        held = {name: jnp.broadcast_to(jnp.asarray(value, self.dtype), (steps, *np.shape(value)[1:]))
-                if np.ndim(value) > 0 else jnp.full((steps,), value, self.dtype)
+        held = {name: jnp.broadcast_to(jnp.asarray(value, self.dtype), (length, *np.shape(value)[1:]))
+                if np.ndim(value) > 0 else jnp.full((length,), value, self.dtype)
                 for name, value in drive.items()}
-        state.value, records = jax.lax.scan(stepper, state.value, held, length=steps)
+        state.value, records = _scan(stepper, state.value, held, length, tuple(monitors))
         return records
+
+
+def _scan(stepper, state, held, steps: int, monitors: tuple[Monitor, ...]):
+    """Run `steps` steps; stack each monitor's records, or sum them for accumulating monitors."""
+    summed = [i for i, m in enumerate(monitors) if m.accumulate]
+    if not summed:
+        return jax.lax.scan(stepper, state, held, length=steps)
+    shapes = jax.eval_shape(stepper, state, jax.tree.map(lambda x: x[0], held))[1]
+    totals = tuple(jnp.zeros(shapes[i].shape, shapes[i].dtype) for i in summed)
+
+    def step(carry, drive_t):
+        current, totals = carry
+        current, records = stepper(current, drive_t)
+        totals = tuple(total + records[i] for total, i in zip(totals, summed, strict=True))
+        return (current, totals), tuple(r for i, r in enumerate(records) if i not in summed)
+
+    (state, totals), stacked = jax.lax.scan(step, (state, totals), held, length=steps)
+    stacked_iter, total_iter = iter(stacked), iter(totals)
+    return state, tuple(next(total_iter) if i in summed else next(stacked_iter) for i in range(len(monitors)))
 
 
 class _Stepper:
@@ -421,26 +472,36 @@ class _Stepper:
                                    indices_are_sorted=True)
 
     def events(self, p: Projection, e, weight, sent) -> jax.Array:
-        """Delivery that visits only the edges of neurons that spiked, up to `p.capacity`.
+        """Delivery that visits only the edges of neurons that spiked.
 
         The spiking neurons' out-edges, contiguous when edges are sorted by
-        presynaptic neuron, are laid end to end into a fixed number of slots
-        by a prefix sum of their out-degrees; each slot finds its neuron by
-        binary search. Over capacity, the step is counted in the state.
+        presynaptic neuron, are laid end to end by a prefix sum of their
+        out-degrees and walked in blocks of `EVENT_BLOCK` slots, as many as
+        the step needs; each slot finds its neuron by binary search. The
+        cost follows the activity, not the edge count. More than
+        `p.capacity` spiking neurons in a step is counted in the state.
         """
-        neurons, slots = p.capacity
+        out = jnp.zeros(self.populations[p.post].size, weight.dtype)
+        if weight.shape[0] == 0:
+            return out
         size = sent.shape[0]
-        active = jnp.nonzero(sent, size=neurons, fill_value=size)[0]
+        active = jnp.nonzero(sent, size=p.capacity, fill_value=size)[0]
         degree = e["count"][active]
         ends = jnp.cumsum(degree)
-        slot = jnp.arange(slots)
-        owner = jnp.minimum(jnp.searchsorted(ends, slot, side="right"), neurons - 1)
-        edge = e["start"][active[owner]] + slot - (ends[owner] - degree[owner])
-        valid = slot < ends[-1]
-        edge = jnp.where(valid, edge, 0)
-        value = jnp.where(valid, weight[edge] * sent.at[active[owner]].get(mode="fill", fill_value=0), 0)
-        self.overflowed[p.key] = (jnp.sum(sent != 0) > neurons) | (ends[-1] > slots)
-        return jax.ops.segment_sum(value, e["by_pre"][edge], num_segments=self.populations[p.post].size)
+        total = ends[-1]
+        self.overflowed[p.key] = jnp.sum(sent != 0) > p.capacity
+
+        def block(i, out):
+            slot = i * EVENT_BLOCK + jnp.arange(EVENT_BLOCK)
+            owner = jnp.minimum(jnp.searchsorted(ends, slot, side="right"), p.capacity - 1)
+            edge = e["start"][active[owner]] + slot - (ends[owner] - degree[owner])
+            valid = slot < total
+            edge = jnp.where(valid, edge, 0)
+            value = jnp.where(valid, weight[edge] * sent.at[active[owner]].get(mode="fill", fill_value=0), 0)
+            return out.at[e["by_pre"][edge]].add(value)
+
+        blocks = (total + EVENT_BLOCK - 1) // EVENT_BLOCK
+        return jax.lax.fori_loop(0, blocks, block, out)
 
     def external(self, t, drive_t):
         """This step's Poisson arrivals by population and receptor, and injected currents by population."""

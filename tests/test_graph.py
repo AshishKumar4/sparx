@@ -291,7 +291,7 @@ def shiu_network(format):
                                                 "drive": Receptor(Delta(after_threshold=True))},
                             reset_synapses=True, freeze_synapses=True)
     projection = Projection("n", "n", FromEdges(case["pre"], case["post"]), weight=case["counts"] * 0.275,
-                            delay=1.8, receptor="syn", format=format, capacity=(64, 4096))
+                            delay=1.8, receptor="syn", format=format, capacity=64)
     network = Network((population,), (projection,), inputs=(ArrivalInput("n", "stim", "drive"),), dt=DT,
                       dtype=jnp.float64)
     drive = np.zeros_like(case["spikes"])
@@ -311,6 +311,6 @@ def test_shius_neuron_model_fires_with_brian2_spike_for_spike(format):
 
 def test_event_projections_raise_when_over_capacity():
     network, drive, _ = shiu_network("events")
-    network = network.clone(projections=(dataclasses.replace(network.projections[0], capacity=(2, 16)),))
+    network = network.clone(projections=(dataclasses.replace(network.projections[0], capacity=2),))
     with jax.enable_x64(new_val=True), pytest.raises(RuntimeError, match="capacity"):
         simulate(network, network.init(jax.random.key(0)), duration=len(drive) * DT, drive={"stim": drive})
