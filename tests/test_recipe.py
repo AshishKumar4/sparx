@@ -35,8 +35,8 @@ def test_the_recipe_trains_and_its_run_loads_through_dew_pipeline(tmp_path):
                "--data.loading.workers", "0", "--data.loading.threads", "1",
                "--data.loading.read-buffer", "1",
                "--model.config", json.dumps({"hidden": [16], "classes": 2, "delays": 3,
-                                             "neuron": {"kind": "lif", "tau": 3.0}}),
-               "--schedules", json.dumps({"sigma": {"kind": "linear", "peak": 1.5, "end": 0.5}}),
+                                             "neuron": {"name": "lif", "fields": {"tau": 3.0}}}),
+               "--schedules", json.dumps({"sigma": {"name": "linear", "fields": {"peak": 1.5, "end": 0.5}}}),
                "--trainer.batch-size", "16", "--trainer.steps", "8", "--trainer.log-every", "4",
                "--trainer.eval-every", "8", "--trainer.checkpoint-every", "8",
                "--trainer.checkpoint-dir", str(tmp_path / "runs"), "--trainer.name", "toy",
@@ -46,7 +46,7 @@ def test_the_recipe_trains_and_its_run_loads_through_dew_pipeline(tmp_path):
     run = tmp_path / "runs" / "toy"
     recorded = json.loads((run / "run.json").read_text())
     assert recorded["objective"] == "spiking_classifier"
-    assert recorded["model"]["config"]["neuron"]["kind"] == "lif"
+    assert recorded["model"]["config"]["neuron"]["name"] == "lif"
     program = ("import dew\n"
                f"task = dew.pipeline({str(run)!r})\n"
                "print(type(task).__name__, task.call)\n")

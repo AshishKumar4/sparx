@@ -3,15 +3,15 @@
     python recipes/snn/train.py data:shd --data.channels 140 --trainer.batch-size 64 \\
         --trainer.steps 3000 --trainer.eval-every 500 --trainer.checkpoint-dir runs --trainer.name shd \\
         --model.config '{"hidden": [128], "classes": 20, "delays": 15,
-                         "neuron": {"kind": "alif", "tau": 5.0, "tau_adapt": 20.0, "beta": 0.2,
-                                    "learn_tau": true, "detach_reset": true}}' \\
-        --schedules '{"sigma": {"kind": "linear", "peak": 7.5, "end": 0.5}}'
+                         "neuron": {"name": "alif", "fields": {"tau": 5.0, "tau_adapt": 20.0, "beta": 0.2,
+                                    "learn_tau": true, "detach_reset": true}}}' \\
+        --schedules '{"sigma": {"name": "linear", "fields": {"peak": 7.5, "end": 0.5}}}'
 
 The configuration is dew's `RunConfig` (model, data, optimizer, trainer) plus the
 classifier's own fields, and `run.json` records all of it, so `dew.pipeline(run_dir)`
 loads the trained classifier back. The model is any registered spiking model
 (`spiking_mlp`, `sew_resnet`); the encoder and schedules are records of registered
-kinds, as the model's neuron is.
+members, as the model's neuron is.
 """
 
 import dataclasses
@@ -37,12 +37,12 @@ class SNNRunConfig(RunConfig):
     objective: str = "spiking_classifier"
     model: ModelConfig = field(default_factory=lambda: ModelConfig("spiking_mlp", {
         "hidden": [128], "classes": 20,
-        "neuron": {"kind": "alif", "tau": 5.0, "tau_adapt": 20.0, "beta": 0.2, "learn_tau": True,
-                   "detach_reset": True}}, dtype="float32"))
+        "neuron": {"name": "alif", "fields": {"tau": 5.0, "tau_adapt": 20.0, "beta": 0.2, "learn_tau": True,
+                                               "detach_reset": True}}}, dtype="float32"))
     data: sparx.datasets.SHD = field(default_factory=sparx.datasets.SHD)
     optim: OptimConfig = field(default_factory=lambda: OptimConfig(learning_rate=2e-3, clip_grads=1.0))
-    encoder: JsonDict = field(default_factory=lambda: {"kind": "events"})
-    """The spike encoder's record, `{"kind": "rate", "steps": 8}` for static data."""
+    encoder: JsonDict = field(default_factory=lambda: {"name": "events", "fields": {}})
+    """The spike encoder's record, `{"name": "rate", "fields": {"steps": 8}}` for static data."""
     sample: str = "spikes"
     """The batch field the encoder reads."""
     labels: str = "label"

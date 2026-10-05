@@ -66,7 +66,7 @@ class SpikeEncoder(ABC):
     """Turns one batch field `[B, ...]` into the network's time-major input `[T, B, ...]`.
 
     Encoders are registered (`sparx.registry.spike_encoders`), so a run's
-    record holds one as `{"kind": "rate", "steps": 8}` and rebuilds it.
+    record holds one as `{"name": "rate", "fields": {"steps": 8}}` and rebuilds it.
     """
 
     @abstractmethod

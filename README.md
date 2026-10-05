@@ -208,13 +208,13 @@ classifier = dew.pipeline("runs/shd")
 predictions = classifier(test_spikes)              # [B]
 ```
 
-[`recipes/snn/train.py`](recipes/snn/train.py) is a dew recipe: every setting is a typed flag, and the model, encoder and schedules are records of registered kinds:
+[`recipes/snn/train.py`](recipes/snn/train.py) is a dew recipe: every setting is a typed flag, and the model, encoder and schedules are `{"name": ..., "fields": {...}}` records of registered members:
 
 ```bash
 python recipes/snn/train.py data:shd --data.channels 140 --trainer.batch-size 64 --trainer.steps 3000 \
     --trainer.checkpoint-dir runs --trainer.name shd \
-    --model.config '{"hidden": [128], "classes": 20, "delays": 15, "neuron": {"kind": "alif", "tau": 5.0}}' \
-    --schedules '{"sigma": {"kind": "linear", "peak": 7.5, "end": 0.5}}'
+    --model.config '{"hidden": [128], "classes": 20, "delays": 15, "neuron": {"name": "alif", "fields": {"tau": 5.0}}}' \
+    --schedules '{"sigma": {"name": "linear", "fields": {"peak": 7.5, "end": 0.5}}}'
 ```
 
 Training on several devices is dew's: `Trainer(..., mesh=MeshSpec(fsdp=2))` places the run, and a test checks that eight simulated CPU devices train the same parameters as one, within 1.8e-7.

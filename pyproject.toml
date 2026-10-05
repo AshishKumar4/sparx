@@ -17,7 +17,7 @@ dependencies = [
     # through (docs/design.md). It is not on PyPI, so the dependency names its
     # repository, at the integration commit that carries its plugin registry
     # (the rework of AshishKumar4/dew#31) until that reaches main.
-    "dewml @ git+https://github.com/AshishKumar4/dew@d93f6b0715767e882892a9c30b01c8926332240f",
+    "dewml @ git+https://github.com/AshishKumar4/dew@f2c6b37187a34ba1b3d2b76502356c58d6622c69",
     "jax",
     "flax",
     "optax",

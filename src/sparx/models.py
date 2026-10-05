@@ -16,7 +16,7 @@ integrator readout.
 
 `neuron` is the template every neuron layer of a model copies, such as
 `sparx.nn.LIF(tau=2.0, detach_reset=True)`. It is a registered value, so a
-run's record holds it as `{"kind": "lif", ...}` and rebuilds the model. Each
+run's record holds it as `{"name": "lif", "fields": {...}}` and rebuilds the model. Each
 copy belongs to the block that uses it, so its parameters (a learned time
 constant) are that block's own.
 
