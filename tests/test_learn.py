@@ -9,7 +9,18 @@ import optax
 import pytest
 
 from sparx.cells import ALIFCell, LIFCell
-from sparx.learn import EPropParams, OTTTLayer, bptt_loss, eligibility_traces, eprop, ottt
+from sparx.learn import (
+    DenseLayer,
+    EPropParams,
+    OTTTLayer,
+    bptt_loss,
+    eligibility_traces,
+    eprop,
+    normalize,
+    ottt,
+    relu_forward,
+    run_converted,
+)
 from sparx.surrogate import Sigmoid, Triangle
 
 CELLS = {
@@ -114,3 +125,49 @@ def test_ottt_matches_xiao_et_als_online_gradients():
     for name, grad in zip(names, grads, strict=True):
         np.testing.assert_allclose(grad.weight, OTTT[f"{name}/grad_weight"], rtol=1e-10, atol=1e-13)
         np.testing.assert_allclose(grad.bias, OTTT[f"{name}/grad_bias"], rtol=1e-10, atol=1e-13)
+
+
+def test_an_if_neuron_fires_at_its_normalized_drive_within_one_over_t():
+    drive = jnp.linspace(-0.3, 1.4, 41)[:, None]
+    for steps in (10, 100, 1000):
+        (rate,) = run_converted([DenseLayer(jnp.eye(1), jnp.zeros(1))], drive, steps)
+        np.testing.assert_array_less(np.abs(rate - jnp.clip(drive, 0, 1)), 1 / steps + 1e-6)
+
+
+def test_a_converted_network_approaches_its_anns_accuracy():
+    rng = np.random.default_rng(0)
+    centers = rng.normal(0, 1, (4, 10))
+    labels = rng.integers(0, 4, 2000)
+    points = centers[labels] + rng.normal(0, 0.8, (2000, 10))
+    x = jnp.asarray(np.clip(0.5 + 0.25 * points, 0, 1), jnp.float32)
+    y = jnp.asarray(labels)
+    sizes = (10, 32, 32, 4)
+    keys = jax.random.split(jax.random.key(0), 3)
+    layers = [DenseLayer(jax.random.normal(k, (a, b)) * np.sqrt(2 / a), jnp.zeros(b))
+              for k, a, b in zip(keys, sizes[:-1], sizes[1:], strict=True)]
+    optimizer = optax.adam(1e-2)
+    state = optimizer.init(layers)
+
+    @jax.jit
+    def train(layers, state):
+        def loss(layers):
+            logits = relu_forward(layers, x[:1500])[-1]
+            return optax.softmax_cross_entropy_with_integer_labels(logits, y[:1500]).mean()
+
+        updates, state = optimizer.update(jax.grad(loss)(layers), state)
+        return optax.apply_updates(layers, updates), state
+
+    for _ in range(300):
+        layers, state = train(layers, state)
+    test_x, test_y = x[1500:], y[1500:]
+    ann = float(jnp.mean(jnp.argmax(relu_forward(layers, test_x)[-1], -1) == test_y))
+    converted = normalize(layers, x[:1500])
+    accuracy = {steps: float(jnp.mean(jnp.argmax(run_converted(converted, test_x, steps)[-1], -1) == test_y))
+                for steps in (5, 300)}
+    assert ann > 0.85
+    assert accuracy[300] >= ann - 0.02 and accuracy[5] < accuracy[300]
+    # Hidden rates follow the normalized activations.
+    rates = run_converted(converted, test_x, 300)
+    activations = relu_forward(converted, test_x)
+    hidden = np.clip(np.asarray(activations[0]).ravel(), 0, 1)
+    assert np.corrcoef(np.asarray(rates[0]).ravel(), hidden)[0, 1] > 0.99
