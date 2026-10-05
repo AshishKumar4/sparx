@@ -8,7 +8,22 @@ import numpy as np
 import pytest
 from scipy.integrate import quad
 
-from sparx.dynamics import LIF, Alpha, BiExponential, Exponential, MgBlock, SynapticInput, Term, response, run
+from sparx.dynamics import (
+    LIF,
+    Alpha,
+    Arrivals,
+    BiExponential,
+    Delta,
+    Exponential,
+    LIFCell,
+    MgBlock,
+    PointNeuron,
+    Receptor,
+    SynapticInput,
+    Term,
+    response,
+    run,
+)
 
 
 def lif_period(neuron: LIF, current: float) -> float:
@@ -164,3 +179,17 @@ def test_nmda_conductance_is_scaled_by_the_block_at_the_start_of_the_step():
         g = 4.0 * float(MgBlock()(jnp.asarray(neuron.e_l)))
         ampa, _ = neuron.step(state, SynapticInput(conductance={"ampa": jnp.asarray([g])}), 0.1)
     np.testing.assert_allclose(nmda.v, ampa.v, rtol=1e-12)
+
+
+@pytest.mark.parametrize(("reset", "after_spike"), [("zero", 0.0), ("subtract", 0.75)])
+def test_a_jump_after_the_threshold_is_lost_only_to_a_reset_that_sets_the_membrane(reset, after_spike):
+    # A jump of 1.5 before the threshold fires the neuron; 0.25 lands after
+    # the test. A zero reset sets the membrane and overwrites it; a
+    # subtraction keeps it (1.5 - 1 + 0.25). A neuron that did not fire keeps it.
+    neuron = PointNeuron(LIFCell(1.0, reset=reset), {"now": Receptor(Delta()),
+                                                     "late": Receptor(Delta(after_threshold=True))})
+    for now, fired, v in [(1.5, 1.0, after_spike), (0.5, 0.0, 0.75)]:
+        arrivals = Arrivals(spikes={"now": jnp.array([now]), "late": jnp.array([0.25])})
+        state, spikes = neuron.step(neuron.init_state((1,), jnp.float32), arrivals, 1.0)
+        assert float(spikes.fired[0]) == fired
+        assert float(state.neuron.v[0]) == v

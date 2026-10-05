@@ -22,6 +22,7 @@ from sparx.dynamics.core import (
     crossing,
     exact_linear,
     fire,
+    jump_after_threshold,
     membrane_dtype,
     response,
     rk4,
@@ -141,6 +142,12 @@ class LIF:
         dtype = state.v.dtype
         return LIFState(reset.astype(dtype), refractory.astype(dtype)), Spikes(fired, offset)
 
+    def is_refractory(self, state: LIFState, dt: float) -> jax.Array:
+        return state.refractory > dt / 2
+
+    def after_threshold(self, state: LIFState, jump: jax.Array, fired: jax.Array) -> LIFState:
+        return state._replace(v=jump_after_threshold(state.v, jump, fired))
+
 
 class AdExState(NamedTuple):
     v: jax.Array
@@ -239,6 +246,12 @@ class AdEx:
         dtype = state.v.dtype
         return AdExState(v.astype(dtype), w.astype(dtype), refractory.astype(dtype)), Spikes(fired, offset)
 
+    def is_refractory(self, state: AdExState, dt: float) -> jax.Array:
+        return state.refractory > dt / 2
+
+    def after_threshold(self, state: AdExState, jump: jax.Array, fired: jax.Array) -> AdExState:
+        return state._replace(v=jump_after_threshold(state.v, jump, fired))
+
 
 class IzhikevichState(NamedTuple):
     v: jax.Array
@@ -329,6 +342,12 @@ class Izhikevich:
         dtype = state.v.dtype
         return (IzhikevichState(reset.astype(dtype), (u + fired * self.d).astype(dtype)),
                 Spikes(fired, offset))
+
+    def is_refractory(self, state: IzhikevichState, dt: float) -> jax.Array:
+        return jnp.zeros(jnp.shape(state.v), bool)
+
+    def after_threshold(self, state: IzhikevichState, jump: jax.Array, fired: jax.Array) -> IzhikevichState:
+        return state._replace(v=jump_after_threshold(state.v, jump, fired))
 
 
 def izhikevich_2003(kind: str, **fields) -> Izhikevich:
@@ -518,3 +537,11 @@ class HodgkinHuxley:
         new = HodgkinHuxleyState(*(x.astype(dtype) for x in (v, m, h, n, refractory)))
         # The peak is found a step late, so the spike is stamped at the step's end.
         return new, Spikes(fired, jnp.ones_like(fired))
+
+    def is_refractory(self, state: HodgkinHuxleyState, dt: float) -> jax.Array:
+        return state.refractory > dt / 2
+
+    def after_threshold(self, state: HodgkinHuxleyState, jump: jax.Array,
+                        fired: jax.Array) -> HodgkinHuxleyState:
+        # No reset follows a spike here, so the jump lands whether or not it fired.
+        return state._replace(v=jump_after_threshold(state.v, jump, None))

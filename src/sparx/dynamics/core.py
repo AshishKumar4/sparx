@@ -61,6 +61,7 @@ __all__ = [
     "decay",
     "exact_linear",
     "fire",
+    "jump_after_threshold",
     "membrane_dtype",
     "response",
     "rk4",
@@ -155,7 +156,27 @@ class Model[State, Inputs](Protocol):
 
 
 class NeuronModel[State](Model[State, SynapticInput], Protocol):
-    """One population of neurons, advanced one step at a time on the synaptic input it receives."""
+    """One population of neurons, advanced one step at a time on the synaptic input it receives.
+
+    Besides stepping, a model answers the two questions a `PointNeuron`
+    asks of it between steps, so the synapses can follow the neuron
+    without reading its state's fields: where it is refractory, and how a
+    voltage jump that lands after the threshold test changes it.
+    """
+
+    def is_refractory(self, state: State, dt: float) -> jax.Array:
+        """Where the neuron cannot fire in the coming step of `dt`, as booleans; all False for a model
+        without refractoriness."""
+        ...
+
+    def after_threshold(self, state: State, jump: jax.Array, fired: jax.Array) -> State:
+        """`state` after a voltage jump that lands past the step's threshold test, before its reset.
+
+        `fired` is the step's `Spikes.fired`. A model whose spike resets the
+        membrane loses the jump where it fired, since the reset that follows
+        overwrites it; one that does not reset keeps it.
+        """
+        ...
 
 
 type Reset = Literal["subtract", "zero", "none"]
@@ -189,6 +210,18 @@ def fire(v: jax.Array, threshold: jax.Array | float, surrogate: Surrogate, reset
             raise ValueError(f"reset must be subtract, zero or none, not {reset!r}")
         reset = 0.0
     return jnp.where(r > 0, reset, v) + (r - jax.lax.stop_gradient(r)) * (reset - v), s
+
+
+def jump_after_threshold(v: jax.Array, jump: jax.Array, fired: jax.Array | None) -> jax.Array:
+    """`v` plus a jump that lands after the threshold test, in `v`'s dtype.
+
+    Where `fired`, the jump is lost, since the reset that follows it sets
+    the voltage; `fired` None keeps it everywhere, for a model whose spike
+    does not overwrite the membrane.
+    """
+    if fired is not None:
+        jump = jnp.where(fired > 0, 0.0, jump)
+    return (v + jump).astype(v.dtype)
 
 
 def exact_linear(v: jax.Array, target: jax.Array, tau: jax.Array | float, dt: float) -> jax.Array:

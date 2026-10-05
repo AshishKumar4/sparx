@@ -17,8 +17,8 @@ variables are split by role (design.md section 5.1):
 | --- | --- |
 | `connectome` | each projection's edges, delays, and its weights unless trainable |
 | `params` | the weights of trainable projections |
-| `state` | per population, neuron and synapse states and a ring buffer of recent spikes; per projection, |
-|         | plasticity traces, plastic weights and short-term release; the step count |
+| `state` | per population, neuron and synapse states and a ring buffer of recent spikes; per plastic |
+|         | projection, traces and weights; per depressing projection, release; the step count |
 
 One step covers `(t, t + dt]` and runs in NEST's order, which the
 single-neuron tests pin against NEST and Brian2 (`sparx.dynamics.core`):
@@ -46,7 +46,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Literal, TypedDict
 
 import flax.linen as nn
 import jax
@@ -54,12 +54,13 @@ import jax.numpy as jnp
 import numpy as np
 
 from sparx.dynamics.core import NeuronModel
-from sparx.dynamics.plasticity import PairSTDP, TripletSTDP, TsodyksMarkram
-from sparx.dynamics.synapses import PointNeuron, PointNeuronState, Receptor, jumps_first
+from sparx.dynamics.plasticity import Plasticity, TsodyksMarkram, TsodyksMarkramState
+from sparx.dynamics.synapses import PointNeuron, PointNeuronState, Receptor
 from sparx.graph.connectivity import Connectivity, EdgeList
 
-__all__ = ["ArrivalInput", "CurrentInput", "Monitor", "Network", "PoissonInput", "Population",
-           "PopulationRate", "Projection", "SpikeCounts", "SpikeRaster", "SpikeTimes", "StateMonitor"]
+__all__ = ["ArrivalInput", "CurrentInput", "Drive", "Monitor", "Network", "NetworkState", "PlasticState",
+           "PoissonInput", "Population", "PopulationRate", "PopulationState", "Projection", "ReleaseState",
+           "SpikeCounts", "SpikeRaster", "SpikeTimes", "StateMonitor"]
 
 DENSE_LIMIT = 2 ** 25
 EVENT_BLOCK = 4096
@@ -67,6 +68,10 @@ DENSE_DENSITY = 0.02
 
 PerEdge = float | np.ndarray | Callable[[np.random.Generator, int], np.ndarray]
 """A value for every edge: one for all, an array in the connectivity's order, or `f(rng, count)`."""
+
+type Drive = Mapping[str, jax.Array | np.ndarray | float]
+"""External input by the name of the `CurrentInput` or `ArrivalInput` that reads it: `[T, ...]` per step,
+or a constant."""
 
 
 @dataclass(frozen=True)
@@ -103,8 +108,8 @@ class Projection:
     """Synapses from population `pre` onto receptor `receptor` of population `post`.
 
     `weight` is in the receptor's unit (pA, nS or mV) and `delay` in ms,
-    rounded to whole steps; either may be per edge. `plasticity` (pair or
-    triplet STDP) makes the weights state that evolves with the spikes;
+    rounded to whole steps; either may be per edge. `plasticity` (a
+    `Plasticity` rule, pair or triplet STDP) makes the weights state that evolves with the spikes;
     `short_term` scales each spike by its presynaptic neuron's release.
     `trainable` puts fixed weights in `params` for gradient training.
     """
@@ -115,7 +120,7 @@ class Projection:
     weight: PerEdge = 1.0
     delay: PerEdge = 1.0
     receptor: str = "ex"
-    plasticity: PairSTDP | TripletSTDP | None = None
+    plasticity: Plasticity | None = None
     short_term: TsodyksMarkram | None = None
     trainable: bool = False
     name: str | None = None
@@ -174,14 +179,14 @@ class ArrivalInput:
 class Monitor:
     """Something recorded every step: `record(spikes, states)` with both keyed by population.
 
+    A record is one array per step, stacked over the run into `[T, ...]`.
     A monitor with `accumulate = True` is summed over the steps of a run
     instead of stacked, so its memory does not grow with the run.
     """
 
     accumulate: bool = False
 
-    def record(self, spikes: Mapping[str, jax.Array],
-               states: Mapping[str, PointNeuronState]) -> Any:  # noqa: ANN401 - a monitor's record is any pytree
+    def record(self, spikes: Mapping[str, jax.Array], states: Mapping[str, PointNeuronState]) -> jax.Array:
         raise NotImplementedError
 
 
@@ -282,6 +287,46 @@ def _seed(key: jax.Array) -> np.random.Generator:
     return np.random.default_rng(np.asarray(jax.random.key_data(key)).ravel().astype(np.uint64))
 
 
+class PopulationState(TypedDict):
+    """A population's neurons and synapses, and the ring buffer of its spikes over the longest delay."""
+
+    point_neuron: PointNeuronState
+    buffer: jax.Array
+
+
+class PlasticState(TypedDict):
+    """A plastic projection's traces and the weights they change.
+
+    Each `Plasticity` rule has its own traces type, so `traces` is typed as
+    any object.
+    """
+
+    traces: object
+    weight: jax.Array
+
+
+class ReleaseState(TypedDict):
+    """A projection's short-term release per presynaptic neuron, and the ring buffer of the efficacies
+    its spikes were sent with."""
+
+    release: TsodyksMarkramState
+    buffer: jax.Array
+
+
+class NetworkState(TypedDict):
+    """The `state` collection of a `Network`, carried between calls."""
+
+    populations: dict[str, PopulationState]
+    plastic: dict[str, PlasticState]
+    """By projection key, the projections with plasticity."""
+    short_term: dict[str, ReleaseState]
+    """By projection key, the projections with short-term release."""
+    overflow: dict[str, jax.Array]
+    """Per event projection, how many steps had more spiking neurons than its capacity."""
+    t: jax.Array
+    """The steps run so far."""
+
+
 class Network(nn.Module):
     """Populations and projections stepped together; see the module docstring."""
 
@@ -289,7 +334,7 @@ class Network(nn.Module):
     projections: Sequence[Projection] = ()
     inputs: Sequence[PoissonInput | CurrentInput | ArrivalInput] = ()
     dt: float = 0.1
-    dtype: Any = jnp.float32
+    dtype: jax.typing.DTypeLike = jnp.float32
     """The dtype of the state: membranes, synapses, traces and spike buffers."""
 
     def _check(self) -> dict[str, Population]:
@@ -322,7 +367,7 @@ class Network(nn.Module):
             pre, post = populations[p.pre], populations[p.post]
             edges = p.connectivity.edges(rng, pre.size, post.size, p.pre == p.post)
             delays = np.rint(_per_edge(p.delay, rng, edges, f"{p.key} delay") / self.dt).astype(np.int32)
-            minimum = 1 if jumps_first(post.receptors[p.receptor].synapse) else 0
+            minimum = 1 if post.receptors[p.receptor].synapse.lands == "before_threshold" else 0
             if len(delays) and delays.min() < minimum:
                 raise ValueError(f"{p.key}: delays must be at least {minimum} step(s) of {self.dt} ms "
                                  f"onto a {'delta' if minimum else 'kinetic'} synapse")
@@ -363,35 +408,35 @@ class Network(nn.Module):
                     lags[p.post] = max(lags[p.post], longest)
         return lags
 
-    def _rest(self, populations: Mapping[str, Population], weights, lags) -> dict[str, Any]:
+    def _rest(self, populations: Mapping[str, Population], weights: Mapping[str, jax.Array],
+              lags: Mapping[str, int]) -> NetworkState:
         """The state a run starts from: resting neurons (or `initial`), empty buffers, fresh traces."""
         rng = _seed(self.make_rng("params"))
-        out = {}
+        dtype = jnp.dtype(self.dtype)
+        out: dict[str, PopulationState] = {}
         for name, pop in populations.items():
-            point_neuron = pop.point_neuron.init_state((pop.size,), self.dtype)
+            point_neuron = pop.point_neuron.init_state((pop.size,), dtype)
             if pop.initial is not None:
                 point_neuron = pop.initial(rng, point_neuron)
-            buffer = jnp.zeros((lags[name], pop.size), self.dtype)
+            buffer = jnp.zeros((lags[name], pop.size), dtype)
             out[name] = {"point_neuron": point_neuron, "buffer": buffer}
-        plastic = {}
+        plastic: dict[str, PlasticState] = {}
+        short_term: dict[str, ReleaseState] = {}
         for p in self.projections:
             pre, post = populations[p.pre].size, populations[p.post].size
-            entry = {}
             if p.plasticity is not None:
-                entry["traces"] = p.plasticity.init_traces(pre, post, self.dtype)
-                entry["weight"] = weights[p.key]
+                plastic[p.key] = {"traces": p.plasticity.init_state(pre, post, dtype),
+                                  "weight": weights[p.key]}
             if p.short_term is not None:
-                entry["release"] = p.short_term.rest((pre,), self.dtype)
-                entry["buffer"] = jnp.zeros((lags[p.pre], pre), self.dtype)
-            if entry:
-                plastic[p.key] = entry
+                short_term[p.key] = {"release": p.short_term.init_state((pre,), dtype),
+                                     "buffer": jnp.zeros((lags[p.pre], pre), dtype)}
         overflow = {p.key: jnp.zeros((), jnp.int32) for p in self.projections if p.format == "events"}
-        return {"populations": out, "projections": plastic, "overflow": overflow,
+        return {"populations": out, "plastic": plastic, "short_term": short_term, "overflow": overflow,
                 "t": jnp.zeros((), jnp.int32)}
 
     @nn.compact
-    def __call__(self, drive: Mapping[str, Any] | None = None, *, steps: int | None = None,
-                 monitors: Sequence[Monitor] = ()) -> tuple[Any, ...]:
+    def __call__(self, drive: Drive | None = None, *, steps: int | None = None,
+                 monitors: Sequence[Monitor] = ()) -> tuple[jax.Array, ...]:
         """Advance `steps` steps (or as many as `drive` has); returns each monitor's records over time."""
         populations = self._check()
         built: dict[str, dict[str, np.ndarray]] = {}
@@ -430,7 +475,8 @@ class Network(nn.Module):
         return records
 
 
-def _scan(stepper, state, held, steps: int, monitors: tuple[Monitor, ...]):
+def _scan(stepper: _Stepper, state: NetworkState, held: Mapping[str, jax.Array], steps: int,
+          monitors: tuple[Monitor, ...]) -> tuple[NetworkState, tuple[jax.Array, ...]]:
     """Run `steps` steps; stack each monitor's records, or sum them for accumulating monitors."""
     summed = [i for i, m in enumerate(monitors) if m.accumulate]
     if not summed:
@@ -461,7 +507,7 @@ class _Stepper:
             self.into[p.post].append(p)
 
     def is_delta(self, population: str, receptor: str) -> bool:
-        return jumps_first(self.populations[population].receptors[receptor].synapse)
+        return self.populations[population].receptors[receptor].synapse.lands == "before_threshold"
 
     def deliver(self, t, p: Projection, weight, ring) -> jax.Array:
         """Weighted spikes of `p` due at the end of step `t`, summed per postsynaptic neuron."""
@@ -551,7 +597,8 @@ class _Stepper:
                 arrivals[p.receptor] = arrivals.get(p.receptor, 0.0) + due
         return arrivals
 
-    def plasticity(self, t, plastic, fired, buffers):
+    def plasticity(self, t: jax.Array, plastic: dict[str, PlasticState], fired: Mapping[str, jax.Array],
+                   buffers: Mapping[str, jax.Array]) -> None:
         """STDP: presynaptic spikes as sent, postsynaptic ones after the projection's (dendritic) delay."""
         for p in self.network.projections:
             if p.plasticity is None:
@@ -562,10 +609,12 @@ class _Stepper:
             arrived = ring[(t - delay) % ring.shape[0]]
             traces, weight = p.plasticity.step(plastic[p.key]["traces"], plastic[p.key]["weight"],
                                                fired[p.pre], arrived, e["pre"], e["post"], self.dt)
-            plastic[p.key] = {**plastic[p.key], "traces": traces, "weight": weight}
+            plastic[p.key] = {"traces": traces, "weight": weight}
 
-    def __call__(self, state, drive_t):
-        t, pops, plastic = state["t"], state["populations"], dict(state["projections"])
+    def __call__(self, state: NetworkState,
+                 drive_t: Mapping[str, jax.Array]) -> tuple[NetworkState, tuple[jax.Array, ...]]:
+        t, pops = state["t"], state["populations"]
+        plastic, short_term = dict(state["plastic"]), dict(state["short_term"])
         self.overflowed: dict[str, jax.Array] = {}
         projections = self.network.projections
         weights = {p.key: plastic[p.key]["weight"] if p.plasticity is not None else self.weights[p.key]
@@ -573,7 +622,7 @@ class _Stepper:
         external, currents = self.external(t, drive_t)
 
         def rings(buffers):
-            return {p.key: plastic[p.key]["buffer"] if p.short_term is not None else buffers[p.pre]
+            return {p.key: short_term[p.key]["buffer"] if p.short_term is not None else buffers[p.pre]
                     for p in projections}
 
         # 1-2. Delta jumps due now, then the membranes.
@@ -594,14 +643,14 @@ class _Stepper:
             buffers[name] = ring.at[t % ring.shape[0]].set(fired[name].astype(ring.dtype))
         for p in projections:
             if p.short_term is not None:
-                release, efficacy = p.short_term.step(plastic[p.key]["release"], fired[p.pre], self.dt)
-                ring = plastic[p.key]["buffer"]
-                plastic[p.key] = {**plastic[p.key], "release": release,
-                                  "buffer": ring.at[t % ring.shape[0]].set(efficacy.astype(ring.dtype))}
+                release, efficacy = p.short_term.step(short_term[p.key]["release"], fired[p.pre], self.dt)
+                ring = short_term[p.key]["buffer"]
+                short_term[p.key] = {"release": release,
+                                     "buffer": ring.at[t % ring.shape[0]].set(efficacy.astype(ring.dtype))}
 
-        # 4. Kinetic synapses receive what is due at the end of the step.
+        # 4. Every other synapse receives what is due at the end of the step.
         after = rings(buffers)
-        new_pops = {}
+        new_pops: dict[str, PopulationState] = {}
         for name, pop in self.populations.items():
             due = self.gather(name, t, external[name], after, weights, delta=False)
             point_neuron = pop.point_neuron.receive(moved[name], due, self.dt, fired[name], frozen[name])
@@ -613,4 +662,5 @@ class _Stepper:
                         for m in self.monitors)
         overflow = {k: v + self.overflowed.get(k, jnp.zeros((), bool)).astype(jnp.int32)
                     for k, v in state["overflow"].items()}
-        return {"populations": new_pops, "projections": plastic, "overflow": overflow, "t": t + 1}, records
+        return {"populations": new_pops, "plastic": plastic, "short_term": short_term, "overflow": overflow,
+                "t": t + 1}, records

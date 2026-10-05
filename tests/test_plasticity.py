@@ -47,7 +47,7 @@ def run_stdp(rule, case):
     n = pre.shape[1]
     index = jnp.arange(n)
     with jax.enable_x64(new_val=True):
-        traces = rule.init_traces(n, n, jnp.float64)
+        traces = rule.init_state(n, n, jnp.float64)
 
         def step(carry, spikes):
             traces, weights = carry
@@ -97,7 +97,7 @@ def test_tsodyks_markram_is_nests(name):
         def step(state, spikes):
             return rule.step(state, spikes, DT)
 
-        _, efficacy = jax.lax.scan(step, rule.rest((pre.shape[1],), jnp.float64), jnp.asarray(pre))
+        _, efficacy = jax.lax.scan(step, rule.init_state((pre.shape[1],), jnp.float64), jnp.asarray(pre))
     got = transmitted(np.asarray(efficacy) * float(case["initial"]), pre)
     for mine, theirs in zip(got, nest_weights(case), strict=True):
         assert len(mine) == len(theirs) >= 40
@@ -108,7 +108,7 @@ def test_tsodyks_markram_depresses_and_facilitates():
     spikes = jnp.zeros((400, 1)).at[::20].set(1.0)  # every 2 ms
     for rule, trend in ((TsodyksMarkram(U=0.5, tau_rec=800.0), -1), (TsodyksMarkram(U=0.03, tau_rec=100.0,
                                                                                     tau_fac=1000.0), 1)):
-        _, efficacy = jax.lax.scan(lambda s, x, rule=rule: rule.step(s, x, DT), rule.rest((1,)), spikes)
+        _, efficacy = jax.lax.scan(lambda s, x, rule=rule: rule.step(s, x, DT), rule.init_state((1,)), spikes)
         released = np.asarray(efficacy[::20, 0])
         assert released[0] == pytest.approx(float(rule.U))
         assert np.sign(released[3] - released[0]) == trend

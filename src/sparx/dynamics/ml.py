@@ -41,7 +41,15 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 
-from sparx.dynamics.core import NeuronModel, Reset, Spikes, SynapticInput, fire, membrane_dtype
+from sparx.dynamics.core import (
+    NeuronModel,
+    Reset,
+    Spikes,
+    SynapticInput,
+    fire,
+    jump_after_threshold,
+    membrane_dtype,
+)
 from sparx.surrogate import ATan, Surrogate
 
 __all__ = [
@@ -69,6 +77,16 @@ def _at_end(fired: jax.Array) -> Spikes:
     return Spikes(fired, jnp.ones_like(fired))
 
 
+def _never(v: jax.Array) -> jax.Array:
+    return jnp.zeros(jnp.shape(v), bool)
+
+
+def _overwritten(reset: Reset, fired: jax.Array) -> jax.Array | None:
+    """Where a reset sets the membrane after this step's threshold test: a zero reset sets it, a
+    subtraction or no reset keeps whatever landed before."""
+    return fired if reset == "zero" else None
+
+
 class MembraneState(NamedTuple):
     v: jax.Array
 
@@ -92,6 +110,12 @@ class LIFCell:
         v, s = fire(v, self.threshold, self.surrogate, self.reset, detach_reset=self.detach_reset)
         return MembraneState(v), _at_end(s.astype(x.dtype))
 
+    def is_refractory(self, state: MembraneState, dt: float) -> jax.Array:
+        return _never(state.v)
+
+    def after_threshold(self, state: MembraneState, jump: jax.Array, fired: jax.Array) -> MembraneState:
+        return MembraneState(jump_after_threshold(state.v, jump, _overwritten(self.reset, fired)))
+
 
 @struct.dataclass
 class LICell:
@@ -110,6 +134,13 @@ class LICell:
     def step(self, state: MembraneState, inputs: SynapticInput, dt: float) -> tuple[MembraneState, Spikes]:
         v = self.decay ** dt * state.v + _jump(inputs)
         return MembraneState(v), _at_end(v)
+
+    def is_refractory(self, state: MembraneState, dt: float) -> jax.Array:
+        return _never(state.v)
+
+    def after_threshold(self, state: MembraneState, jump: jax.Array, fired: jax.Array) -> MembraneState:
+        # It never fires, so nothing resets the jump away.
+        return MembraneState(jump_after_threshold(state.v, jump, None))
 
 
 @struct.dataclass
@@ -141,6 +172,14 @@ class Serial[First, Second]:
         first, out = self.first.step(state[0], inputs, dt)
         second, spikes = self.second.step(state[1], SynapticInput(jump=out.fired), dt)
         return (first, second), spikes
+
+    def is_refractory(self, state: tuple[First, Second], dt: float) -> jax.Array:
+        return self.second.is_refractory(state[1], dt)
+
+    def after_threshold(self, state: tuple[First, Second], jump: jax.Array,
+                        fired: jax.Array) -> tuple[First, Second]:
+        # The threshold test and the spikes are the second model's, so the jump lands on its membrane.
+        return state[0], self.second.after_threshold(state[1], jump, fired)
 
 
 class ALIFState(NamedTuple):
@@ -202,6 +241,12 @@ class ALIFCell:
         r = jax.lax.stop_gradient(jnp.clip(state.r + steps * s - 1, 0, max(steps, 0)))
         return ALIFState(v, self.adapt_decay ** dt * state.a + s, r), _at_end(s.astype(x.dtype))
 
+    def is_refractory(self, state: ALIFState, dt: float) -> jax.Array:
+        return state.r > 0
+
+    def after_threshold(self, state: ALIFState, jump: jax.Array, fired: jax.Array) -> ALIFState:
+        return state._replace(v=jump_after_threshold(state.v, jump, _overwritten(self.reset, fired)))
+
 
 class RecurrentState[State](NamedTuple):
     inner: State
@@ -235,3 +280,10 @@ class RecurrentCell[State]:
         # to the dtype the carry started with, the input's.
         fired = spikes.fired.astype(state.spikes.dtype)
         return RecurrentState(inner, fired), Spikes(fired, spikes.offset)
+
+    def is_refractory(self, state: RecurrentState[State], dt: float) -> jax.Array:
+        return self.inner.is_refractory(state.inner, dt)
+
+    def after_threshold(self, state: RecurrentState[State], jump: jax.Array,
+                        fired: jax.Array) -> RecurrentState[State]:
+        return state._replace(inner=self.inner.after_threshold(state.inner, jump, fired))

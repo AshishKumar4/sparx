@@ -21,13 +21,36 @@ later. The caller passes postsynaptic spikes as they arrive.
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import NamedTuple, Protocol
 
 import jax
 import jax.numpy as jnp
 from flax import struct
 
-__all__ = ["PairSTDP", "STDPTraces", "TripletSTDP", "TripletTraces", "TsodyksMarkram", "TsodyksMarkramState"]
+__all__ = ["PairSTDP", "Plasticity", "STDPTraces", "TripletSTDP", "TripletTraces", "TsodyksMarkram",
+           "TsodyksMarkramState"]
+
+
+class Plasticity[Traces](Protocol):
+    """A rule that changes the weights of a projection's edges with the spikes on either side.
+
+    Its traces live on neurons, `init_state(pre, post, dtype)` for `pre`
+    presynaptic and `post` postsynaptic neurons, and `step` advances them
+    and the weights `[E]` of the edges `pre[E] -> post[E]` by one step.
+    """
+
+    def init_state(self, pre: int, post: int, dtype: jnp.dtype = jnp.float32) -> Traces:
+        """The traces with no spike yet."""
+        ...
+
+    def step(self, traces: Traces, weights: jax.Array, pre_spikes: jax.Array, post_arrivals: jax.Array,
+             pre: jax.Array, post: jax.Array, dt: float) -> tuple[Traces, jax.Array]:
+        """One step: traces decay over `dt`, then this step's spikes update weights and traces.
+
+        `pre_spikes[N_pre]` and `post_arrivals[N_post]` are 0 or 1;
+        `weights[E]` belong to the edges `pre[E] -> post[E]`.
+        """
+        ...
 
 
 class TsodyksMarkramState(NamedTuple):
@@ -60,7 +83,8 @@ class TsodyksMarkram:
     tau_rec: jax.Array | float = 800.0
     tau_fac: jax.Array | float = 0.0
 
-    def rest(self, shape: tuple[int, ...], dtype: jnp.dtype = jnp.float32) -> TsodyksMarkramState:
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype = jnp.float32) -> TsodyksMarkramState:
+        """Fully recovered and unfacilitated, per presynaptic neuron."""
         return TsodyksMarkramState(jnp.ones(shape, dtype), jnp.zeros(shape, dtype))
 
     def step(self, state: TsodyksMarkramState, spikes: jax.Array,
@@ -108,16 +132,12 @@ class PairSTDP:
     mu_minus: jax.Array | float = 1.0
     w_max: jax.Array | float = 100.0
 
-    def init_traces(self, pre: int, post: int, dtype: jnp.dtype = jnp.float32) -> STDPTraces:
+    def init_state(self, pre: int, post: int, dtype: jnp.dtype = jnp.float32) -> STDPTraces:
         return STDPTraces(jnp.zeros(pre, dtype), jnp.zeros(post, dtype))
 
     def step(self, traces: STDPTraces, weights: jax.Array, pre_spikes: jax.Array, post_arrivals: jax.Array,
              pre: jax.Array, post: jax.Array, dt: float) -> tuple[STDPTraces, jax.Array]:
-        """One step: traces decay over `dt`, then this step's spikes update weights and traces.
-
-        `pre_spikes[N_pre]` and `post_arrivals[N_post]` are 0 or 1;
-        `weights[E]` belong to the edges `pre[E] -> post[E]`.
-        """
+        """As `Plasticity.step`."""
         k_pre = traces.pre * jnp.exp(-dt / self.tau_plus)
         k_post = traces.post * jnp.exp(-dt / self.tau_minus)
         w = weights / self.w_max
@@ -160,7 +180,7 @@ class TripletSTDP:
     a3_minus: jax.Array | float = 2.3e-4
     w_max: jax.Array | float = 100.0
 
-    def init_traces(self, pre: int, post: int, dtype: jnp.dtype = jnp.float32) -> TripletTraces:
+    def init_state(self, pre: int, post: int, dtype: jnp.dtype = jnp.float32) -> TripletTraces:
         return TripletTraces(jnp.zeros(pre, dtype), jnp.zeros(pre, dtype), jnp.zeros(post, dtype),
                              jnp.zeros(post, dtype))
 
