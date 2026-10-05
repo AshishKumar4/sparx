@@ -188,3 +188,36 @@ def test_delayed_dense_matches_dcls_delays(mode):
     if mode == "gauss":
         # d/d delay = -d/d P.
         np.testing.assert_allclose(grads["params"]["delay"], -expected["grad_P"].T, rtol=1e-4, atol=4e-6)
+
+
+def _sew_variables(key):
+    def conv(name):  # torch [out, in, h, w] -> flax [h, w, in, out]
+        return jnp.asarray(FIXTURES[f"{key}/{name}.weight"].transpose(2, 3, 1, 0))
+
+    def bn(name):
+        return ({"scale": jnp.asarray(FIXTURES[f"{key}/{name}.weight"]),
+                 "bias": jnp.asarray(FIXTURES[f"{key}/{name}.bias"])},
+                {"mean": jnp.asarray(FIXTURES[f"{key}/{name}.running_mean"]),
+                 "var": jnp.asarray(FIXTURES[f"{key}/{name}.running_var"])})
+
+    params, stats = {}, {}
+    pairs = [("first", "conv1", "bn1"), ("second", "conv2", "bn2")]
+    if f"{key}/downsample.0.weight" in FIXTURES.files:
+        pairs.append(("downsample", "downsample.0", "downsample.1"))
+    for ours, conv_name, bn_name in pairs:
+        params[f"{ours}_conv"] = {"kernel": conv(conv_name)}
+        params[f"{ours}_bn"], stats[f"{ours}_bn"] = bn(bn_name)
+    return {"params": params, "batch_stats": stats}
+
+
+@pytest.mark.parametrize("connect", ["add", "and", "iand"])
+@pytest.mark.parametrize(("key", "features", "strides"), [("sew_same", 8, 1), ("sew_down", 16, 2)])
+def test_sew_block_matches_spikingjelly(key, features, strides, connect):
+    from sparx.models import SEWBlock
+    from sparx.nn import IF
+    case = f"{key}_{connect}"
+    block = SEWBlock(features, strides, connect, IF(reset="zero", detach_reset=True))
+    # Both run in float64, so a reordered convolution sum cannot flip a spike.
+    with jax.enable_x64(new_val=True):
+        out = block.apply(_sew_variables(case), jnp.asarray(FIXTURES[f"{case}/x"]), train=False)
+        np.testing.assert_array_equal(np.asarray(out), FIXTURES[f"{case}/out"])

@@ -83,9 +83,10 @@ def membrane_dtype(dtype: jnp.dtype) -> jnp.dtype:
 
 
 def fire(v: jax.Array, threshold: jax.Array | float, reset: Reset, surrogate: Surrogate,
-         detach_reset: bool) -> tuple[jax.Array, jax.Array]:
+         detach_reset: bool, subtract: jax.Array | float | None = None) -> tuple[jax.Array, jax.Array]:
     """Spike where `v` reaches `threshold`, then reset; return the membrane and the spikes.
 
+    A soft reset subtracts `subtract`, the threshold itself unless given.
     `detach_reset` stops the gradient through the reset, so the surrogate
     reaches the membrane only through the spike output, as in SpyTorch's
     tutorials and SpikingJelly's `detach_reset`.
@@ -93,7 +94,7 @@ def fire(v: jax.Array, threshold: jax.Array | float, reset: Reset, surrogate: Su
     s = spike(v - threshold, surrogate)
     r = jax.lax.stop_gradient(s) if detach_reset else s
     if reset == "subtract":
-        v = v - r * threshold
+        v = v - r * (threshold if subtract is None else subtract)
     elif reset == "zero":
         v = v * (1 - r)
     elif reset != "none":
@@ -186,13 +187,18 @@ class ALIFCell:
     """LIF with an adaptive threshold that rises with each spike and decays back.
 
         theta[t] = threshold + beta * a[t-1]
-        s[t] = H(v[t] - theta[t]),  v reset against theta[t]
+        s[t] = H(v[t] - theta[t])
+        v[t] <- v[t] - s[t] * threshold      (a soft reset by the baseline)
         a[t] = adapt_decay * a[t-1] + s[t]
 
     The adaptive neurons of Bellec et al., "A solution to the learning dilemma
     for recurrent networks of spiking neurons" (Nature Communications 2020),
     whose adaptation time constants of hundreds of steps give a recurrent
-    network memory beyond its membranes'. Gradients flow through `a`.
+    network memory beyond its membranes'. As in their equations and code, a
+    spike subtracts the baseline threshold, not the adaptive one. Their reset
+    lands one step later, undecayed; the reset here lands at the spike, like
+    every sparx cell, which makes this their model with a reset of
+    `decay * threshold` (docs/fidelity.md). Gradients flow through `a`.
     """
 
     decay: jax.Array | float
@@ -210,7 +216,7 @@ class ALIFCell:
     def step(self, state: ALIFState, x: jax.Array) -> tuple[ALIFState, jax.Array]:
         theta = self.threshold + self.beta * state.a
         v = self.decay * state.v + x
-        v, s = fire(v, theta, self.reset, self.surrogate, self.detach_reset)
+        v, s = fire(v, theta, self.reset, self.surrogate, self.detach_reset, subtract=self.threshold)
         return ALIFState(v, self.adapt_decay * state.a + s), s.astype(x.dtype)
 
 

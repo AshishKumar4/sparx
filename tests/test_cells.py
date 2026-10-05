@@ -199,3 +199,19 @@ def test_a_scalar_input_is_refused():
 def test_an_unknown_reset_is_refused():
     with pytest.raises(ValueError, match="reset"):
         run(LIFCell(0.8, reset="soft"), jnp.ones((3, 2)))  # type: ignore[arg-type]
+
+
+def test_alif_is_bellecs_model_with_its_reset_decayed():
+    # Bellec et al.'s code subtracts the baseline threshold one step after a
+    # spike, undecayed; sparx resets at the spike, so the reset has decayed by
+    # the next step. The two are the same model when theirs subtracts
+    # decay * threshold, spike for spike.
+    import reference
+    xs = currents(15, scale=1.0)
+    spikes, _ = run(ALIFCell(0.9, 0.97, beta=0.5, threshold=1.0), jnp.asarray(xs))
+    expected = reference.eprop_alif(xs.astype(np.float64), 0.9, 0.97, 0.5, 1.0, reset=0.9 * 1.0)
+    np.testing.assert_array_equal(spikes, expected)
+    assert expected.sum() > 50
+    # With their undecayed reset the spike trains differ.
+    undecayed = reference.eprop_alif(xs.astype(np.float64), 0.9, 0.97, 0.5, 1.0, reset=1.0)
+    assert (undecayed != expected).any()

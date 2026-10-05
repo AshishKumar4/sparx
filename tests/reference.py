@@ -57,7 +57,7 @@ def alif(xs, decay, adapt_decay, beta, threshold=1.0, reset="subtract"):
         theta = threshold + beta * a
         v = decay * v + x
         s = (v >= theta).astype(np.float64)
-        v = _reset(v, s, theta, reset)
+        v = np.where(s > 0, 0.0, v) if reset == "zero" else v - s * threshold
         a = adapt_decay * a + s
         spikes.append(s)
     return np.stack(spikes)
@@ -93,4 +93,21 @@ def recurrent_lif(xs, weight, decay, threshold=1.0, reset="subtract"):
         s = (v >= threshold).astype(np.float64)
         v = _reset(v, s, threshold, reset)
         spikes.append(s)
+    return np.stack(spikes)
+
+
+def eprop_alif(xs, alpha, rho, beta, v_th, reset):
+    """The ALIF of Bellec et al. (2020), as their code steps it
+    (IGITUGraz/eligibility_propagation, Figure_4_and_5_ATARI/alif_eligibility_propagation.py,
+    without refractoriness): the previous step's spike raises the adaptation
+    and subtracts `reset` from the membrane, after the decay."""
+    v = np.zeros(xs.shape[1:])
+    a = np.zeros(xs.shape[1:])
+    z = np.zeros(xs.shape[1:])
+    spikes = []
+    for x in xs:
+        a = rho * a + z
+        v = alpha * v + x - z * reset
+        z = (v >= v_th + beta * a).astype(np.float64)
+        spikes.append(z)
     return np.stack(spikes)

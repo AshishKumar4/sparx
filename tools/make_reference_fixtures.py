@@ -117,13 +117,50 @@ def psn_cases(rng: np.random.Generator) -> dict[str, np.ndarray]:
     return cases
 
 
+def sew_cases(rng: np.random.Generator) -> dict[str, np.ndarray]:
+    """SpikingJelly's SEW BasicBlock, with and without its downsampling shortcut, for each connect
+    function, in float64 with BatchNorm in evaluation mode and integrate-and-fire neurons
+    (hard reset to zero), multi-step over time-major input."""
+    from spikingjelly.activation_based import functional, layer
+    from spikingjelly.activation_based.model.sew_resnet import BasicBlock
+
+    cases = {}
+    for name, inplanes, planes, stride in (("sew_same", 8, 8, 1), ("sew_down", 8, 16, 2)):
+        for cnf in ("ADD", "AND", "IAND"):
+            downsample = None
+            if stride != 1 or inplanes != planes:
+                downsample = torch.nn.Sequential(layer.Conv2d(inplanes, planes, 1, stride, bias=False),
+                                                 layer.BatchNorm2d(planes))
+            block = BasicBlock(inplanes, planes, stride, downsample, cnf=cnf, spiking_neuron=neuron.IFNode,
+                               surrogate_function=surrogate.ATan(), detach_reset=True).double()
+            with torch.no_grad():
+                for module in block.modules():
+                    if isinstance(module, torch.nn.BatchNorm2d):
+                        module.running_mean.uniform_(-0.2, 0.2)
+                        module.running_var.uniform_(0.5, 1.5)
+                        module.weight.uniform_(0.5, 1.5)
+                        module.bias.uniform_(0.2, 1.0)
+            block.eval()
+            functional.set_step_mode(block, "m")
+            x = (rng.uniform(size=(3, 2, inplanes, 8, 8)) < 0.5).astype(np.float64)
+            out = block(torch.tensor(x)).detach().numpy()
+            key = f"{name}_{cnf.lower()}"
+            cases[f"{key}/x"] = x.transpose(0, 1, 3, 4, 2)  # time-major, channels last
+            cases[f"{key}/out"] = out.transpose(0, 1, 3, 4, 2)
+            for param, value in block.state_dict().items():
+                if value.dtype.is_floating_point:
+                    cases[f"{key}/{param}"] = value.numpy()
+            assert 0.05 < out.mean() < 0.95, f"{key}: output rate {out.mean():.2f} tests little"
+    return cases
+
+
 def main():
     torch.manual_seed(0)
     rng = np.random.default_rng(0)
     source = Path(spikingjelly.__file__).resolve().parent.parent
     commit = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], capture_output=True, text=True,
                             check=True).stdout.strip()
-    cases = lif_cases(rng) | psn_cases(rng)
+    cases = lif_cases(rng) | psn_cases(rng) | sew_cases(rng)
     cases["meta/spikingjelly_commit"] = np.array(commit)
     cases["meta/torch"] = np.array(torch.__version__)
     OUT.parent.mkdir(parents=True, exist_ok=True)
