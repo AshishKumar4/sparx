@@ -24,7 +24,7 @@ from sparx.graph import (
     simulate,
 )
 from sparx.graph.analysis import cv_isi, firing_rates, population_fano
-from sparx.graph.models import brunel
+from sparx.graph.models import brunel, coba, cuba
 
 NEST = np.load(Path(__file__).parent / "fixtures" / "nest.npz")
 DT = float(NEST["meta/dt"])
@@ -216,3 +216,25 @@ def test_dense_and_edge_projections_deliver_the_same_spikes():
             runs.append(result.records[0])
     np.testing.assert_array_equal(*runs)
     assert runs[0].sum() > 500
+
+
+BENCHMARKS = np.load(Path(__file__).parent / "fixtures" / "benchmarks.npz")
+
+
+@pytest.mark.parametrize("name", ["cuba", "coba"])
+def test_brette_benchmarks_match_brian2s_statistics(name):
+    # Brian2's runs over four seeds set the scale: rates of both populations,
+    # interspike irregularity and synchrony of the excitatory one.
+    network = {"cuba": cuba, "coba": coba}[name]()
+    result = simulate(network, network.init(jax.random.key(0)), duration=float(BENCHMARKS["meta/duration"]),
+                      monitors=(Spikes("e"), Spikes("i")))
+    skip = round(float(BENCHMARKS["meta/skip"]) / DT)
+    e, i = result.records[0][skip:], result.records[1][skip:]
+    got = np.array([firing_rates(e, DT).mean(), firing_rates(i, DT).mean(), cv_isi(e).mean(),
+                    population_fano(e, DT)])
+    brian2 = BENCHMARKS[f"{name}/stats"]
+    mean, spread = brian2.mean(0), brian2.std(0)
+    for k in (0, 1):
+        assert abs(got[k] - mean[k]) <= max(0.05 * mean[k], 4 * spread[k])
+    assert abs(got[2] - mean[2]) <= 0.02 + 4 * spread[2]
+    assert brian2[:, 3].min() / 2 <= got[3] <= brian2[:, 3].max() * 2

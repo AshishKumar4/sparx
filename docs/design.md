@@ -173,16 +173,16 @@ Shipped as builders and as validation targets:
 
 ### 6.1 One step
 
-Every network advances in the same order, which the tests pin:
+Every network advances in the same order, the order NEST uses, which the single-neuron and network tests pin against NEST and Brian2 (`tests/test_simulators.py`, `tests/test_graph.py`). A step covers `(t, t + dt]`:
 
-1. Read the spikes each projection delivers this step from the delay buffers.
-2. Advance synaptic states (aggregated per receptor) with the delivered weights.
-3. Advance neurons with the resulting currents and conductances, detect spikes and their in-step times.
-4. Write the new spikes into the delay buffers.
-5. Apply local plasticity.
-6. Record monitors.
+1. Delta synapses deliver the spikes due at the end of the step as voltage jumps.
+2. Each population advances its membranes on its synapses' output (current waveforms integrated exactly, conductances held) and detects spikes.
+3. The new spikes enter each population's ring buffer.
+4. Every other synapse receives the spikes due at the end of the step, which shape the membrane from the next step on.
+5. Plasticity updates traces and weights.
+6. Monitors record.
 
-The order matches NEST and Brian2's defaults for delays of at least one step (to verify against both before the first network parity test). A delay of zero steps is refused in recurrent networks, since it would create an algebraic loop.
+A spike sent in step `m` over `D` steps is due at the end of step `m + D`: NEST's timing for a delay of `D dt`, Brian2's for `(D - 1) dt`. Kinetic synapses take `D = 0` (Brian2's default); delta synapses need `D >= 1`, since a jump due in its own step would feed back into that step's threshold test.
 
 ### 6.2 Connectivity kernels
 
