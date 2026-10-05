@@ -6,15 +6,14 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import pytest
+from dew import Checkpoints, Field, Trainer
+from dew.data import Dataset, Loading
+from dew.objectives.base import Step
+from dew.training.optim import Linear
 
-dew = pytest.importorskip("dew")  # the optional dependency `sparxml[dew]`
-
-from dew import Checkpoints, Field, Trainer  # noqa: E402
-from dew.data import Dataset, Loading  # noqa: E402
-from dew.objectives.base import Step  # noqa: E402
-
-from sparx.dew import Direct, Events, Rate, RateBand, SpikingClassifier, accuracy  # noqa: E402
-from sparx.nn import LI, LIF  # noqa: E402
+import sparx
+from sparx.dew import Direct, Events, Rate, RateBand, SpikingClassification, SpikingClassifier, accuracy
+from sparx.nn import LI, LIF
 
 LOADING = Loading(workers=0, threads=1, read_buffer=1)
 
@@ -120,14 +119,54 @@ class Scaled(nn.Module):
 
 
 def test_scheduled_call_arguments_reach_the_model_in_loss_and_evaluation():
+    # A linear ramp from 3 to 1 over 4 steps is 2 at step 2.
     objective = SpikingClassifier(Scaled(), Field("image", (8, 8, 1)), Direct(steps=4),
-                                  call=lambda step: {"scale": 1.0 + step.astype(jnp.float32)})
+                                  schedules={"scale": Linear(peak=3.0, end=1.0)}, schedule_steps=4)
     batch = {key: jnp.asarray(value) for key, value in halves(16, 3).items()}
     variables = objective.init(jax.random.key(0))
     step = Step(jnp.asarray(2), jax.random.key(1), None)
     stats, _ = objective.loss(variables, batch, step)
-    outputs = Scaled().apply(variables, Direct(4)(jax.random.key(1), batch["image"]), 3.0)
+    outputs = Scaled().apply(variables, Direct(4)(jax.random.key(1), batch["image"]), 2.0)
     ce = optax.softmax_cross_entropy_with_integer_labels(jnp.mean(outputs, 0), batch["label"])
     np.testing.assert_allclose(stats.mean()[0], ce.mean(), rtol=1e-5)
     scores = objective.evaluate(variables, batch, step)
     np.testing.assert_allclose(scores.losses[:, 0], ce, rtol=1e-5)
+
+
+def test_schedules_need_their_horizon():
+    with pytest.raises(ValueError, match="schedule_steps"):
+        SpikingClassifier(Scaled(), Field("image", (8, 8, 1)), Direct(4),
+                          schedules={"scale": Linear(peak=1.0)})
+
+
+def test_a_saved_run_loads_back_through_dew_pipeline_in_a_fresh_process(tmp_path):
+    import json
+    import os
+    import subprocess
+    import sys
+
+    from sparx.models import SpikingMLP
+
+    neuron = LIF(tau=2.0, surrogate=sparx.surrogate.FastSigmoid(50.0))
+    net = SpikingMLP(hidden=(16,), classes=2, neuron=neuron)
+    objective = SpikingClassifier(net, Field("image", (8, 8, 1)), Rate(steps=6), readout="max")
+    run = tmp_path / "run"
+    data = Dataset.from_records(halves(64, 0), batch=32, loading=LOADING)
+    trainer = Trainer(objective, optax.adam(1e-2), key=jax.random.key(0), checkpoints=Checkpoints(str(run)))
+    state = trainer.fit(data, steps=4, log_every=4, checkpoint_every=4)
+    trainer.checkpoints.wait()
+    images = halves(8, 7)["image"]
+    expected = objective.pipeline(state).logits(images, key=3)
+    program = ("import json, sys\n"
+               "import dew\n"
+               f"task = dew.pipeline({str(run)!r})\n"
+               "assert 'sparx' in sys.modules\n"
+               "import numpy as np\n"
+               f"images = np.asarray(json.loads({json.dumps(images.tolist())!r}), np.uint8)\n"
+               "print(type(task).__name__, json.dumps(np.asarray(task.logits(images, key=3)).tolist()))\n")
+    done = subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, timeout=600,
+                          env={**os.environ, "JAX_PLATFORMS": "cpu"})
+    assert done.returncode == 0, done.stderr[-3000:]
+    name, logits = done.stdout.strip().split(" ", 1)
+    assert name == SpikingClassification.__name__
+    np.testing.assert_array_equal(np.asarray(json.loads(logits), np.float32), np.asarray(expected))

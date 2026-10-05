@@ -115,13 +115,11 @@ Pass one to any neuron: `sparx.nn.LIF(surrogate=sparx.surrogate.FastSigmoid(100.
 
 ## Models
 
-`sparx.models` builds architectures from these layers. `SEWResNet` is the spike-element-wise residual network of Fang et al. (2021), laid out as in SpikingJelly, with `sew_resnet18` and `sew_resnet34` presets. Its `neuron` argument sets every neuron of the network:
+`sparx.models` builds architectures from these layers. `SEWResNet` is the spike-element-wise residual network of Fang et al. (2021), laid out as in SpikingJelly, with `sew_resnet18` and `sew_resnet34` presets, and `SpikingMLP` is a dense network for event data (stacked, optionally recurrent or delayed, with a leaky integrator readout). Their `neuron` argument is the template every neuron of the network copies:
 
 ```python
-import functools
-
 net = sparx.models.sew_resnet18(10, width=32, stem="small",
-                                neuron=functools.partial(sparx.nn.LIF, tau=2.0, detach_reset=True))
+                                neuron=sparx.nn.LIF(tau=2.0, detach_reset=True))
 logits = net.apply(variables, frames, train=False)   # frames [T, B, 32, 32, 3] -> [T, B, 10]
 ```
 
@@ -194,7 +192,27 @@ state = trainer.fit(Dataset.from_records(train, batch=64, validation=test),
                     steps=3000, eval_every=500, metrics=[accuracy])
 ```
 
-Encoders for static data are `Direct(steps)`, `Rate(steps)` and `Latency(steps)`; uint8 fields are read as `x / 255`. The readout is `"mean"`, `"max"`, `"sum"` or `"per_step"`. `call` maps the step counter to keyword arguments for the model, for anything on a schedule, such as `call=lambda step: {"sigma": width(step)}` for a `DelayedDense`. The objective logs the batch accuracy and every spiking layer's firing rate (`rate/<layer>`), updates BatchNorm statistics, passes `train` and dropout keys to a model that takes them, and evaluates to dew's `TokenScores`, which `sparx.dew.accuracy` reads. [`examples/train_shd.py`](examples/train_shd.py) is the full script.
+Encoders for static data are `Direct(steps)`, `Rate(steps)` and `Latency(steps)`; uint8 fields are read as `x / 255`. The readout is `"mean"`, `"max"`, `"sum"` or `"per_step"`. `schedules` names model keyword arguments that follow one of dew's schedules over `schedule_steps`, such as `schedules={"sigma": Linear(peak=7.5, end=0.5)}` for a `DelayedDense`. The objective logs the batch accuracy and every spiking layer's firing rate (`rate/<layer>`), updates BatchNorm statistics, passes `train` and dropout keys to a model that takes them, and evaluates to dew's `TokenScores`, which `sparx.dew.accuracy` reads. [`examples/train_shd.py`](examples/train_shd.py) is the full script.
+
+Sparx is a dew plugin. Its models, neurons, surrogates, encoders, objective and datasets are registered in dew's registry, so a run's `run.json` records a spiking model the way it records a transformer, and `dew.pipeline(run_dir)` loads a trained classifier back in a fresh process as a `SpikingClassification`:
+
+```python
+import dew
+
+classifier = dew.pipeline("runs/shd")
+predictions = classifier(test_spikes)              # [B]
+```
+
+[`recipes/snn/train.py`](recipes/snn/train.py) is a dew recipe: every setting is a typed flag, and the model, encoder and schedules are records of registered kinds:
+
+```bash
+python recipes/snn/train.py data:shd --data.channels 140 --trainer.batch-size 64 --trainer.steps 3000 \
+    --trainer.checkpoint-dir runs --trainer.name shd \
+    --model.config '{"hidden": [128], "classes": 20, "delays": 15, "neuron": {"kind": "alif", "tau": 5.0}}' \
+    --schedules '{"sigma": {"kind": "linear", "peak": 7.5, "end": 0.5}}'
+```
+
+Training on several devices is dew's: `Trainer(..., mesh=MeshSpec(fsdp=2))` places the run, and a test checks that eight simulated CPU devices train the same parameters as one, within 1.8e-7.
 
 ## Results
 
@@ -229,14 +247,14 @@ The design keeps the sequential part of a spiking network small: synapses run ov
 
 ## Installation
 
-Sparx needs Python 3.12 or later. It has been tested with JAX 0.11.2, Flax 0.12.10 and optax 0.2.8 on CPU.
+Sparx needs Python 3.12 or later and installs dew, which it trains, distributes, checkpoints and serves through; until dew's plugin support (AshishKumar4/dew#31) merges, the dependency names that branch. It has been tested with JAX 0.11.2, Flax 0.12.10 and optax 0.2.8 on CPU.
 
 ```bash
 git clone https://github.com/AshishKumar4/sparx.git
 cd sparx
 uv venv --python 3.12 && source .venv/bin/activate
-uv pip install -e .                    # the library
-uv pip install -e ".[dew,datasets]"    # plus dew's Trainer and the SHD loader
+uv pip install -e .                    # the library, with dew
+uv pip install -e ".[datasets]"        # plus the SHD reader
 uv pip install -e ".[test]" && pytest -q
 ```
 

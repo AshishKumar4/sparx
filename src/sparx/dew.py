@@ -21,11 +21,13 @@ Importing this module needs dew installed (`pip install "sparxml[dew]"`).
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import inspect
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from typing import Literal, Protocol
+from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Literal
 
 import flax.linen as nn
 import jax
@@ -34,29 +36,39 @@ import optax
 from dew.artifacts import TokenScores
 from dew.eval import Mean
 from dew.inputs import Field, InputSpec
-from dew.objectives.base import Aux, Batch, EMASpec, Objective, Ratio, Shown, Step, Variables
+from dew.objectives.base import Aux, Batch, EMASpec, Objective, Ratio, Shown, Step, Variables, thaw
+from dew.records import JSON
+from dew.registry import objectives, schedules as dew_schedules
+from dew.training.optim import ScheduleBase
 
 from sparx import encode
 from sparx.losses import per_step_cross_entropy
 from sparx.nn import RATES
 from sparx.rates import firing_rates, rate_penalty
+from sparx.registry import spike_encoders
 
 __all__ = [
     "Direct",
-    "Encoder",
     "Events",
     "Latency",
     "Rate",
     "RateBand",
     "Readout",
+    "SpikeEncoder",
+    "SpikingClassification",
     "SpikingClassifier",
     "accuracy",
 ]
 
 
-class Encoder(Protocol):
-    """Turns one batch field `[B, ...]` into the network's time-major input `[T, B, ...]`."""
+class SpikeEncoder(ABC):
+    """Turns one batch field `[B, ...]` into the network's time-major input `[T, B, ...]`.
 
+    Encoders are registered (`sparx.registry.spike_encoders`), so a run's
+    record holds one as `{"kind": "rate", "steps": 8}` and rebuilds it.
+    """
+
+    @abstractmethod
     def __call__(self, key: jax.Array, x: jax.Array) -> jax.Array: ...
 
 
@@ -67,8 +79,9 @@ def _intensities(x: jax.Array) -> jax.Array:
     return x.astype(jnp.float32)
 
 
+@spike_encoders("direct")
 @dataclass(frozen=True)
-class Direct:
+class Direct(SpikeEncoder):
     """The values themselves as the input current at each of `steps` steps (`sparx.encode.repeat`)."""
 
     steps: int
@@ -77,8 +90,9 @@ class Direct:
         return encode.repeat(_intensities(x), self.steps)
 
 
+@spike_encoders("rate")
 @dataclass(frozen=True)
-class Rate:
+class Rate(SpikeEncoder):
     """Bernoulli spikes at the value's probability for `steps` steps (`sparx.encode.rate`).
 
     A fresh draw every step of training, from the step's key.
@@ -90,8 +104,9 @@ class Rate:
         return encode.rate(key, _intensities(x), self.steps)
 
 
+@spike_encoders("latency")
 @dataclass(frozen=True)
-class Latency:
+class Latency(SpikeEncoder):
     """One spike per value, earlier for larger values, over `steps` steps (`sparx.encode.latency`)."""
 
     steps: int
@@ -101,19 +116,19 @@ class Latency:
         return encode.latency(_intensities(x), self.steps, self.threshold)
 
 
+@spike_encoders("events")
 @dataclass(frozen=True)
-class Events:
+class Events(SpikeEncoder):
     """Data that already holds spikes or currents over time, on axis `time_axis` of each record.
 
     A record `[T, F]` arrives batched as `[B, T, F]`; the default moves its
-    time axis to the front. `dtype` is what the network receives.
+    time axis to the front. The network receives float32.
     """
 
     time_axis: int = 0
-    dtype: jnp.dtype = jnp.float32
 
     def __call__(self, key: jax.Array, x: jax.Array) -> jax.Array:
-        return jnp.moveaxis(x, self.time_axis + 1, 0).astype(self.dtype)
+        return jnp.moveaxis(x, self.time_axis + 1, 0).astype(jnp.float32)
 
 
 type Readout = Literal["mean", "max", "sum", "per_step"]
@@ -142,6 +157,7 @@ def _takes_train(model: nn.Module) -> bool:
     return "train" in inspect.signature(type(model).__call__).parameters
 
 
+@objectives("spiking_classifier")
 class SpikingClassifier(Objective[Ratio]):
     """Classify a batch field with a spiking network.
 
@@ -162,56 +178,55 @@ class SpikingClassifier(Objective[Ratio]):
     `ema_decay` keeps an exponential moving average of the parameters, which
     `evaluate` scores when the trainer passes it.
 
-    `call` supplies further keyword arguments for the model from the step
-    counter, for arguments that follow a schedule: `call=lambda step:
-    {"sigma": schedule(step)}` anneals a `sparx.nn.DelayedDense`, and
-    `{"masking": ...}` a `MaskedPSN`. It sees `Step.step`, the count of
-    accepted microbatches, in the loss and in evaluation alike.
+    `schedules` names model keyword arguments that follow a schedule over
+    `schedule_steps` steps, as dew's learning-rate schedules do:
+    `{"sigma": Linear(peak=7.5, end=0.5)}` anneals a
+    `sparx.nn.DelayedDense`, `{"masking": ...}` a `MaskedPSN`. The value is
+    read at `Step.step`, the count of accepted microbatches, in the loss and
+    in evaluation alike.
+
+    The objective is registered as `spiking_classifier`, records the model,
+    encoder, readout and schedules with every checkpoint
+    (`inference_record`), and loads back as a `SpikingClassification`
+    (`SpikingClassification.from_run`, or `pipeline(state)` after training).
     """
 
     artifact = TokenScores
     shown: Mapping[str, Shown] = {"accuracy": Shown(better="higher", percent=True)}
 
-    def __init__(self, model: nn.Module, sample: Field, encoder: Encoder, *, labels: str = "label",
+    def __init__(self, model: nn.Module, sample: Field, encoder: SpikeEncoder, *, labels: str = "label",
                  readout: Readout = "mean", rates: RateBand | None = None, ema_decay: float | None = None,
-                 call: Callable[[jax.Array], Mapping[str, jax.Array | float]] | None = None):
+                 schedules: Mapping[str, ScheduleBase] | None = None, schedule_steps: int | None = None):
         if readout not in ("mean", "max", "sum", "per_step"):
             raise ValueError(f"readout must be mean, max, sum or per_step, not {readout!r}")
+        if schedules and schedule_steps is None:
+            raise ValueError("schedules run over schedule_steps steps; give it")
         self.model = model
         self.sample = sample
         self.encoder = encoder
         self.labels = labels
-        self.readout = readout
+        self.readout: Readout = readout
         self.rates = rates
+        self.schedules = dict(schedules or {})
+        self.schedule_steps = schedule_steps
         self.inputs = InputSpec(sample=sample)
         self.ema = None if ema_decay is None else EMASpec(decay=optax.constant_schedule(ema_decay))
-        self.call = call
         self._train = _takes_train(model)
+
+    def _scheduled(self, step: jax.Array) -> dict[str, jax.Array]:
+        if self.schedule_steps is None:
+            return {}
+        return {name: jnp.asarray(schedule.schedule(self.schedule_steps)(step))
+                for name, schedule in self.schedules.items()}
 
     def _method(self, step: jax.Array, *, train: bool) -> functools.partial[jax.Array]:
         """The model's `__call__` with `train` (when it takes one) and the scheduled arguments bound."""
-        kwargs: dict[str, jax.Array | float | bool] = dict(self.call(step)) if self.call is not None else {}
-        if self._train:
-            kwargs["train"] = train
-        return functools.partial(type(self.model).__call__, **kwargs)
+        return _bound(self.model, self._train, train=train, kwargs=self._scheduled(step))
 
     def init(self, key: jax.Array, variables: Variables | None = None) -> Variables:
         encode_key, init_key = jax.random.split(key)
         x = self.encoder(encode_key, jnp.zeros((1, *self.sample.shape), jnp.float32))
         return dict(self.model.init(init_key, x, method=self._method(jnp.zeros((), jnp.int32), train=False)))
-
-    def _logits(self, outputs: jax.Array) -> jax.Array:
-        outputs = outputs.astype(jnp.float32)
-        if self.readout == "max":
-            return jnp.max(outputs, axis=0)
-        if self.readout == "sum":
-            return jnp.sum(outputs, axis=0)
-        return jnp.mean(outputs, axis=0)
-
-    def _losses(self, outputs: jax.Array, labels: jax.Array) -> jax.Array:
-        if self.readout == "per_step":
-            return per_step_cross_entropy(outputs, labels)
-        return optax.softmax_cross_entropy_with_integer_labels(self._logits(outputs), labels)
 
     def loss(self, variables: Variables, batch: Batch, step: Step) -> tuple[Ratio, Aux]:
         encode_key, dropout_key = jax.random.split(step.key)
@@ -224,9 +239,9 @@ class SpikingClassifier(Objective[Ratio]):
         # With mutable collections, apply returns the outputs and the collections.
         assert isinstance(result, tuple)
         outputs, updated = result
-        losses = self._losses(outputs, labels)
+        losses = _losses(self.readout, outputs, labels)
         total = jnp.sum(losses)
-        metrics = {"accuracy": jnp.mean(jnp.argmax(self._logits(outputs), -1) == labels)}
+        metrics = {"accuracy": jnp.mean(jnp.argmax(_logits(self.readout, outputs), -1) == labels)}
         metrics |= {f"rate/{name}": rate for name, rate in firing_rates(updated).items()}
         if self.rates is not None:
             penalty = rate_penalty(updated, self.rates.lower, self.rates.upper)
@@ -243,8 +258,8 @@ class SpikingClassifier(Objective[Ratio]):
             outputs = self.model.apply(variables, x, method=self._method(step, train=False))
             # `mutable` is unset, so apply returns the outputs alone, not a pair.
             assert not isinstance(outputs, tuple)
-            losses = self._losses(outputs, labels)
-            correct = jnp.argmax(self._logits(outputs), -1) == labels
+            losses = _losses(self.readout, outputs, labels)
+            correct = jnp.argmax(_logits(self.readout, outputs), -1) == labels
             return losses[:, None], jnp.ones_like(losses)[:, None], correct[:, None]
 
         return jax.jit(scores)
@@ -254,6 +269,121 @@ class SpikingClassifier(Objective[Ratio]):
         field, labels = jnp.asarray(batch[self.sample.key]), jnp.asarray(batch[self.labels])
         losses, weights, correct = self._scores(variables, field, labels, step.key, step.step)
         return TokenScores(losses=losses, weights=weights, correct=correct)
+
+    def inference_record(self) -> JSON:
+        """The model, encoder, readout and schedules a saved run rebuilds its classifier from."""
+        from dew.config import ModelConfig, _to_json
+        if not any(member is type(self) for member in objectives.values()):
+            return None
+        return {
+            "objective": objectives.name_of(type(self)),
+            "model": _to_json(ModelConfig.from_model(self.model), ModelConfig),
+            "sample": {"key": self.sample.key, "shape": list(self.sample.shape)},
+            "encoder": _to_json(self.encoder, SpikeEncoder),
+            "readout": self.readout,
+            "labels": self.labels,
+            "schedules": {name: _to_json(schedule, ScheduleBase)
+                          for name, schedule in self.schedules.items()},
+            "schedule_steps": self.schedule_steps,
+        }
+
+    def pipeline(self, state, *, ema: bool | None = None) -> SpikingClassification:
+        """The trained classifier over `state`'s weights, with the schedules at their final values."""
+        variables = self._pipeline_weights(state, ema)
+        final = jnp.asarray(self.schedule_steps or 0)
+        return SpikingClassification(self.model, thaw(variables), self.encoder, self.readout,
+                                     {name: float(value) for name, value in self._scheduled(final).items()})
+
+
+def _bound(model: nn.Module, takes_train: bool, *, train: bool,
+           kwargs: Mapping[str, jax.Array | float]) -> functools.partial[jax.Array]:
+    bound: dict[str, jax.Array | float | bool] = dict(kwargs)
+    if takes_train:
+        bound["train"] = train
+    return functools.partial(type(model).__call__, **bound)
+
+
+def _logits(readout: Readout, outputs: jax.Array) -> jax.Array:
+    outputs = outputs.astype(jnp.float32)
+    if readout == "max":
+        return jnp.max(outputs, axis=0)
+    if readout == "sum":
+        return jnp.sum(outputs, axis=0)
+    return jnp.mean(outputs, axis=0)
+
+
+def _losses(readout: Readout, outputs: jax.Array, labels: jax.Array) -> jax.Array:
+    if readout == "per_step":
+        return per_step_cross_entropy(outputs, labels)
+    return optax.softmax_cross_entropy_with_integer_labels(_logits(readout, outputs), labels)
+
+
+@dataclass(frozen=True)
+class SpikingClassification:
+    """A trained spiking classifier: class scores and predictions for a batch field.
+
+    `call` holds the model keyword arguments it runs with (a trained
+    `DelayedDense`'s `sigma`, say); `0` for `sigma` reads the rounded
+    delays, the network as deployed.
+    """
+
+    model: nn.Module
+    variables: Variables
+    encoder: SpikeEncoder
+    readout: Readout = "mean"
+    call: Mapping[str, float] = field(default_factory=dict)
+
+    @functools.cached_property
+    def _logits(self):
+        method = _bound(self.model, _takes_train(self.model), train=False, kwargs=self.call)
+
+        def logits(variables, x, key):
+            outputs = self.model.apply(variables, self.encoder(key, x), method=method)
+            assert not isinstance(outputs, tuple)
+            return _logits(self.readout, outputs)
+
+        return jax.jit(logits)
+
+    def logits(self, x: jax.Array, key: jax.Array | int = 0) -> jax.Array:
+        """Class scores `[B, classes]` for a batch field `[B, ...]`; `key` drives a random encoder."""
+        key = jax.random.key(key) if isinstance(key, int) else key
+        return self._logits(self.variables, jnp.asarray(x), key)
+
+    def __call__(self, x: jax.Array, key: jax.Array | int = 0) -> jax.Array:
+        """Predicted classes `[B]` for a batch field `[B, ...]`."""
+        return jnp.argmax(self.logits(x, key), axis=-1)
+
+    @classmethod
+    def from_run(cls, directory: str, *, ema: bool | None = None, step: int | str | None = None,
+                 mesh=None, layout=None, dtype=None, param_dtype=None) -> SpikingClassification:
+        """Load the classifier a `spiking_classifier` run in `directory` saved: the model its
+        record names over the selected checkpoint's weights (the average when the run kept one,
+        unless `ema` is False), placed on `mesh` under `layout`."""
+        from dew.checkpoints import Checkpoints
+        from dew.config import ModelConfig
+        from dew.inference.tasks import run_record
+        from dew.records import record as named_fields
+
+        record = run_record(directory, step)
+        config = ModelConfig.from_dict(named_fields(record["model"], "model"))
+        if dtype is not None:
+            config = dataclasses.replace(config, dtype=dtype)
+        variables = Checkpoints(directory).variables(ema=ema, step=step, mesh=mesh, layout=layout,
+                                                     param_dtype=param_dtype)
+        encoder = spike_encoders.from_record(named_fields(record["encoder"], "encoder"))
+        steps = record.get("schedule_steps")
+        call: dict[str, float] = {}
+        if isinstance(steps, int):
+            for name, value in named_fields(record["schedules"], "schedules").items():
+                schedule = dew_schedules.from_record(named_fields(value, name))
+                call[name] = float(jnp.asarray(schedule.schedule(steps)(steps)))
+        readout = record["readout"]
+        if readout not in ("mean", "max", "sum", "per_step"):
+            raise ValueError(f"the run records an unknown readout {readout!r}")
+        return cls(config.build(), thaw(variables), encoder, readout, call)
+
+
+SpikingClassifier.saved_task = SpikingClassification
 
 
 accuracy = Mean(lambda scores, batch: scores.correct[:, 0], name="accuracy", better="higher",

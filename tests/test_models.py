@@ -1,4 +1,3 @@
-import functools
 
 import jax
 import jax.numpy as jnp
@@ -27,7 +26,7 @@ def test_connect_functions_follow_spikingjelly():
 def test_a_silent_residual_branch_passes_the_input_through():
     # The point of SEW: with the residual neurons silent, an ADD block is the identity.
     x = frames(1, (3, 2, 8, 8, 4))
-    block = SEWBlock(4, neuron=functools.partial(sparx.nn.LIF, threshold=1e9))
+    block = SEWBlock(4, neuron=sparx.nn.LIF(threshold=1e9))
     variables = block.init(jax.random.key(0), x, train=False)
     np.testing.assert_array_equal(block.apply(variables, x, train=False), x)
 
@@ -54,7 +53,7 @@ def test_resnet18_has_the_stage_layout_and_per_step_logits():
 
 def test_a_small_sew_resnet_fits_a_batch():
     net = SEWResNet((1, 1), 2, width=8, stem="small",
-                    neuron=functools.partial(sparx.nn.LIF, tau=2.0, detach_reset=True))
+                    neuron=sparx.nn.LIF(tau=2.0, detach_reset=True))
     x = frames(3, (4, 8, 8, 8, 1))
     labels = jnp.asarray([0, 1] * 4)
     x = x.at[:, labels == 1, :4].set(1.0)  # class 1 is bright on top

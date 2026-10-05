@@ -25,6 +25,8 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 
+from sparx.registry import surrogates
+
 __all__ = [
     "ATan",
     "FastSigmoid",
@@ -71,6 +73,7 @@ def _spike_jvp(surrogate: Surrogate, primals: tuple[jax.Array], tangents: tuple[
     return _spike(x, surrogate), surrogate.derivative(x).astype(x.dtype) * dx
 
 
+@surrogates("atan")
 @dataclass(frozen=True)
 class ATan(Surrogate):
     """The arctangent step's derivative, `alpha / 2 / (1 + (pi / 2 * alpha * x)^2)`.
@@ -88,6 +91,7 @@ class ATan(Surrogate):
         return self.alpha / 2 / (1 + (math.pi / 2 * self.alpha * x) ** 2)
 
 
+@surrogates("sigmoid")
 @dataclass(frozen=True)
 class Sigmoid(Surrogate):
     """The logistic step's derivative, `alpha * sigmoid(alpha x) * (1 - sigmoid(alpha x))`.
@@ -103,6 +107,7 @@ class Sigmoid(Surrogate):
         return self.alpha * s * (1 - s)
 
 
+@surrogates("fast_sigmoid")
 @dataclass(frozen=True)
 class FastSigmoid(Surrogate):
     """SuperSpike's derivative, `1 / (slope * |x| + 1)^2`.
@@ -119,6 +124,7 @@ class FastSigmoid(Surrogate):
         return 1 / (self.slope * jnp.abs(x) + 1) ** 2
 
 
+@surrogates("triangle")
 @dataclass(frozen=True)
 class Triangle(Surrogate):
     """A piecewise linear bump, `scale * max(0, 1 - |x| / width)`.
@@ -136,6 +142,7 @@ class Triangle(Surrogate):
         return self.scale * jnp.maximum(0, 1 - jnp.abs(x) / self.width)
 
 
+@surrogates("rectangle")
 @dataclass(frozen=True)
 class Rectangle(Surrogate):
     """A box of height `1 / width` over `|x| < width / 2`, which integrates to 1.
@@ -150,6 +157,7 @@ class Rectangle(Surrogate):
         return (jnp.abs(x) < self.width / 2) / self.width
 
 
+@surrogates("gaussian")
 @dataclass(frozen=True)
 class Gaussian(Surrogate):
     """The normal density with standard deviation `sigma`, which integrates to 1.
@@ -163,6 +171,7 @@ class Gaussian(Surrogate):
         return jnp.exp(-0.5 * (x / self.sigma) ** 2) / (self.sigma * math.sqrt(2 * math.pi))
 
 
+@surrogates("straight_through")
 @dataclass(frozen=True)
 class StraightThrough(Surrogate):
     """The identity's derivative, 1 everywhere: the straight-through estimator."""

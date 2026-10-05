@@ -13,16 +13,23 @@ authors = [
 ]
 license = "MIT"
 dependencies = [
-    "jax>=0.5",
-    "flax>=0.10",
-    "optax>=0.2",
+    # Dew is the platform sparx trains, distributes, checkpoints and serves
+    # through (docs/design.md). It is not on PyPI, so the dependency names its
+    # repository, at the branch that adds the plugin registry
+    # (AshishKumar4/dew#31) until that merges.
+    "dewml @ git+https://github.com/AshishKumar4/dew@registry-plugins",
+    "jax",
+    "flax",
+    "optax",
     "numpy",
 ]
 
+# Dew's registry reads sparx's registrations without importing it first, so a
+# run recorded with a sparx model loads in a fresh process.
+[project.entry-points."dew.plugins"]
+sparx = "sparx"
+
 [project.optional-dependencies]
-# sparx.dew: spiking objectives for dew's Trainer. Dew is not on PyPI, so the
-# extra names the repository.
-dew = ["dewml @ git+https://github.com/AshishKumar4/dew"]
 # sparx.datasets reads the published HDF5 files.
 datasets = ["h5py"]
 test = ["pytest", "ruff==0.14.3", "h5py"]
@@ -60,9 +67,6 @@ typeCheckingMode = "standard"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "tests"]
-markers = [
-    "dew: tests that train through dew's Trainer; skipped when dew is not installed",
-]
 filterwarnings = [
     'error::DeprecationWarning:sparx($|\.)',
     'error::FutureWarning:sparx($|\.)',

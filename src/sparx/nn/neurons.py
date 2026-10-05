@@ -45,6 +45,7 @@ from sparx.cells import (
     SynapticCell,
     run,
 )
+from sparx.registry import neurons
 from sparx.surrogate import ATan, Surrogate
 
 __all__ = [
@@ -133,6 +134,7 @@ def _decay(module: nn.Module, name: str, tau: float, learn: bool, features: int)
     return jax.nn.sigmoid(module.param(name, nn.initializers.constant(logit), (features,), jnp.float32))
 
 
+@neurons("lif")
 class LIF(Neuron):
     """Leaky integrate-and-fire (`sparx.cells.LIFCell`), time constant `tau` steps.
 
@@ -151,6 +153,7 @@ class LIF(Neuron):
                        self.reset, self.surrogate, self.detach_reset)
 
 
+@neurons("if")
 class IF(Neuron):
     """Integrate-and-fire: LIF without leak."""
 
@@ -163,6 +166,7 @@ class IF(Neuron):
         return LIFCell(1.0, self.threshold, self.reset, self.surrogate, self.detach_reset)
 
 
+@neurons("li")
 class LI(Neuron):
     """A leaky integrator readout (`sparx.cells.LICell`); returns its membrane, `[T, ...]`."""
 
@@ -174,6 +178,7 @@ class LI(Neuron):
         return LICell(_decay(self, "decay", self.tau, self.learn_tau, x.shape[-1]))
 
 
+@neurons("synaptic")
 class Synaptic(Neuron):
     """Current-based LIF (`sparx.cells.SynapticCell`): synaptic time constant
     `tau_synapse`, membrane time constant `tau`."""
@@ -194,6 +199,7 @@ class Synaptic(Neuron):
             self.threshold, self.reset, self.surrogate, self.detach_reset)
 
 
+@neurons("alif")
 class ALIF(Neuron):
     """Adaptive-threshold LIF (`sparx.cells.ALIFCell`).
 
@@ -219,6 +225,7 @@ class ALIF(Neuron):
             self.beta, self.threshold, self.reset, self.surrogate, self.detach_reset)
 
 
+@neurons("izhikevich")
 class Izhikevich(Neuron):
     """Izhikevich's neuron (`sparx.cells.IzhikevichCell`); defaults are regular spiking."""
 
@@ -233,6 +240,7 @@ class Izhikevich(Neuron):
         return IzhikevichCell(self.a, self.b, self.c, self.d, self.dt, self.surrogate)
 
 
+@neurons("recurrent")
 class Recurrent(Neuron):
     """Feed `neuron`'s spikes back into its input through a learned `[F, F]` matrix.
 

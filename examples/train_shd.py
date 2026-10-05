@@ -1,6 +1,6 @@
 """Train a spiking network on the Spiking Heidelberg Digits with dew's Trainer.
 
-    pip install -e ".[dew,datasets]"
+    pip install -e ".[datasets]"
     python examples/train_shd.py --steps 3000
 
 Downloads SHD (169 MB) into ~/.cache/sparx on first use, bins it into 100
@@ -24,41 +24,18 @@ every delay rounded to a whole step (`sigma=0`), the network as deployed.
 import argparse
 import time
 
-import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 from dew import Checkpoints, Field, Trainer
 from dew.data import Dataset
+from dew.training.optim import Linear
 
 import sparx
 from sparx.datasets import shd
 from sparx.dew import Events, RateBand, SpikingClassifier, accuracy
-
-
-class Net(nn.Module):
-    """700 channels -> adaptive LIF, optionally recurrent -> 20-class leaky integrator readout."""
-
-    hidden: int
-    tau: float
-    tau_adapt: float
-    dropout: float
-    recurrent: bool
-    surrogate: sparx.surrogate.Surrogate
-    delays: int
-
-    @nn.compact
-    def __call__(self, x, train: bool, sigma: float | jax.Array = 0):
-        if self.delays:
-            x = sparx.nn.DelayedDense(self.hidden, self.delays)(x, sigma)
-        else:
-            x = nn.Dense(self.hidden)(x)
-        neuron = sparx.nn.ALIF(tau=self.tau, tau_adapt=self.tau_adapt, beta=0.2, learn_tau=True,
-                               detach_reset=True, surrogate=self.surrogate)
-        x = sparx.nn.Recurrent(neuron)(x) if self.recurrent else neuron(x)
-        x = nn.Dropout(self.dropout, deterministic=not train)(x)
-        return sparx.nn.LI(tau=self.tau, learn_tau=True)(nn.Dense(20)(x))
+from sparx.models import SpikingMLP
 
 
 def main():
@@ -81,11 +58,14 @@ def main():
     train, test = shd("train", channels=args.channels), shd("test", channels=args.channels)
     data = Dataset.from_records(train, batch=args.batch, validation=test)
     surrogate = sparx.surrogate.ATan() if args.surrogate == "atan" else sparx.surrogate.FastSigmoid(100.0)
-    net = Net(args.hidden, args.tau, args.tau_adapt, args.dropout, args.recurrent, surrogate, args.delays)
-    width = optax.linear_schedule(args.delays / 2, 0.5, args.steps)
+    neuron = sparx.nn.ALIF(tau=args.tau, tau_adapt=args.tau_adapt, beta=0.2, learn_tau=True,
+                           detach_reset=True, surrogate=surrogate)
+    net = SpikingMLP(hidden=(args.hidden,), classes=20, neuron=neuron, recurrent=args.recurrent,
+                     delays=args.delays, dropout=args.dropout, readout_tau=args.tau, learn_readout_tau=True)
+    width = {"sigma": Linear(peak=args.delays / 2, end=0.5)} if args.delays else None
     objective = SpikingClassifier(net, Field("spikes", train["spikes"].shape[1:]), Events(), readout="max",
                                   rates=RateBand(lower=0.01, upper=0.3, weight=1.0),
-                                  call=(lambda step: {"sigma": width(step)}) if args.delays else None)
+                                  schedules=width, schedule_steps=args.steps)
     schedule = optax.cosine_decay_schedule(args.learning_rate, args.steps)
     optimizer = optax.chain(optax.clip_by_global_norm(args.clip), optax.adamw(schedule, weight_decay=1e-4))
     trainer = Trainer(objective, optimizer, key=jax.random.key(0), checkpoints=Checkpoints(args.run))
@@ -95,7 +75,7 @@ def main():
 
     @jax.jit
     def predict(variables, spikes):
-        outputs = net.apply(variables, jnp.moveaxis(spikes, 1, 0).astype(jnp.float32), train=False)
+        outputs = net.apply(variables, jnp.moveaxis(spikes, 1, 0).astype(jnp.float32))
         return jnp.argmax(jnp.max(outputs, axis=0), -1)
 
     predictions = np.concatenate([predict(state.variables, test["spikes"][i:i + 256])

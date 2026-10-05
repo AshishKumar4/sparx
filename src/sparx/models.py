@@ -10,24 +10,44 @@ input through unchanged. The layout follows SpikingJelly's
 stages of basic blocks at 64, 128, 256 and 512 channels, global average
 pooling and a linear head, all over time-major `[T, B, H, W, C]` inputs.
 
-`neuron` builds every neuron layer. It is any callable returning a
-`sparx.nn.Neuron`, such as `functools.partial(sparx.nn.LIF, tau=2.0,
-detach_reset=True)`, and is called inside the block, so each neuron belongs
-to the block that uses it.
+`SpikingMLP` is the dense network for event data such as SHD: stacked dense
+(or delayed) synapses, optionally recurrent spiking layers, and a leaky
+integrator readout.
+
+`neuron` is the template every neuron layer of a model copies, such as
+`sparx.nn.LIF(tau=2.0, detach_reset=True)`. It is a registered value, so a
+run's record holds it as `{"kind": "lif", ...}` and rebuilds the model. Each
+copy belongs to the block that uses it, so its parameters (a learned time
+constant) are that block's own.
+
+Both models are registered in dew's model registry, `sew_resnet` and
+`spiking_mlp`, and take `train` as dew's objectives pass it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from typing import Literal
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+from dew.registry import models
 
-from sparx.nn.neurons import LIF, Neuron
+from sparx.nn.delays import DelayedDense
+from sparx.nn.neurons import LI, LIF, Neuron, Recurrent
 
-__all__ = ["SEWBlock", "SEWResNet", "sew_resnet18", "sew_resnet34"]
+__all__ = ["SEWBlock", "SEWResNet", "SpikingMLP", "copy_neuron", "sew_resnet18", "sew_resnet34"]
+
+
+def copy_neuron(template: Neuron, owner: nn.Module, name: str) -> Neuron:
+    """A copy of `template` that is `owner`'s child called `name`, wherever the template was built."""
+    return template.clone(parent=owner, name=name)
+
+
+def _template(neuron: Neuron) -> Neuron:
+    """`neuron` unbound, to hand to a submodule as its own template."""
+    return neuron.clone(parent=None)
 
 type Connect = Literal["add", "and", "iand"]
 """How a SEW block combines its shortcut `s` with its residual output `r`:
@@ -59,7 +79,7 @@ class SEWBlock(nn.Module):
     features: int
     strides: int = 1
     connect: Connect = "add"
-    neuron: Callable[..., Neuron] = LIF
+    neuron: Neuron = LIF()
 
     @nn.compact
     def __call__(self, x: jax.Array, train: bool) -> jax.Array:
@@ -68,15 +88,16 @@ class SEWBlock(nn.Module):
                         kernel_init=_conv_init, name=f"{name}_conv")(x)
             return nn.BatchNorm(use_running_average=not train, momentum=0.9, name=f"{name}_bn")(x)
 
-        residual = self.neuron(name="sn1")(conv_bn(x, self.features, 3, self.strides, "first"))
-        residual = self.neuron(name="sn2")(conv_bn(residual, self.features, 3, 1, "second"))
+        residual = copy_neuron(self.neuron, self, "sn1")(conv_bn(x, self.features, 3, self.strides, "first"))
+        residual = copy_neuron(self.neuron, self, "sn2")(conv_bn(residual, self.features, 3, 1, "second"))
         shortcut = x
         if self.strides != 1 or x.shape[-1] != self.features:
             shortcut = conv_bn(x, self.features, 1, self.strides, "downsample")
-            shortcut = self.neuron(name="downsample_sn")(shortcut)
+            shortcut = copy_neuron(self.neuron, self, "downsample_sn")(shortcut)
         return connect(shortcut, residual, self.connect)
 
 
+@models("sew_resnet")
 class SEWResNet(nn.Module):
     """A SEW ResNet over `[T, B, H, W, C]` inputs, returning per-step logits `[T, B, classes]`.
 
@@ -94,7 +115,7 @@ class SEWResNet(nn.Module):
     width: int = 64
     connect: Connect = "add"
     stem: Literal["imagenet", "small"] = "imagenet"
-    neuron: Callable[..., Neuron] = LIF
+    neuron: Neuron = LIF()
 
     @nn.compact
     def __call__(self, x: jax.Array, train: bool) -> jax.Array:
@@ -103,7 +124,7 @@ class SEWResNet(nn.Module):
         else:
             x = nn.Conv(self.width, (3, 3), padding=1, use_bias=False, kernel_init=_conv_init)(x)
         x = nn.BatchNorm(use_running_average=not train, momentum=0.9)(x)
-        x = self.neuron(name="stem_sn")(x)
+        x = copy_neuron(self.neuron, self, "stem_sn")(x)
         if self.stem == "imagenet":
             # torch's MaxPool2d(3, 2, padding=1) pads with -inf, which never wins the max.
             pad = [(0, 0)] * (x.ndim - 3) + [(1, 1), (1, 1), (0, 0)]
@@ -111,7 +132,7 @@ class SEWResNet(nn.Module):
         for stage, blocks in enumerate(self.stages):
             for block in range(blocks):
                 strides = 2 if stage > 0 and block == 0 else 1
-                x = SEWBlock(self.width * 2 ** stage, strides, self.connect, self.neuron,
+                x = SEWBlock(self.width * 2 ** stage, strides, self.connect, _template(self.neuron),
                              name=f"stage{stage + 1}_block{block + 1}")(x, train)
         x = jnp.mean(x, axis=(-3, -2))
         return nn.Dense(self.classes)(x)
@@ -125,3 +146,42 @@ def sew_resnet18(classes: int, **kwargs) -> SEWResNet:
 def sew_resnet34(classes: int, **kwargs) -> SEWResNet:
     """SEW-ResNet-34: stages of `(3, 4, 6, 3)` basic blocks."""
     return SEWResNet((3, 4, 6, 3), classes, **kwargs)
+
+
+@models("spiking_mlp")
+class SpikingMLP(nn.Module):
+    """Dense spiking layers over `[T, B, ...]` with a leaky integrator readout `[T, B, classes]`.
+
+    Each width in `hidden` is a dense synapse followed by a copy of `neuron`;
+    `recurrent` feeds each hidden layer's spikes back to itself
+    (`sparx.nn.Recurrent`). `delays` above 0 makes the first synapse a
+    `sparx.nn.DelayedDense` with delays of up to that many steps, whose
+    Gaussian width is the call's `sigma` (0, the rounded delays, by default).
+    Trailing input axes are flattened. `dropout` acts on hidden spikes in
+    training.
+    """
+
+    hidden: Sequence[int]
+    classes: int
+    neuron: Neuron = LIF()
+    recurrent: bool = False
+    delays: int = 0
+    dropout: float = 0.0
+    readout_tau: float = 2.0
+    learn_readout_tau: bool = False
+
+    @nn.compact
+    def __call__(self, x: jax.Array, train: bool = False, sigma: float | jax.Array = 0) -> jax.Array:
+        x = x.reshape(*x.shape[:2], -1)
+        for layer, width in enumerate(self.hidden):
+            if layer == 0 and self.delays:
+                x = DelayedDense(width, self.delays, name="delayed_0")(x, sigma)
+            else:
+                x = nn.Dense(width, name=f"dense_{layer}")(x)
+            if self.recurrent:
+                x = Recurrent(neuron=_template(self.neuron), name=f"recurrent_{layer}")(x)
+            else:
+                x = copy_neuron(self.neuron, self, f"neuron_{layer}")(x)
+            x = nn.Dropout(self.dropout, deterministic=not train)(x)
+        x = nn.Dense(self.classes, name="readout")(x)
+        return LI(tau=self.readout_tau, learn_tau=self.learn_readout_tau, name="integrator")(x)

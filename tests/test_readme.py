@@ -68,5 +68,5 @@ def test_the_sew_resnet_snippet_returns_per_step_logits():
     net = sparx.models.sew_resnet18(10, width=32, stem="small")
     scope = {"sparx": sparx, "frames": frames,
              "variables": net.init(jax.random.key(0), frames, train=False)}
-    exec(_block("import functools"), scope)
+    exec(_block("net = sparx.models.sew_resnet18"), scope)
     assert scope["logits"].shape == (2, 1, 10)
