@@ -9,7 +9,8 @@ network over time, and reads its outputs as class scores.
     import optax
     from dew import Field, Trainer
     from dew.data import Dataset
-    from sparx.dew import Rate, SpikingClassifier, accuracy
+    from sparx.dew import SpikingClassifier, accuracy
+    from sparx.encode import Rate
 
     objective = SpikingClassifier(net, Field("image", (28, 28, 1)), Rate(steps=16))
     trainer = Trainer(objective, optax.adam(1e-3), key=0)
@@ -24,7 +25,6 @@ from __future__ import annotations
 import dataclasses
 import functools
 import inspect
-from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
@@ -41,7 +41,7 @@ from dew.records import JSON
 from dew.registry import objectives, schedules as dew_schedules
 from dew.training.optim import ScheduleBase
 
-from sparx import encode
+from sparx.encode import SpikeEncoder
 from sparx.losses import per_step_cross_entropy, van_rossum
 from sparx.nn import RATES
 from sparx.rates import firing_rates, rate_penalty
@@ -49,87 +49,12 @@ from sparx.registry import spike_encoders
 
 __all__ = [
     "ActivityFit",
-    "Direct",
-    "Events",
-    "Latency",
-    "Rate",
     "RateBand",
     "Readout",
-    "SpikeEncoder",
     "SpikingClassification",
     "SpikingClassifier",
     "accuracy",
 ]
-
-
-class SpikeEncoder(ABC):
-    """Turns one batch field `[B, ...]` into the network's time-major input `[T, B, ...]`.
-
-    Encoders are registered (`sparx.registry.spike_encoders`), so a run's
-    record holds one as `{"name": "rate", "fields": {"steps": 8}}` and rebuilds it.
-    """
-
-    @abstractmethod
-    def __call__(self, key: jax.Array, x: jax.Array) -> jax.Array: ...
-
-
-def _intensities(x: jax.Array) -> jax.Array:
-    """uint8 pixels as [0, 1]; other values unchanged, as float32."""
-    if x.dtype == jnp.uint8:
-        return x.astype(jnp.float32) / 255
-    return x.astype(jnp.float32)
-
-
-@spike_encoders("direct")
-@dataclass(frozen=True)
-class Direct(SpikeEncoder):
-    """The values themselves as the input current at each of `steps` steps (`sparx.encode.repeat`)."""
-
-    steps: int
-
-    def __call__(self, key: jax.Array, x: jax.Array) -> jax.Array:
-        return encode.repeat(_intensities(x), self.steps)
-
-
-@spike_encoders("rate")
-@dataclass(frozen=True)
-class Rate(SpikeEncoder):
-    """Bernoulli spikes at the value's probability for `steps` steps (`sparx.encode.rate`).
-
-    A fresh draw every step of training, from the step's key.
-    """
-
-    steps: int
-
-    def __call__(self, key: jax.Array, x: jax.Array) -> jax.Array:
-        return encode.rate(key, _intensities(x), self.steps)
-
-
-@spike_encoders("latency")
-@dataclass(frozen=True)
-class Latency(SpikeEncoder):
-    """One spike per value, earlier for larger values, over `steps` steps (`sparx.encode.latency`)."""
-
-    steps: int
-    threshold: float = 0.01
-
-    def __call__(self, key: jax.Array, x: jax.Array) -> jax.Array:
-        return encode.latency(_intensities(x), self.steps, self.threshold)
-
-
-@spike_encoders("events")
-@dataclass(frozen=True)
-class Events(SpikeEncoder):
-    """Data that already holds spikes or currents over time, on axis `time_axis` of each record.
-
-    A record `[T, F]` arrives batched as `[B, T, F]`; the default moves its
-    time axis to the front. The network receives float32.
-    """
-
-    time_axis: int = 0
-
-    def __call__(self, key: jax.Array, x: jax.Array) -> jax.Array:
-        return jnp.moveaxis(x, self.time_axis + 1, 0).astype(jnp.float32)
 
 
 type Readout = Literal["mean", "max", "sum", "per_step"]
@@ -165,7 +90,8 @@ class SpikingClassifier(Objective[Ratio]):
     `model` maps the encoder's time-major input `[T, B, ...]` to outputs
     `[T, B, classes]`: spikes, or the membrane of a `sparx.nn.LI` readout.
     `sample` names the field and its per-example shape; `labels` names the
-    integer class field. uint8 fields are read as `x / 255`.
+    integer class field. `encoder` is one of `sparx.encode`'s, which read a
+    uint8 field of intensities as `x / 255`.
 
     The loss is the mean cross entropy of the `readout` over the batch, plus
     the `rates` penalty when given. Metrics report the batch accuracy, each
@@ -273,17 +199,17 @@ class SpikingClassifier(Objective[Ratio]):
 
     def inference_record(self) -> JSON:
         """The model, encoder, readout and schedules a saved run rebuilds its classifier from."""
-        from dew.config import ModelConfig, _to_json
+        from dew.config import ModelConfig, to_json
         if not any(member is type(self) for member in objectives.values()):
             return None
         return {
             "objective": objectives.name_of(type(self)),
-            "model": _to_json(ModelConfig.from_model(self.model), ModelConfig),
+            "model": to_json(ModelConfig.from_model(self.model), ModelConfig),
             "sample": {"key": self.sample.key, "shape": list(self.sample.shape)},
-            "encoder": _to_json(self.encoder, SpikeEncoder),
+            "encoder": to_json(self.encoder, SpikeEncoder),
             "readout": self.readout,
             "labels": self.labels,
-            "schedules": {name: _to_json(schedule, ScheduleBase)
+            "schedules": {name: to_json(schedule, ScheduleBase)
                           for name, schedule in self.schedules.items()},
             "schedule_steps": self.schedule_steps,
         }

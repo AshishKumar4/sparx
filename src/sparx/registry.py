@@ -7,7 +7,7 @@ datasets into dew's own tables (`dew.registry.models`, `objectives`,
 
 - `surrogates`: the derivatives spikes train through (`sparx.surrogate`).
 - `neurons`: neuron layers (`sparx.nn`), which a model holds as a field.
-- `spike_encoders`: how a batch field becomes a spike train (`sparx.dew`).
+- `spike_encoders`: how a batch field becomes a spike train (`sparx.encode`).
 
 Each table records a member as dew records every registered member,
 `{"name": name, "fields": {...}}`, and is shared with dew

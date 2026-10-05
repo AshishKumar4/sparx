@@ -34,7 +34,8 @@ from dew.training.optim import Linear
 
 import sparx
 from sparx.datasets import shd
-from sparx.dew import Events, RateBand, SpikingClassifier, accuracy
+from sparx.dew import RateBand, SpikingClassifier, accuracy
+from sparx.encode import Events
 from sparx.models import SpikingMLP
 
 

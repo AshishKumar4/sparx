@@ -5,7 +5,7 @@ Spiking Data Sets for the Systematic Evaluation of Spiking Neural Networks",
 IEEE TNNLS 2020): spoken digits 0-9 in English and German, 20 classes,
 rendered as spikes on 700 cochlear channels. Each record becomes a
 `[steps, channels]` array of spike counts, batch-major as dew's loaders
-expect; `sparx.dew.Events()` moves the time axis to the front. `SHD` is the
+expect; `sparx.encode.Events()` moves the time axis to the front. `SHD` is the
 same data as a registered dew dataset spec (`datasets["shd"]`), which a
 recipe names on its command line.
 
@@ -100,7 +100,7 @@ class SHD(DatasetSpec):
     """The Spiking Heidelberg Digits as a dew dataset: the train split to train on, the test
     split to validate on (SHD has no separate validation split), binned by `shd`.
 
-    Records are `{"spikes": uint8 [steps, channels], "label": int32}`; `sparx.dew.Events()`
+    Records are `{"spikes": uint8 [steps, channels], "label": int32}`; `sparx.encode.Events()`
     turns a batch into the network's time-major input. Both splits are held in memory
     (about 700 MB at 100 steps over 700 channels), shuffled from `seed` every epoch, and
     each process reads its share of every batch.

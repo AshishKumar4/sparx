@@ -48,7 +48,7 @@ class Net(nn.Module):
 net = Net()
 images = jax.random.uniform(jax.random.key(0), (32, 784))  # intensities in [0, 1]
 labels = jnp.zeros(32, jnp.int32)
-spikes = sparx.encode.rate(jax.random.key(1), images, steps=8)  # [8, 32, 784]
+spikes = sparx.encode.Rate(steps=8)(jax.random.key(1), images)  # [8, 32, 784]
 params = net.init(jax.random.key(2), spikes)
 
 
@@ -132,7 +132,7 @@ logits = net.apply(variables, frames, train=False)   # frames [T, B, 32, 32, 3] 
 
 ## Encoding, losses and firing rates
 
-`sparx.encode` turns data into time-major spike trains: `rate` (Bernoulli spikes at the value's probability), `latency` (one spike, earlier for larger values), `delta` (spikes on changes of a signal) and `repeat` (the values as a constant input current, direct encoding).
+`sparx.encode` turns a batch field `[B, ...]` into time-major input `[T, B, ...]`. An encoder is a registered frozen dataclass called as `encoder(key, x)`: `Rate(steps)` (Bernoulli spikes at the value's probability), `Latency(steps)` (one spike, earlier for larger values), `Direct(steps)` (the values as a constant input current, direct encoding), `Delta(threshold)` (spikes on changes of a signal over each record's time axis) and `Events()` (records that already hold spikes over time). The first four read uint8 fields as `x / 255`; `Events` passes spike counts unscaled.
 
 `sparx.losses` has losses over the whole output sequence, one value per example: `per_step_cross_entropy` asks every time step to classify (Deng et al. 2022) and `rate_mse` pulls each output neuron's firing rate toward a target. For a loss on one readout, reduce time first and use optax: `jnp.max(v, axis=0)` of an `LI` membrane, its mean, or the spike count.
 
@@ -184,7 +184,8 @@ from dew import Checkpoints, Field, Trainer
 from dew.data import Dataset
 
 from sparx.datasets import shd
-from sparx.dew import Events, RateBand, SpikingClassifier, accuracy
+from sparx.dew import RateBand, SpikingClassifier, accuracy
+from sparx.encode import Events
 
 train, test = shd("train"), shd("test")           # {"spikes": [N, 100, 700], "label": [N]}
 objective = SpikingClassifier(
@@ -197,7 +198,7 @@ state = trainer.fit(Dataset.from_records(train, batch=64, validation=test),
                     steps=3000, eval_every=500, metrics=[accuracy])
 ```
 
-Encoders for static data are `Direct(steps)`, `Rate(steps)` and `Latency(steps)`; uint8 fields are read as `x / 255`. The readout is `"mean"`, `"max"`, `"sum"` or `"per_step"`. `schedules` names model keyword arguments that follow one of dew's schedules over `schedule_steps`, such as `schedules={"sigma": Linear(peak=7.5, end=0.5)}` for a `DelayedDense`. The objective logs the batch accuracy and every spiking layer's firing rate (`rate/<layer>`), updates BatchNorm statistics, passes `train` and dropout keys to a model that takes them, and evaluates to dew's `TokenScores`, which `sparx.dew.accuracy` reads. [`examples/train_shd.py`](examples/train_shd.py) is the full script.
+The encoder is any of `sparx.encode`'s, the same objects a plain JAX loop calls. The readout is `"mean"`, `"max"`, `"sum"` or `"per_step"`. `schedules` names model keyword arguments that follow one of dew's schedules over `schedule_steps`, such as `schedules={"sigma": Linear(peak=7.5, end=0.5)}` for a `DelayedDense`. The objective logs the batch accuracy and every spiking layer's firing rate (`rate/<layer>`), updates BatchNorm statistics, passes `train` and dropout keys to a model that takes them, and evaluates to dew's `TokenScores`, which `sparx.dew.accuracy` reads. [`examples/train_shd.py`](examples/train_shd.py) is the full script.
 
 Sparx is a dew plugin. Its models, neurons, surrogates, encoders, objective and datasets are registered in dew's registry, so a run's `run.json` records a spiking model the way it records a transformer, and `dew.pipeline(run_dir)` loads a trained classifier back in a fresh process as a `SpikingClassification`:
 

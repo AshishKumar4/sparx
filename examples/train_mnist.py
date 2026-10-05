@@ -68,8 +68,10 @@ def main():
     optimizer = optax.adam(args.learning_rate)
     opt_state = optimizer.init(params)
 
+    encoder = sparx.encode.Rate(args.steps)
+
     def logits(params, key, images):
-        spikes = sparx.encode.rate(key, images.astype(jnp.float32) / 255, args.steps)
+        spikes = encoder(key, images)  # uint8 pixels are read as x / 255
         return jnp.mean(net.apply(params, spikes), axis=0)
 
     @jax.jit

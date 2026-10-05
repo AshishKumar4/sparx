@@ -12,16 +12,8 @@ from dew.objectives.base import Step
 from dew.training.optim import Linear
 
 import sparx
-from sparx.dew import (
-    ActivityFit,
-    Direct,
-    Events,
-    Rate,
-    RateBand,
-    SpikingClassification,
-    SpikingClassifier,
-    accuracy,
-)
+from sparx.dew import ActivityFit, RateBand, SpikingClassification, SpikingClassifier, accuracy
+from sparx.encode import Direct, Events, Rate
 from sparx.nn import LI, LIF
 
 LOADING = Loading(workers=0, threads=1, read_buffer=1)

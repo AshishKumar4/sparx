@@ -6,7 +6,7 @@ Networks are Flax linen modules over time-major spike trains `[T, ...]`.
 - `sparx.cells`: neuron dynamics as pure JAX, and `run`, which scans them over time.
 - `sparx.nn`: Flax layers over those cells, parallel spiking neurons and delayed synapses.
 - `sparx.models`: architectures built from them (SEW ResNet).
-- `sparx.encode`: data to spike trains.
+- `sparx.encode`: the registered encoders that turn data into spike trains.
 - `sparx.losses` and `sparx.rates`: losses over time, firing-rate readouts and penalties.
 - `sparx.dew`: spiking objectives for dew's `Trainer` (needs dew installed).
 """

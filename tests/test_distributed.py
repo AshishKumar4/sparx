@@ -14,7 +14,8 @@ from dew import Checkpoints, Field, Trainer
 from dew.data import Dataset, Loading
 from dew.training import MeshSpec
 import sparx
-from sparx.dew import Direct, RateBand, SpikingClassifier
+from sparx.dew import RateBand, SpikingClassifier
+from sparx.encode import Direct
 from sparx.models import SpikingMLP
 
 rng = np.random.default_rng(0)

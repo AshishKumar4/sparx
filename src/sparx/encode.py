@@ -1,65 +1,152 @@
-"""Turn static or analog data into time-major spike trains `[T, ...]`.
+"""Turn a batch field into the time-major input `[T, B, ...]` of a spiking network.
 
-Each encoder adds a leading time axis of `steps`: an image batch `[B, H, W, C]`
-becomes `[steps, B, H, W, C]`, ready for a network of `sparx.nn` layers.
-Values that mean intensities are expected in [0, 1]. Spikes are float32
-unless `dtype` says otherwise.
+An encoder is a frozen dataclass called as `encoder(key, x)` on a batch
+field `[B, ...]`. The same object encodes in a plain JAX loop and inside
+`sparx.dew.SpikingClassifier`, and it is registered
+(`sparx.registry.spike_encoders`), so a run's record holds it as
+`{"name": "rate", "fields": {"steps": 8}}` and rebuilds it in another
+process.
 
-Direct encoding (`repeat`) feeds the analog values as the input current at
-every step and lets the first layer do the encoding, as DIET-SNN (Rathi and
-Roy, IEEE TNNLS 2021) and SpikingJelly's static-image examples do.
+Encoders of static data (`Direct`, `Rate`, `Latency`) add a leading time
+axis of `steps`: an image batch `[B, H, W, C]` becomes `[steps, B, H, W, C]`.
+Encoders of data that already runs over time (`Delta`, `Events`) move each
+record's time axis to the front: `[B, T, F]` becomes `[T, B, F]`.
+
+The encoders that read values as intensities (`Direct`, `Rate`, `Latency`,
+`Delta`) read a uint8 field as `x / 255` and expect anything else in
+[0, 1], so raw image bytes and normalized arrays encode alike. `Events`
+reads spike counts or currents, which it passes on unscaled. Every encoder
+returns float32.
+
+Direct encoding feeds the analog values as the input current at every step
+and lets the first layer do the encoding, as DIET-SNN (Rathi and Roy, IEEE
+TNNLS 2021) and SpikingJelly's static-image examples do.
 """
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
 import jax
 import jax.numpy as jnp
-from jax.typing import ArrayLike, DTypeLike
+from jax.typing import ArrayLike
 
-__all__ = ["delta", "latency", "rate", "repeat"]
+from sparx.registry import spike_encoders
+
+__all__ = ["Delta", "Direct", "Events", "Latency", "Rate", "SpikeEncoder"]
 
 
-def repeat(x: ArrayLike, steps: int) -> jax.Array:
-    """`x` at every one of `steps` steps: `[steps, *x.shape]`, as a view-like broadcast."""
+class SpikeEncoder(ABC):
+    """Turns one batch field `[B, ...]` into the network's time-major input `[T, B, ...]`.
+
+    `key` drives the random encoders (`Rate`); the others ignore it, so
+    every encoder is called the same way.
+    """
+
+    @abstractmethod
+    def __call__(self, key: jax.Array, x: ArrayLike) -> jax.Array: ...
+
+
+def _intensities(x: ArrayLike) -> jax.Array:
+    """uint8 pixels as [0, 1]; other values unchanged, as float32."""
     x = jnp.asarray(x)
-    return jnp.broadcast_to(x, (steps, *x.shape))
+    if x.dtype == jnp.uint8:
+        return x.astype(jnp.float32) / 255
+    return x.astype(jnp.float32)
 
 
-def rate(key: jax.Array, x: ArrayLike, steps: int, dtype: DTypeLike = jnp.float32) -> jax.Array:
-    """Bernoulli spikes that fire with probability `x` at each step, independently.
+@spike_encoders("direct")
+@dataclass(frozen=True)
+class Direct(SpikeEncoder):
+    """The values themselves as the input current at each of `steps` steps, as a broadcast."""
+
+    steps: int
+
+    def __call__(self, key: jax.Array, x: ArrayLike) -> jax.Array:
+        x = _intensities(x)
+        return jnp.broadcast_to(x, (self.steps, *x.shape))
+
+
+@spike_encoders("rate")
+@dataclass(frozen=True)
+class Rate(SpikeEncoder):
+    """Bernoulli spikes that fire with probability `x` at each of `steps` steps, independently.
 
     `x` is clipped to [0, 1]. The spike count over `steps` is binomial with
-    mean `steps * x`. Sampling has no gradient with respect to `x`.
+    mean `steps * x`. Each key gives a fresh draw, so a training loop that
+    passes its step's key encodes every step anew. Sampling has no gradient
+    with respect to `x`.
     """
-    p = jnp.clip(jnp.asarray(x, jnp.float32), 0, 1)
-    return jax.random.bernoulli(key, p, (steps, *p.shape)).astype(dtype)
+
+    steps: int
+
+    def __call__(self, key: jax.Array, x: ArrayLike) -> jax.Array:
+        p = jnp.clip(_intensities(x), 0, 1)
+        return jax.random.bernoulli(key, p, (self.steps, *p.shape)).astype(jnp.float32)
 
 
-def latency(x: ArrayLike, steps: int, threshold: float = 0.01, dtype: DTypeLike = jnp.float32) -> jax.Array:
-    """One spike per value, earlier for larger values: time-to-first-spike coding.
+@spike_encoders("latency")
+@dataclass(frozen=True)
+class Latency(SpikeEncoder):
+    """One spike per value over `steps` steps, earlier for larger values: time-to-first-spike coding.
 
     A value `x` in [0, 1] fires once, at step `round((1 - x) * (steps - 1))`,
     so 1 fires at the first step and `threshold` near the last; values below
     `threshold` never fire. This is snnTorch's `spikegen.latency` with
     `linear=True, normalize=True, clip=True`.
     """
-    x = jnp.clip(jnp.asarray(x, jnp.float32), 0, 1)
-    when = jnp.round((1 - x) * (steps - 1)).astype(jnp.int32)
-    times = jnp.arange(steps).reshape((steps,) + (1,) * x.ndim)
-    return ((times == when) & (x >= threshold)).astype(dtype)
+
+    steps: int
+    threshold: float = 0.01
+
+    def __call__(self, key: jax.Array, x: ArrayLike) -> jax.Array:
+        x = jnp.clip(_intensities(x), 0, 1)
+        when = jnp.round((1 - x) * (self.steps - 1)).astype(jnp.int32)
+        times = jnp.arange(self.steps).reshape((self.steps,) + (1,) * x.ndim)
+        return ((times == when) & (x >= self.threshold)).astype(jnp.float32)
 
 
-def delta(xs: ArrayLike, threshold: float, off_spikes: bool = False,
-          dtype: DTypeLike = jnp.float32) -> jax.Array:
-    """Spike where a time-major signal `[T, ...]` rises by at least `threshold` from the step before.
+def _time_major(x: jax.Array, time_axis: int) -> jax.Array:
+    """A batch `[B, ...]` of records with time on `time_axis`, time moved to the front."""
+    return jnp.moveaxis(x, time_axis + 1, 0)
 
-    The step before the first is zero, so a signal that starts at or above
+
+@spike_encoders("delta")
+@dataclass(frozen=True)
+class Delta(SpikeEncoder):
+    """Spike where a signal rises by at least `threshold` from the step before.
+
+    Each record holds the signal over time on axis `time_axis`. The step
+    before the first is zero, so a signal that starts at or above
     `threshold` fires at step 0. With `off_spikes`, a fall of at least
     `threshold` emits -1. This is snnTorch's `spikegen.delta` without padding.
     """
-    xs = jnp.asarray(xs)
-    change = jnp.diff(xs, axis=0, prepend=jnp.zeros_like(xs[:1]))
-    out = (change >= threshold).astype(dtype)
-    if off_spikes:
-        out = out - (change <= -threshold).astype(dtype)
-    return out
+
+    threshold: float
+    off_spikes: bool = False
+    time_axis: int = 0
+
+    def __call__(self, key: jax.Array, x: ArrayLike) -> jax.Array:
+        xs = _time_major(_intensities(x), self.time_axis)
+        change = jnp.diff(xs, axis=0, prepend=jnp.zeros_like(xs[:1]))
+        out = (change >= self.threshold).astype(jnp.float32)
+        if self.off_spikes:
+            out = out - (change <= -self.threshold).astype(jnp.float32)
+        return out
+
+
+@spike_encoders("events")
+@dataclass(frozen=True)
+class Events(SpikeEncoder):
+    """Data that already holds spikes or currents over time, on axis `time_axis` of each record.
+
+    A record `[T, F]` arrives batched as `[B, T, F]`; the default moves its
+    time axis to the front. The values pass unscaled, as float32: a uint8
+    field here counts spikes.
+    """
+
+    time_axis: int = 0
+
+    def __call__(self, key: jax.Array, x: ArrayLike) -> jax.Array:
+        return _time_major(jnp.asarray(x), self.time_axis).astype(jnp.float32)
