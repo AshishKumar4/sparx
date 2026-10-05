@@ -59,6 +59,9 @@ from sparx.graph.connectivity import Connectivity, EdgeList
 __all__ = ["CurrentInput", "Monitor", "Network", "PoissonInput", "Population", "PopulationRate", "Projection",
            "Spikes", "StateMonitor"]
 
+DENSE_LIMIT = 2 ** 25
+DENSE_DENSITY = 0.02
+
 PerEdge = float | np.ndarray | Callable[[np.random.Generator, int], np.ndarray]
 """A value for every edge: one for all, an array in the connectivity's order, or `f(rng, count)`."""
 
@@ -105,6 +108,11 @@ class Projection:
     short_term: TsodyksMarkram | None = None
     trainable: bool = False
     name: str | None = None
+    format: Literal["auto", "edges", "dense"] = "auto"
+    """How the projection is stored and delivered: an edge list gathered and summed per postsynaptic neuron,
+    or a dense `[pre, post]` matrix multiplied by the spikes. `"auto"` takes the matrix for a projection with
+    one delay and fixed weights when it has at most `DENSE_LIMIT` entries and a density of at least
+    `DENSE_DENSITY`, where a matrix product costs less than the gather on CPUs and accelerators."""
 
     @property
     def key(self) -> str:
@@ -189,6 +197,29 @@ def _per_edge(value: PerEdge, rng: np.random.Generator, edges: EdgeList, what: s
     return out
 
 
+def _dense(p: Projection, delays: np.ndarray, edges: int, pre: int, post: int) -> bool:
+    if p.format != "auto":
+        if p.format == "dense" and (np.ndim(delays) or p.plasticity is not None or p.trainable):
+            raise ValueError(f"{p.key}: a dense projection needs one delay and fixed weights")
+        return p.format == "dense"
+    small = pre * post <= DENSE_LIMIT and edges >= DENSE_DENSITY * pre * post
+    return small and not np.ndim(delays) and p.plasticity is None and not p.trainable
+
+
+def _poisson_table(mean: float) -> np.ndarray:
+    """The Poisson CDF at 0, 1, ... until its tail is below 1e-16: a count is how many entries a uniform
+    draw exceeds."""
+    cdf, term, k = [], np.exp(-mean), 0
+    total = term
+    while 1 - total > 1e-16 and k < 10 * mean + 50:
+        cdf.append(total)
+        k += 1
+        term *= mean / k
+        total += term
+    cdf.append(total)
+    return np.asarray(cdf)
+
+
 def _seed(key: jax.Array) -> np.random.Generator:
     return np.random.default_rng(np.asarray(jax.random.key_data(key)).ravel().astype(np.uint64))
 
@@ -234,17 +265,25 @@ class Network(nn.Module):
             if len(delays) and delays.min() < minimum:
                 raise ValueError(f"{p.key}: delays must be at least {minimum} step(s) of {self.dt} ms "
                                  f"onto a {'delta' if minimum else 'kinetic'} synapse")
-            if p.plasticity is not None and len(np.unique(delays)) > 1:
+            if p.plasticity is not None and np.ndim(delays) and len(np.unique(delays)) > 1:
                 raise ValueError(f"{p.key}: a plastic projection needs one delay for all its edges")
+            if len(delays) and np.all(delays == delays[0]):
+                delays = np.asarray(delays[0], np.int32)  # one delay: read one row of the ring per step
             weight = _per_edge(p.weight, rng, edges, f"{p.key} weight").astype(np.dtype(self.dtype))
-            built[p.key] = {"pre": edges.pre, "post": edges.post, "delay": delays, "weight": weight}
+            if _dense(p, delays, len(edges), pre.size, post.size):
+                matrix = np.zeros((pre.size, post.size), weight.dtype)
+                np.add.at(matrix, (edges.pre, edges.post), weight)  # repeated pairs sum
+                built[p.key] = {"delay": np.asarray(np.ravel(delays)[0] if np.size(delays) else 0, np.int32),
+                                "weight": matrix}
+            else:
+                built[p.key] = {"pre": edges.pre, "post": edges.post, "delay": delays, "weight": weight}
         return built
 
     def _lags(self, edges) -> dict[str, int]:
         """How many steps of spikes each population's ring buffer keeps."""
         lags = {p.name: 1 for p in self.populations}
         for p in self.projections:
-            if len(edges[p.key]["delay"]):
+            if np.size(edges[p.key]["delay"]):
                 longest = int(np.max(np.asarray(edges[p.key]["delay"]))) + 1
                 lags[p.pre] = max(lags[p.pre], longest)
                 if p.plasticity is not None:
@@ -333,7 +372,12 @@ class _Stepper:
     def deliver(self, t, p: Projection, weight, ring) -> jax.Array:
         """Weighted spikes of `p` due at the end of step `t`, summed per postsynaptic neuron."""
         e = self.edges[p.key]
-        sent = ring[(t - e["delay"]) % ring.shape[0], e["pre"]]
+        if "pre" not in e:
+            return ring[(t - e["delay"]) % ring.shape[0]] @ weight
+        if e["delay"].ndim == 0:
+            sent = ring[(t - e["delay"]) % ring.shape[0]][e["pre"]]
+        else:
+            sent = ring[(t - e["delay"]) % ring.shape[0], e["pre"]]
         return jax.ops.segment_sum(weight * sent, e["post"], num_segments=self.populations[p.post].size,
                                    indices_are_sorted=True)
 
@@ -346,9 +390,12 @@ class _Stepper:
                 currents[source.target] = currents[source.target] + drive_t[source.name]
                 continue
             assert self.key is not None
-            mean = source.count * source.rate * self.dt / 1000.0
+            # A static mean: invert its CDF, exact to 1e-16 and vectorized, where
+            # jax.random.poisson loops per draw.
+            table = jnp.asarray(_poisson_table(source.count * source.rate * self.dt / 1000.0), jnp.float32)
             key = jax.random.fold_in(jax.random.fold_in(self.key, t), i)
-            draws = jax.random.poisson(key, mean, (self.populations[source.target].size,))
+            uniform = jax.random.uniform(key, (self.populations[source.target].size, 1))
+            draws = jnp.sum(uniform > table, axis=1)
             incoming = arrivals[source.target].get(source.receptor, 0.0)
             draws = draws.astype(self.network.dtype)
             arrivals[source.target][source.receptor] = incoming + source.weight * draws
@@ -369,7 +416,7 @@ class _Stepper:
             if p.plasticity is None:
                 continue
             e = self.edges[p.key]
-            delay = e["delay"][0] if len(e["delay"]) else 0
+            delay = e["delay"] if e["delay"].ndim == 0 else 0  # plastic projections have one delay
             ring = buffers[p.post]
             arrived = ring[(t - delay) % ring.shape[0]]
             traces, weight = p.plasticity.step(plastic[p.key]["traces"], plastic[p.key]["weight"],

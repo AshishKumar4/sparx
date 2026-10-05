@@ -131,8 +131,7 @@ def test_the_same_key_builds_the_same_network():
     one, two = network.init(jax.random.key(3)), network.init(jax.random.key(3))
     jax.tree.map(np.testing.assert_array_equal, one["connectome"], two["connectome"])
     other = network.init(jax.random.key(4))
-    assert not np.array_equal(one["connectome"]["edges"]["a->a:ex"]["pre"],
-                              other["connectome"]["edges"]["a->a:ex"]["pre"])
+    assert not np.array_equal(one["connectome"]["weight:a->a:ex"], other["connectome"]["weight:a->a:ex"])
 
 
 BRUNEL = np.load(Path(__file__).parent / "fixtures" / "brunel.npz")
@@ -178,3 +177,42 @@ def test_a_run_continued_from_its_variables_is_the_unbroken_run():
     first = simulate(network, variables, duration=20.0, key=jax.random.key(1), monitors=(Spikes("a"),))
     second = simulate(network, first.variables, duration=30.0, key=jax.random.key(1), monitors=(Spikes("a"),))
     np.testing.assert_array_equal(np.concatenate([first.records[0], second.records[0]]), whole.records[0])
+
+
+@pytest.mark.parametrize("mean", [0.05, 0.9, 7.5])
+def test_poisson_counts_follow_the_poisson_distribution(mean):
+    from scipy import stats
+
+    from sparx.graph.network import _poisson_table
+
+    table = _poisson_table(mean)
+    draws = np.sum(np.random.default_rng(0).random((200_000, 1)) > table, axis=1)
+    np.testing.assert_allclose(table, stats.poisson.cdf(np.arange(len(table)), mean), rtol=1e-12)
+    # Bins expected to hold at least 50 draws, the tail lumped into the last.
+    last = int(np.max(np.flatnonzero(stats.poisson.pmf(np.arange(len(table)), mean) * len(draws) >= 50)))
+    observed = np.bincount(np.minimum(draws, last), minlength=last + 1)
+    expected = np.append(stats.poisson.pmf(np.arange(last), mean), stats.poisson.sf(last - 1, mean))
+    expected = expected * len(draws)
+    assert stats.chisquare(observed, expected).pvalue > 1e-3
+
+
+def test_dense_and_edge_projections_deliver_the_same_spikes():
+    def network(format):
+        return Network((Population("a", 300, LIF(), {"ex": Receptor(Exponential(5.0)),
+                                                      "in": Receptor(Exponential(10.0))}),),
+                       (Projection("a", "a", FixedInDegree(30, multapses=True), weight=25.0, delay=1.5,
+                                   format=format),
+                        Projection("a", "a", FixedProbability(0.05), weight=-40.0, delay=0.8, receptor="in",
+                                   format=format)),
+                       inputs=(PoissonInput("a", rate=1000.0, weight=60.0, count=5),), dt=DT,
+                       dtype=jnp.float64)
+
+    with jax.enable_x64(new_val=True):
+        runs = []
+        for format in ("dense", "edges"):
+            net = network(format)
+            result = simulate(net, net.init(jax.random.key(0)), duration=100.0, key=jax.random.key(1),
+                              monitors=(Spikes("a"),))
+            runs.append(result.records[0])
+    np.testing.assert_array_equal(*runs)
+    assert runs[0].sum() > 500
