@@ -32,7 +32,8 @@ import jax
 import jax.numpy as jnp
 from jax.extend.core import Jaxpr, Var
 
-from sparx.dynamics import LICell, NeuronModel, RecurrentCell, SynapticInput, decay, membrane_dtype
+from sparx.dynamics import LICell, NeuronModel, RecurrentCell, SynapticInput, decay
+from sparx.dynamics.core import membrane_dtype
 
 __all__ = ["EPropParams", "OTTTLayer", "accumulate", "bptt_loss", "eligibility_traces", "eprop",
            "eprop_forward", "ottt", "ottt_dense"]

@@ -56,7 +56,8 @@ import jax.numpy as jnp
 import numpy as np
 from flax import struct
 
-from sparx.dynamics import Reset, Spikes, SynapticInput, membrane_dtype
+from sparx.dynamics import Reset, Spikes, SynapticInput
+from sparx.dynamics.core import membrane_dtype
 from sparx.nn import IF, STATE, Flatten, Neuron
 
 __all__ = ["SpikingMaxPool", "convert", "fold_batch_norm", "normalize", "run_converted"]
