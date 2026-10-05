@@ -121,7 +121,7 @@ Pass one to any neuron: `sparx.nn.LIF(surrogate=sparx.surrogate.FastSigmoid(100.
 
 ## Models
 
-`sparx.models` builds architectures from these layers. `SEWResNet` is the spike-element-wise residual network of Fang et al. (2021), laid out as in SpikingJelly, with `sew_resnet18` and `sew_resnet34` presets, and `SpikingMLP` is a dense network for event data (stacked, optionally recurrent or delayed, with a leaky integrator readout). Their `neuron` argument is the template every neuron of the network copies:
+`sparx.models` builds architectures from these layers. `SEWResNet` is the spike-element-wise residual network of Fang et al. (2021), laid out as in SpikingJelly, with `sew_resnet18` and `sew_resnet34` presets, and `SpikingMLP` is a dense network for event data (stacked, optionally recurrent, with a leaky integrator readout). `SpikingMLP(delays=K)` delays its first synapse by up to `K` steps, and `delays=(24, 24, 24)` delays every synapse, the readout's too; with `extend=True`, `batch_norm=True`, `use_bias=False`, `weight_init="kaiming_uniform"` and `dropout_mask="sequence"` it is the network of Hammouamri et al.'s SNN-delays, checked against their code (`docs/fidelity.md`). Their `neuron` argument is the template every neuron of the network copies:
 
 ```python
 net = sparx.models.sew_resnet18(10, width=32, stem="small",
@@ -200,7 +200,17 @@ state = trainer.fit(Dataset.from_records(train, batch=64, validation=test),
                     steps=3000, eval_every=500, metrics=[accuracy])
 ```
 
-The encoder is any of `sparx.encode`'s, the same objects a plain JAX loop calls. The readout is `"mean"`, `"max"`, `"sum"` or `"per_step"`. `schedules` names model keyword arguments that follow one of dew's schedules over `schedule_steps`, such as `schedules={"sigma": Linear(peak=7.5, end=0.5)}` for a `DelayedDense`. The objective logs the batch accuracy and every spiking layer's firing rate (`rate/<layer>`), updates BatchNorm statistics, passes `train` and dropout keys to a model that takes them, and evaluates to dew's `TokenScores`, which `sparx.dew.accuracy` reads. [`examples/train_shd.py`](examples/train_shd.py) is the full script.
+The encoder is any of `sparx.encode`'s, the same objects a plain JAX loop calls. The readout is `"mean"`, `"max"`, `"sum"`, `"softmax_sum"` (the softmax of every step summed over time, SNN-delays' loss) or `"per_step"`. `schedules` names model keyword arguments that follow one of dew's schedules over `schedule_steps`, such as `schedules={"sigma": Linear(peak=7.5, end=0.5)}` for a `DelayedDense`; `schedule_every` advances them once every that many steps, as a torch scheduler stepped once an epoch does, and `deployed={"sigma": 0}` evaluates with every delay rounded. `groups` gives parameters their own optimizers by path pattern, each a `GroupAdam` with its own schedules, L2 weight decay and bounds, under `optax.multi_transform`; the trainer's optimizer updates the rest:
+
+```python
+from dew.training.optim import Cosine
+from sparx.dew import GroupAdam, OneCycle
+
+groups = {"delays": GroupAdam(("*/delay",), Cosine(peak=0.1, warmup_steps=0), bounds=(0.0, 24.0)),
+          "weights": GroupAdam(("*",), OneCycle(peak=5e-3, start=2e-4, end=2e-8), weight_decay=1e-5)}
+```
+
+SHD has no validation split. `sparx.dew.holdout(train, 0.1)` holds out part of the training set, and `trainer.fit(..., validation={"val": evaluation_pass(val, 256), "test": evaluation_pass(test, 256)})` scores both after each evaluation, every record of each (`evaluation_pass` fills the last batch with copies that weigh nothing). The objective logs the batch accuracy and every spiking layer's firing rate (`rate/<layer>`), updates BatchNorm statistics, passes `train` and dropout keys to a model that takes them, and evaluates to dew's `TokenScores`, which `sparx.dew.accuracy` reads. [`examples/train_shd.py`](examples/train_shd.py) is the full script; `--recipe snn-delays` runs Hammouamri et al.'s SHD recipe, and its docstring lists what still differs from their code.
 
 Sparx is a dew plugin. Its models, neurons, surrogates, encoders, objective and datasets are registered in dew's registry, so a run's `run.json` records a spiking model the way it records a transformer, and `dew.pipeline(run_dir)` loads a trained classifier back in a fresh process as a `SpikingClassification`:
 
@@ -329,6 +339,7 @@ The design keeps the sequential part of a spiking network small: synapses run ov
 - Each surrogate's gradient and forward-mode tangent match its published formula, and its area matches its stated normalization.
 - Invariants are tested directly: a run in chunks equals one run for every cell and layer, a call without the state collection starts at rest, `init` creates only parameters, bfloat16 inputs keep exact spikes over a float32 membrane.
 - `SpikingClassifier` trains through dew's real `Trainer`, and its loss is checked against a manual computation.
+- A `SpikingMLP` with every synapse delayed matches Hammouamri et al.'s SNN-delays network run from their code on DCLS: outputs and loss within 1.2e-7 and every gradient within 5.7e-7 in training, outputs within 2.4e-7 in evaluation. Their learning-rate, momentum and width schedules match over all 150 epochs, and `shd(binning="events")` reproduces their binned SHD exactly (`tools/make_snn_delays_fixtures.py`).
 - The physical models match NEST 3.10 and Brian2 2.10 (`tools/make_nest_fixtures.py`, `tools/make_brian2_fixtures.py`, `tests/test_simulators.py`): current-based LIF with exponential, alpha and delta synapses to 1e-11 mV and spike for spike; conductance-based LIF, AdEx, Izhikevich (bit for bit, op by op) and Hodgkin-Huxley spike for spike or within a stated step; Izhikevich's (2004) twenty firing patterns (`izhikevich_2004`) spike for spike against his own `figure1.m` run in Octave; STDP, triplet STDP and Tsodyks-Markram synapses to every transmitted weight.
 - Recurrent networks with per-edge delays fire with NEST spike for spike; Brunel's four regimes and the CUBA and COBA benchmarks match NEST's and Brian2's rates, irregularity and synchrony within their spread over seeds (`tests/test_graph.py`).
 
