@@ -55,3 +55,22 @@ Steady-state steps per second as dew's display or the script reports them, on th
 | the same with `--delays 15`: 16 lagged products in the input layer | 12.6 steps/s |
 
 The recurrent run differs in two ways, the `[64, 256] x [256, 256]` feedback product inside the time loop and the surrogate, and the cost of each has not been separated.
+
+
+## Networks and connectomes
+
+`sparx.graph` on the same 4-core CPU, float32, `dt = 0.1` ms, wall time per simulated second after compilation:
+
+| Network | Neurons | Connections | Delivery | Time per simulated s | Peak memory |
+| --- | --- | --- | --- | --- | --- |
+| Brunel (2000), order 500, asynchronous regime | 2,500 | 625,000 | dense | 24 s | — |
+| Shiu et al. (2024) on FlyWire v630, 21 sugar neurons at 100 Hz (about 9,600 spikes/s) | 127,400 | 14.7M | events | 27 to 31 s | 1.6 GB |
+| The same model on the male CNS v0.9, both giant fibres at 200 Hz (about 860,000 spikes/s) | 165,899 | 25.6M | events | 56 s | 1.8 GB |
+
+Measured choices behind these:
+
+- Edge delivery gathers and sums over every edge each step (`jax.ops.segment_sum`): 2.2 ms for 500,000 edges. A dense projection of the same density multiplies a spike vector by a matrix in 0.87 ms, so a projection with one delay and fixed weights is stored dense when it has at most 2^25 entries and a density of at least 2%.
+- Event delivery visits only the out-edges of neurons that spiked, in blocks of 4,096, as many blocks as the step needs. Its first version laid every step's edges into a fixed 2^20 slots: 63 ms a step on FlyWire, against 7 ms for blocks. Finding the spiking neurons (`jnp.nonzero` over 127,400) costs 1.4 ms of that; a cumulative sum with a binary search measured 0.9 ms and a blocked variant no better.
+- Poisson inputs with a static mean invert a precomputed CDF: `jax.random.poisson` loops per draw and took 1.8 ms a step for 2,500 neurons, 40% of a Brunel step.
+
+No GPU or TPU numbers yet; Phase 7 measures them.

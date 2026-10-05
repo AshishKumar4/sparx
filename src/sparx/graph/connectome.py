@@ -27,7 +27,14 @@ from sparx.dynamics.synapses import Delta, Exponential, Receptor
 from sparx.graph.connectivity import FromEdges
 from sparx.graph.network import Network, PoissonInput, Population, Projection
 
-__all__ = ["Connectome", "shiu2024"]
+__all__ = ["SIGNS", "Connectome", "shiu2024"]
+
+SIGNS: dict[str, int] = {"acetylcholine": 1, "gaba": -1, "glutamate": -1, "histamine": -1, "dopamine": 1,
+                         "serotonin": 1, "octopamine": 1, "unclear": 1}
+"""The sign of each transmitter's synapses. Acetylcholine excites and GABA and glutamate inhibit, as Shiu
+et al. (2024) assign them (glutamate's sign depends on the receptor in the fly, and is a choice).
+Histamine inhibits (it opens chloride channels in the fly). Shiu et al. treat the modulators as
+excitatory, and so does this table; a neuron whose transmitter is unclear excites."""
 
 
 @dataclass(frozen=True)
@@ -86,6 +93,56 @@ class Connectome:
         table = parquet.read_table(connectivity, columns=columns)
         pre, post, synapses = (np.asarray(table.column(name).to_numpy()) for name in columns)
         return cls(ids, pre.astype(np.int32), post.astype(np.int32), synapses.astype(np.int32))
+
+    @classmethod
+    def from_malecns(cls, annotations: str | Path, neurotransmitters: str | Path, weights: str | Path, *,
+                     statuses: Sequence[str] = ("Traced", "Anchor"),
+                     signs: dict[str, int] | None = None) -> Connectome:
+        """Read Janelia's male CNS (brain and nerve cord) release tables, `gs://flyem-male-cns/v0.9`.
+
+        `annotations` (`body-annotations-*.feather`) lists the bodies; those
+        whose `status` is in `statuses` are the neurons (165,114 `Traced`
+        and 785 `Anchor` in v0.9, against 1.8M segments in all).
+        `neurotransmitters` (`body-neurotransmitters-*.feather`) gives each
+        body's predicted transmitter, `consensus_nt` or, where that is
+        `unclear`, `predicted_nt`; `signs` maps it to the sign of the
+        neuron's synapses. `weights` (`connectome-weights-*.feather`) holds
+        the synapse count of every connected pair of segments, filtered here
+        to pairs of neurons. Neurons are ordered by body ID.
+        """
+        try:
+            import pyarrow.feather as feather
+        except ImportError as error:  # pragma: no cover - depends on the environment
+            raise ImportError("reading connectome tables needs pyarrow: "
+                              "pip install 'sparx[connectome]'") from error
+        signs = dict(SIGNS if signs is None else signs)
+        bodies = feather.read_table(annotations, columns=["bodyId", "status"])
+        status = np.asarray(bodies.column("status").to_pylist(), object)
+        body = np.asarray(bodies.column("bodyId").to_numpy(), np.int64)
+        ids = np.sort(body[np.isin(status, list(statuses))])
+
+        def locate(body: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            """Indices of `body` among the neurons, and which of them are neurons."""
+            index = np.minimum(np.searchsorted(ids, body), len(ids) - 1)
+            return index.astype(np.int32), ids[index] == body
+
+        table = feather.read_table(weights, columns=["body_pre", "body_post", "weight"])
+        pre, pre_kept = locate(np.asarray(table.column("body_pre").to_numpy(), np.int64))
+        post, post_kept = locate(np.asarray(table.column("body_post").to_numpy(), np.int64))
+        kept = pre_kept & post_kept
+        pre, post = pre[kept], post[kept]
+        counts = np.asarray(table.column("weight").to_numpy(), np.int32)[kept]
+        del table
+        transmitters = feather.read_table(neurotransmitters, columns=["body", "consensus_nt", "predicted_nt"])
+        index, known = locate(np.asarray(transmitters.column("body").to_numpy(), np.int64))
+        consensus = np.asarray(transmitters.column("consensus_nt").to_pylist(), object)[known]
+        predicted = np.asarray(transmitters.column("predicted_nt").to_pylist(), object)[known]
+        unclear = np.asarray([c is None or c == "unclear" for c in consensus])
+        chosen = np.where(unclear, predicted, consensus)
+        fallback = signs.get("unclear", 1)
+        sign = np.full(len(ids), fallback, np.int32)
+        sign[index[known]] = [signs.get(t, fallback) for t in chosen]
+        return cls(ids, pre, post, counts * sign[pre])
 
 
 def shiu2024(connectome: Connectome, *, stimuli: Sequence[tuple[Sequence[int], float]] = (),

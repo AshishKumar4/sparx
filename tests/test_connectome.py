@@ -84,3 +84,24 @@ def test_shiu2024_reproduces_their_published_sugar_activation():
     assert np.corrcoef(ours[active], theirs[active])[0, 1] > 0.99
     mn9 = ids == MN9
     assert abs(ours[mn9] - theirs[mn9]) < 3 * spread[mn9] * np.sqrt(1 / 30 + 1 / trials)
+
+
+def test_malecns_reader_keeps_neurons_and_signs_them_by_transmitter(tmp_path):
+    pa = pytest.importorskip("pyarrow")
+    feather = pytest.importorskip("pyarrow.feather")
+    feather.write_feather(pa.table({"bodyId": [30, 10, 20, 40, 50],
+                                    "status": ["Traced", "Traced", "Anchor", "Orphan", None]}),
+                          tmp_path / "annotations.feather")
+    feather.write_feather(pa.table({"body": [10, 20, 30, 40],
+                                    "consensus_nt": ["gaba", "unclear", "acetylcholine", "gaba"],
+                                    "predicted_nt": ["gaba", "glutamate", "acetylcholine", "gaba"]}),
+                          tmp_path / "nt.feather")
+    feather.write_feather(pa.table({"body_pre": [10, 20, 30, 40, 10], "body_post": [20, 30, 10, 10, 50],
+                                    "weight": [5, 3, 7, 9, 2]}), tmp_path / "weights.feather")
+    brain = Connectome.from_malecns(tmp_path / "annotations.feather", tmp_path / "nt.feather",
+                                    tmp_path / "weights.feather")
+    np.testing.assert_array_equal(brain.ids, [10, 20, 30])  # orphans and unlabelled segments dropped
+    edges = sorted(zip(brain.ids[brain.pre].tolist(), brain.ids[brain.post].tolist(), brain.synapses.tolist(),
+                       strict=True))
+    # GABA inhibits; "unclear" falls back to the prediction (glutamate, inhibitory); ACh excites.
+    assert edges == [(10, 20, -5), (20, 30, -3), (30, 10, 7)]
