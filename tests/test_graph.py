@@ -7,6 +7,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from dew.checkpoints import Checkpoints
 
 from sparx.dynamics import LIF, ALIFCell, Delta, Exponential, Receptor, decay, run
 from sparx.graph import (
@@ -21,8 +22,10 @@ from sparx.graph import (
     PoissonInput,
     Population,
     Projection,
+    SpikeCounts,
     SpikeRaster,
     StateMonitor,
+    from_record,
     simulate,
 )
 from sparx.graph.models import brunel, coba, cuba
@@ -181,6 +184,41 @@ def test_a_run_continued_from_its_variables_is_the_unbroken_run():
     second = simulate(network, first.variables, duration=30.0, key=jax.random.key(1),
                       monitors=(SpikeRaster("a"),))
     np.testing.assert_array_equal(np.concatenate([first.records[0], second.records[0]]), whole.records[0])
+
+
+def test_a_run_resumed_from_its_checkpoint_is_the_unbroken_run(tmp_path):
+    # The first call stops after 20 ms, as a preempted run would; the second
+    # asks for the whole 50 ms and continues from the checkpoint.
+    network, variables = small_network()
+    monitors = (SpikeRaster("a"), SpikeCounts("a"))
+    whole = simulate(network, variables, duration=50.0, key=jax.random.key(1), monitors=monitors, chunk=10.0)
+    directory = str(tmp_path / "run")
+    simulate(network, variables, duration=20.0, key=jax.random.key(1), monitors=monitors, chunk=10.0,
+             checkpoints=Checkpoints(directory))
+    resumed = simulate(network, variables, duration=50.0, key=jax.random.key(1), monitors=monitors,
+                       chunk=10.0, checkpoints=Checkpoints(directory))
+    skipped = round(20.0 / DT)
+    assert resumed.start == pytest.approx(20.0)
+    np.testing.assert_array_equal(resumed.records[0], whole.records[0][skipped:])
+    np.testing.assert_array_equal(resumed.records[1], whole.records[0][skipped:].sum(0))
+    np.testing.assert_allclose(resumed.times, whole.times[skipped:])
+    jax.tree.map(np.testing.assert_array_equal, resumed.variables["state"], whole.variables["state"])
+
+
+def test_a_checkpoint_refuses_a_run_with_another_key(tmp_path):
+    network, variables = small_network()
+    directory = str(tmp_path / "run")
+    simulate(network, variables, duration=5.0, key=jax.random.key(1), checkpoints=Checkpoints(directory))
+    with pytest.raises(ValueError, match="another key"):
+        simulate(network, variables, duration=10.0, key=jax.random.key(2), checkpoints=Checkpoints(directory))
+
+
+def test_a_network_record_rebuilds_its_network():
+    record = {"name": "brunel", "fields": {"order": 50, "g": 4.5, "eta": 0.9}}
+    built, expected = from_record(record), brunel(50, g=4.5, eta=0.9)
+    jax.tree.map(np.testing.assert_array_equal, built.init(jax.random.key(0)),
+                 expected.init(jax.random.key(0)))
+    assert built.populations == expected.populations and built.inputs == expected.inputs
 
 
 @pytest.mark.parametrize("mean", [0.05, 0.9, 7.5])

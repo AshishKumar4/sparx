@@ -1,17 +1,43 @@
-"""Canonical networks, built as published, for science and as validation targets (design.md section 5.3)."""
+"""Canonical networks, built as published, for science and as validation targets (design.md section 5.3).
+
+Each builder is registered in `sparx.registry.networks` under its own name,
+so a run's record names the network it simulates and `from_record` rebuilds
+it in another process.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import numpy as np
+from dew.registry import Record
 
 from sparx.dynamics.neurons import LIF
 from sparx.dynamics.synapses import Delta, Exponential, PointNeuronState, Receptor
 from sparx.graph.connectivity import FixedInDegree, FixedProbability
 from sparx.graph.network import Network, PoissonInput, Population, Projection
+from sparx.registry import connectomes, networks
 
-__all__ = ["brunel", "coba", "cuba"]
+__all__ = ["brunel", "coba", "cuba", "from_record"]
 
 
+def from_record(record: Record) -> Network:
+    """The network a `{"name": builder, "fields": {...}}` record names, built from its fields.
+
+    A field `connectome` that is itself a record names a registered reader
+    of connectome tables and its arguments, which are read first, so a
+    model on a connectome is configured by name and paths:
+    `{"name": "shiu2024", "fields": {"connectome": {"name": "flywire",
+    "fields": {"completeness": ..., "connectivity": ...}}, "stimuli": ...}}`.
+    """
+    fields = dict(record["fields"])
+    connectome = fields.get("connectome")
+    if isinstance(connectome, Mapping):
+        fields["connectome"] = connectomes.from_record(connectome)
+    return networks.from_record({"name": record["name"], "fields": fields})
+
+
+@networks("brunel")
 def brunel(order: int = 2500, *, g: float = 5.0, eta: float = 2.0, j: float = 0.1, delay: float = 1.5,
            epsilon: float = 0.1, dt: float = 0.1) -> Network:
     """Brunel's (J. Comput. Neurosci. 2000) sparse network of excitatory and inhibitory LIF neurons, model A.
@@ -62,6 +88,7 @@ def _random_voltage(rng: np.random.Generator, state: PointNeuronState) -> PointN
     return state._replace(neuron=state.neuron._replace(v=v))
 
 
+@networks("cuba")
 def cuba(dt: float = 0.1) -> Network:
     """Vogels and Abbott's (2005) network with current-based synapses: Brette et al.'s (2007) CUBA benchmark.
 
@@ -78,6 +105,7 @@ def cuba(dt: float = 0.1) -> Network:
     return _vogels_abbott(neuron, receptors, (16.2, -90.0), _random_voltage, dt)
 
 
+@networks("coba")
 def coba(dt: float = 0.1) -> Network:
     """Vogels and Abbott's (2005) network with conductance-based synapses (Brette et al.'s COBA benchmark).
 

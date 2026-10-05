@@ -17,6 +17,7 @@ from sparx.graph import (
     SpikeCounts,
     SpikeRaster,
     SpikeTimes,
+    from_record,
     simulate,
 )
 from sparx.graph.connectome import FLYWIRE_630_MEDIAN_INPUTS, Connectome, matched_w_syn, shiu2024
@@ -49,6 +50,28 @@ def test_spike_counts_and_times_agree_with_full_spike_records():
     rebuilt[steps, times[steps, slots]] = True
     np.testing.assert_array_equal(rebuilt, spikes)
     assert counts.sum() > 300
+
+
+def test_a_model_on_a_connectome_rebuilds_from_its_record(tmp_path):
+    # Shiu et al.'s tables in miniature, named in the record by their reader.
+    pa = pytest.importorskip("pyarrow")
+    import pyarrow.csv
+    import pyarrow.parquet
+
+    pyarrow.csv.write_csv(pa.table({"id": [11, 12, 13, 14]}), tmp_path / "completeness.csv")
+    edges = {"Presynaptic_Index": [0, 1, 2, 3], "Postsynaptic_Index": [1, 2, 3, 0],
+             "Excitatory x Connectivity": [5, -3, 8, 2]}
+    pyarrow.parquet.write_table(pa.table(edges), tmp_path / "connectivity.parquet")
+    completeness, connectivity = str(tmp_path / "completeness.csv"), str(tmp_path / "connectivity.parquet")
+    reader = {"name": "flywire", "fields": {"completeness": completeness, "connectivity": connectivity}}
+    record = {"name": "shiu2024",
+              "fields": {"connectome": reader, "stimuli": [[[0, 2], 150.0]], "silenced": [3], "w_syn": 0.2}}
+    built = from_record(record)
+    expected = shiu2024(Connectome.from_shiu(completeness, connectivity), stimuli=[([0, 2], 150.0)],
+                        silenced=[3], w_syn=0.2)
+    jax.tree.map(np.testing.assert_array_equal, built.init(jax.random.key(0)),
+                 expected.init(jax.random.key(0)))
+    assert built.inputs == expected.inputs
 
 
 SHIU_REPO = Path(os.environ.get("SPARX_SHIU_REPO", Path(__file__).resolve().parents[2] / "ref-shiu"))

@@ -6,6 +6,6 @@ reads only what that import registers. This module imports every sparx
 module that registers something.
 """
 
-from sparx import datasets, dew, encode, models, nn, surrogate  # noqa: F401 - imported to register
+from sparx import datasets, dew, encode, graph, models, nn, surrogate  # noqa: F401 - imported to register
 
 __all__: list[str] = []

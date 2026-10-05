@@ -11,14 +11,14 @@ import numpy as np
 PROGRAM = '''
 import json, sys
 import jax, jax.numpy as jnp, numpy as np
-from jax.sharding import Mesh
+from dew.training import MeshSpec
 sys.path.insert(0, TESTS)
 jax.config.update("jax_enable_x64", True)
 from test_graph import nest_network
 from sparx.dynamics import LIF, Exponential, Receptor
 from sparx.graph import FixedProbability, Network, PoissonInput, Population, Projection, SpikeRaster, simulate
 
-mesh = Mesh(np.array(jax.devices()), ("x",)) if jax.device_count() > 1 else None
+mesh = MeshSpec()  # every device on the data axis
 out = {"devices": jax.device_count()}
 
 # Neurons partitioned: NEST's 60-neuron recurrent network, 300 ms.
@@ -29,7 +29,7 @@ result = simulate(network, network.init(jax.random.key(0)), duration=steps * 0.1
                   monitors=(SpikeRaster("n"),), mesh=mesh)
 out["neurons"] = np.flatnonzero(result.records[0].ravel()).tolist()
 v = result.variables["state"]["network"]["populations"]["n"]["point_neuron"].neuron.v
-out["neuron_sharding"] = str(v.sharding.spec) if mesh is not None else None
+out["neuron_sharding"] = list(v.sharding.spec)
 out["shards"] = len(v.addressable_shards)
 
 # Trials spread: a Poisson-driven network, 8 trials of 50 ms.
@@ -40,6 +40,16 @@ result = simulate(net, net.init(jax.random.key(0)), duration=50.0, key=jax.rando
                   monitors=(SpikeRaster("a"),), mesh=mesh)
 out["trials"] = np.flatnonzero(result.records[0].ravel()).tolist()
 out["trial_shape"] = list(result.records[0].shape)
+v = result.variables["state"]["network"]["populations"]["a"]["point_neuron"].neuron.v
+out["trial_sharding"] = list(v.sharding.spec)
+
+# Both: trials over the data axis and each trial's neurons over fsdp.
+if jax.device_count() % 2 == 0:
+    result = simulate(net, net.init(jax.random.key(0)), duration=50.0, key=jax.random.key(1), trials=8,
+                      monitors=(SpikeRaster("a"),), mesh=MeshSpec(fsdp=2))
+    out["mixed"] = np.flatnonzero(result.records[0].ravel()).tolist()
+    v = result.variables["state"]["network"]["populations"]["a"]["point_neuron"].neuron.v
+    out["mixed_sharding"] = list(v.sharding.spec)
 print(json.dumps(out))
 '''
 
@@ -59,7 +69,10 @@ def test_simulation_over_devices_equals_one_device():
     assert (one["devices"], four["devices"]) == (1, 4)
     assert len(one["neurons"]) > 150 and len(one["trials"]) > 1000
     assert four["neurons"] == one["neurons"]
-    assert four["shards"] == 4 and "'x'" in four["neuron_sharding"]  # each device holds 15 neurons
+    assert four["shards"] == 4 and four["neuron_sharding"] == ["data"]  # 15 neurons each
+    assert four["trial_sharding"] == ["data"]  # two trials each, every neuron
+    assert four["mixed"] == one["trials"]
+    assert four["mixed_sharding"] == ["data", "fsdp"]  # four trials and 32 neurons each
     assert four["trials"] == one["trials"]
     assert one["trial_shape"] == [8, 500, 64]
     # Trials differ from one another: each has its own noise.
