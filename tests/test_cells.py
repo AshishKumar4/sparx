@@ -74,7 +74,7 @@ def test_izhikevich_matches_his_published_loop_spike_for_spike_in_float64():
     # comparison therefore runs op by op in float64, where the same
     # arithmetic gives the same bits, and isolates the integration scheme.
     xs = np.full((800, 2, 2), 10.0) + currents(6, 2.0, (800, 2, 2)).astype(np.float64)
-    with jax.enable_x64(True), jax.disable_jit():
+    with jax.enable_x64(new_val=True), jax.disable_jit():
         spikes, _ = run(IzhikevichCell(), jnp.asarray(xs))
         spikes = np.asarray(spikes)
     expected = reference.izhikevich(xs)
@@ -87,7 +87,7 @@ def test_izhikevich_regular_spiking_fires_tonically_at_the_published_rate():
     # input of 10 adapts, then fires tonically. In his scheme the first
     # interval is 27 ms and the rest stay within 47 to 62 ms (spike times
     # fall on 1 ms steps), about 18 Hz.
-    with jax.enable_x64(True), jax.disable_jit():
+    with jax.enable_x64(new_val=True), jax.disable_jit():
         spikes, _ = run(IzhikevichCell(), jnp.full((600, 1), 10.0, jnp.float64))
         times = np.flatnonzero(np.asarray(spikes[:, 0]))
     expected = np.flatnonzero(reference.izhikevich(np.full((600, 1), 10.0))[:, 0])

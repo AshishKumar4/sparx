@@ -55,7 +55,7 @@ def neuron_cases(rng: np.random.Generator) -> dict[str, np.ndarray]:
     membrane stays at least 1e-4 from threshold, so the strict and inclusive
     thresholds (snnTorch fires on `> 0`, sparx on `>= 0`) agree.
     """
-    for draw in range(100):
+    for _ in range(100):
         try:
             return _neuron_cases(rng)
         except _NearThreshold:
@@ -80,8 +80,8 @@ def _neuron_cases(rng: np.random.Generator) -> dict[str, np.ndarray]:
         for name, make in (
                 ("leaky", lambda reset, delay: snntorch.Leaky(beta=0.8, threshold=1.0, reset_mechanism=reset,
                                                               reset_delay=delay)),
-                ("synaptic", lambda reset, delay: snntorch.Synaptic(alpha=0.6, beta=0.8, threshold=1.0,
-                                                                    reset_mechanism=reset, reset_delay=delay))):
+                ("synaptic", lambda reset, delay: snntorch.Synaptic(
+                    alpha=0.6, beta=0.8, threshold=1.0, reset_mechanism=reset, reset_delay=delay))):
             for reset in ("subtract", "zero"):
                 for delay in (False, True):
                     spikes, grad_x, margin = _run(make(reset, delay), x, weights)

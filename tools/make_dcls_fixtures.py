@@ -49,7 +49,8 @@ def main():
     with torch.no_grad():
         layer.P.uniform_(-(KERNEL // 2), KERNEL // 2)
         layer.SIG.fill_(1.3)
-    params = {"weight": layer.weight.detach().numpy()[..., 0].copy(), "bias": layer.bias.detach().numpy().copy(),
+    params = {"weight": layer.weight.detach().numpy()[..., 0].copy(),
+              "bias": layer.bias.detach().numpy().copy(),
               "P": layer.P.detach().numpy()[0, :, :, 0].copy(), "SIG": np.float32(1.3)}
     gauss = run(layer, x, weights)
     # Evaluation as the reference's eval_model does it: zero SIG, the max
@@ -65,7 +66,8 @@ def main():
     cases = {"x": x, "weights": weights, **params,
              **{f"gauss/{k}": v for k, v in gauss.items()}, **{f"rounded/{k}": v for k, v in rounded.items()},
              "rounded_P": layer.P.detach().numpy()[0, :, :, 0].copy(),
-             "meta/dcls": np.array(importlib.metadata.version("dcls")), "meta/torch": np.array(torch.__version__)}
+             "meta/dcls": np.array(importlib.metadata.version("dcls")),
+             "meta/torch": np.array(torch.__version__)}
     np.savez_compressed(OUT, **cases)
     print(f"wrote {OUT} (dcls {importlib.metadata.version('dcls')}, torch {torch.__version__})")
 
