@@ -15,6 +15,7 @@ import pytest
 import reference
 
 from sparx.dynamics import (
+    IZHIKEVICH_2003,
     LIF,
     AdEx,
     Alpha,
@@ -26,6 +27,7 @@ from sparx.dynamics import (
     Receptor,
     SynapticInput,
     integrate,
+    izhikevich_2003,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -235,3 +237,55 @@ def test_adex_with_synapses_fires_with_nest(model, kind):
         # Held conductances (second order) meet the stiff upswing: a spike
         # can land up to 0.5 ms from NEST's adaptive solution.
         assert np.abs(got - want).max() <= (2 if kind == "current" else 5)
+
+
+IZHIKEVICH_SCHEMES = {"published_1": (1.0, "published"), "published_01": (0.1, "published"),
+                      "euler_01": (0.1, "euler")}
+
+
+def izhikevich_run(kind, label, exact=False):
+    dt, scheme = IZHIKEVICH_SCHEMES[label]
+    steps = len(NEST[f"izhikevich/{kind}/{label}/spikes"])
+    with jax.enable_x64(new_val=True), jax.disable_jit(exact):
+        inputs = SynapticInput(jnp.full((steps, 1), 10.0))
+        neuron = izhikevich_2003(kind, scheme=scheme)
+        (spikes, v), _ = integrate(neuron, inputs, dt, record=lambda state: state.v)
+    return np.asarray(spikes.fired[:, 0]), np.asarray(v[:, 0])
+
+
+@pytest.mark.parametrize("kind", ["regular_spiking", "fast_spiking", "resonator"])
+def test_izhikevich_published_scheme_is_nests_to_the_last_bit(kind):
+    # Compiled XLA contracts and reassociates the quadratic's arithmetic
+    # (19% of one step's elements differ in the last bit from NumPy's), and
+    # the quadratic membrane amplifies that; op by op, it is NEST's run.
+    fired, v = izhikevich_run(kind, "published_1", exact=True)
+    np.testing.assert_array_equal(fired, NEST[f"izhikevich/{kind}/published_1/spikes"][:, 0])
+    np.testing.assert_array_equal(v, NEST[f"izhikevich/{kind}/published_1/v"][:, 0])
+
+
+@pytest.mark.parametrize("label", ["published_01", "euler_01"])
+@pytest.mark.parametrize("kind", list(IZHIKEVICH_2003))
+def test_izhikevich_classes_fire_with_nest(kind, label):
+    fired, _ = izhikevich_run(kind, label)
+    got, expected = np.flatnonzero(fired), np.flatnonzero(NEST[f"izhikevich/{kind}/{label}/spikes"][:, 0])
+    # Compiled, last-bit rounding moves single spikes by a step or two, and
+    # the reset carries that on: every spike stays within 1 ms of NEST's.
+    assert len(got) == len(expected) >= 7
+    assert np.abs(got - expected).max() <= 10
+
+
+@pytest.mark.parametrize("scheme", ["euler", "published"])
+def test_izhikevich_delta_input_matches_nest(scheme):
+    # NEST adds a delta input to the voltage under its Euler scheme, and as
+    # a current of the weight for one step under the published one, as
+    # Izhikevich's network code adds its synaptic input to I.
+    case = f"izhikevich/delta_{scheme}"
+    arrivals = NEST[f"{case}/arrivals"]
+    with jax.enable_x64(new_val=True):
+        arrivals = jnp.asarray(arrivals)
+        inputs = (SynapticInput(4.0, jump=arrivals) if scheme == "euler"
+                  else SynapticInput(4.0 + arrivals))
+        (spikes, v), _ = integrate(izhikevich_2003("regular_spiking", scheme=scheme), inputs, 0.1,
+                                   record=lambda state: state.v)
+    np.testing.assert_array_equal(np.asarray(spikes.fired), NEST[f"{case}/spikes"])
+    np.testing.assert_allclose(np.asarray(v), NEST[f"{case}/v"], atol=1e-9)

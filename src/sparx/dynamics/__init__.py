@@ -19,7 +19,18 @@ from sparx.dynamics.core import (
     response,
     rk4,
 )
-from sparx.dynamics.neurons import LIF, RECEPTORS, AdEx, AdExState, LIFState, MgBlock
+from sparx.dynamics.neurons import (
+    IZHIKEVICH_2003,
+    LIF,
+    RECEPTORS,
+    AdEx,
+    AdExState,
+    Izhikevich,
+    IzhikevichState,
+    LIFState,
+    MgBlock,
+    izhikevich_2003,
+)
 from sparx.dynamics.synapses import (
     Alpha,
     Arrivals,
@@ -32,6 +43,7 @@ from sparx.dynamics.synapses import (
 )
 
 __all__ = [
+    "IZHIKEVICH_2003",
     "LIF",
     "RECEPTORS",
     "AdEx",
@@ -41,6 +53,8 @@ __all__ = [
     "BiExponential",
     "Delta",
     "Exponential",
+    "Izhikevich",
+    "IzhikevichState",
     "LIFState",
     "MgBlock",
     "NeuronModel",
@@ -53,6 +67,7 @@ __all__ = [
     "crossing",
     "exact_linear",
     "integrate",
+    "izhikevich_2003",
     "response",
     "rk4",
 ]

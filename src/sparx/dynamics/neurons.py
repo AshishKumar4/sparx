@@ -10,7 +10,7 @@ voltage exactly while its gradient follows the spike.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -218,3 +218,86 @@ class AdEx:
         refractory = jnp.where(fired > 0, self.t_ref, jnp.maximum(state.refractory - dt, 0))
         dtype = state.v.dtype
         return AdExState(v.astype(dtype), w.astype(dtype), refractory.astype(dtype)), Spikes(fired, offset)
+
+
+class IzhikevichState(NamedTuple):
+    v: jax.Array
+    u: jax.Array
+
+
+@struct.dataclass
+class Izhikevich:
+    """Izhikevich's simple model (IEEE Trans. Neural Netw. 2003), in ms and mV.
+
+        dv/dt = 0.04 v^2 + 5 v + 140 - u + I,    du/dt = a (b v - u)
+
+    At `v >= v_th` (30 mV) it fires, `v` is set to `c` and `u` grows by
+    `d`. `I` is in the model's own units, as in the paper. `scheme` names
+    the integration, both as NEST's `izhikevich` implements them:
+    `"published"` takes two half-steps of `v` and then one step of `u`
+    from the new `v`, the paper's code (at `dt = 1` it is that code
+    exactly, and its firing patterns are this scheme's); `"euler"` is the
+    forward Euler step of both from the old values, NEST's
+    `consistent_integration`. Synaptic current waveforms are read at the
+    start of the step and conductances at the voltage of each update. The
+    defaults are the regular spiking cell; the paper's classes are
+    `izhikevich_2003`.
+    """
+
+    a: jax.Array | float = 0.02
+    b: jax.Array | float = 0.2
+    c: jax.Array | float = -65.0
+    d: jax.Array | float = 8.0
+    v_th: jax.Array | float = 30.0
+    v_init: jax.Array | float = -65.0
+    scheme: Literal["published", "euler"] = struct.field(pytree_node=False, default="published")
+    reversal: Mapping[str, float] = struct.field(pytree_node=False, default_factory=lambda: dict(RECEPTORS))
+    gates: Mapping[str, MgBlock] = struct.field(pytree_node=False,
+                                                default_factory=lambda: {"nmda": MgBlock()})
+    surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
+
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> IzhikevichState:
+        dtype = membrane_dtype(dtype)
+        v = jnp.full(shape, self.v_init, dtype)
+        return IzhikevichState(v, self.b * v)
+
+    def step(self, state: IzhikevichState, inputs: SynapticInput,
+             dt: float) -> tuple[IzhikevichState, Spikes]:
+        current = inputs.current_at(0.0)
+
+        def dv(v, u):
+            g, drive = _synaptic(self, inputs, v)
+            # NEST's order of operations, `(0.04 v) v`; Izhikevich's code squares first.
+            return 0.04 * v * v + 5 * v + 140 - u + current + drive - g * v
+
+        v, u = state
+        if self.scheme == "euler":
+            v, u = v + dt * dv(v, u), u + dt * self.a * (self.b * v - u)
+        else:
+            v = v + dt / 2 * dv(v, u)
+            v = v + dt / 2 * dv(v, u)
+            u = u + dt * self.a * (self.b * v - u)
+        v = v + inputs.jump
+        fired = spike(v - self.v_th, self.surrogate)
+        offset = jnp.where(fired > 0, crossing(state.v, v, self.v_th), 1.0)
+        dtype = state.v.dtype
+        return (IzhikevichState(_reset(v, fired, self.c).astype(dtype), (u + fired * self.d).astype(dtype)),
+                Spikes(fired, offset))
+
+
+def izhikevich_2003(kind: str, **fields) -> Izhikevich:
+    """The cortical and thalamic classes of Izhikevich (2003), Figure 2, by their names there."""
+    a, b, c, d = IZHIKEVICH_2003[kind]
+    return Izhikevich(a=a, b=b, c=c, d=d, **fields)
+
+
+IZHIKEVICH_2003: Mapping[str, tuple[float, float, float, float]] = {
+    "regular_spiking": (0.02, 0.2, -65.0, 8.0),
+    "intrinsically_bursting": (0.02, 0.2, -55.0, 4.0),
+    "chattering": (0.02, 0.2, -50.0, 2.0),
+    "fast_spiking": (0.1, 0.2, -65.0, 2.0),
+    "low_threshold_spiking": (0.02, 0.25, -65.0, 2.0),
+    "thalamo_cortical": (0.02, 0.25, -65.0, 0.05),
+    "resonator": (0.1, 0.26, -65.0, 2.0),
+}
+"""`(a, b, c, d)` of each class in Izhikevich (2003), Figure 2."""
