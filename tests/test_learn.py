@@ -21,6 +21,7 @@ from sparx.learn import (
     relu_forward,
     run_converted,
 )
+from sparx.learn.events import EventLIF, first_spike_cross_entropy, spike_times
 from sparx.surrogate import Sigmoid, Triangle
 
 CELLS = {
@@ -171,3 +172,91 @@ def test_a_converted_network_approaches_its_anns_accuracy():
     activations = relu_forward(converted, test_x)
     hidden = np.clip(np.asarray(activations[0]).ravel(), 0, 1)
     assert np.corrcoef(np.asarray(rates[0]).ravel(), hidden)[0, 1] > 0.99
+
+
+def _event_problem(seed=0, batch=3, inputs=6, outputs=4):
+    rng = np.random.default_rng(seed)
+    times = np.sort(rng.uniform(0, 20, (batch, inputs, 3)), axis=-1)
+    times[rng.random(times.shape) < 0.3] = np.inf
+    return jnp.asarray(times), jnp.asarray(rng.normal(1.2, 0.8, (inputs, outputs)))
+
+
+def test_event_gradients_are_the_exact_derivatives_of_spike_times():
+    # EventProp's gradient is the derivative of the event-based dynamics
+    # with spike counts fixed: central differences of the exact simulation.
+    neuron = EventLIF()
+    with jax.enable_x64(new_val=True):
+        inputs, weights = _event_problem()
+
+        @jax.jit
+        def loss(weights, inputs):
+            times, _ = spike_times(inputs, weights, neuron, horizon=60.0, capacity=4)
+            return 1e-3 * jnp.sum(jnp.where(jnp.isfinite(times), times, 0.0) ** 2)
+
+        grad_w, grad_in = jax.grad(loss, argnums=(0, 1))(weights, inputs)
+        assert np.isfinite(np.asarray(spike_times(inputs, weights, neuron, 60.0, 4)[0])).sum() > 15
+        eps = 1e-6
+        for index in [(0, 0), (2, 1), (5, 3), (3, 2)]:
+            step = jnp.zeros_like(weights).at[index].set(eps)
+            numeric = (loss(weights + step, inputs) - loss(weights - step, inputs)) / (2 * eps)
+            np.testing.assert_allclose(grad_w[index], numeric, rtol=1e-6, atol=1e-8)
+        finite = np.argwhere(np.isfinite(np.asarray(inputs)))[:4]
+        for index in map(tuple, finite):
+            step = jnp.zeros_like(inputs).at[index].set(eps)
+            numeric = (loss(weights, inputs + step) - loss(weights, inputs - step)) / (2 * eps)
+            np.testing.assert_allclose(grad_in[index], numeric, rtol=1e-6, atol=1e-8)
+
+
+def test_event_simulation_is_the_lif_integrated_on_a_fine_grid():
+    # The same neurons in sparx.dynamics (exact integration, exponential
+    # current synapses) at 1 us fire at the same times, to the grid.
+    from sparx.dynamics import LIF, Arrivals, Exponential, PointNeuron, Receptor, integrate
+
+    neuron = EventLIF()
+    dt, horizon = 0.001, 60.0
+    with jax.enable_x64(new_val=True):
+        inputs, weights = _event_problem(seed=3, batch=1)
+        exact, _ = spike_times(inputs, weights, neuron, horizon, capacity=6)
+        steps = round(horizon / dt)
+        arrivals = np.zeros((steps, weights.shape[1]))
+        for source, when in np.argwhere(np.isfinite(np.asarray(inputs[0]))):
+            step = round(float(inputs[0, source, when]) / dt) - 1  # lands at the end of this step
+            arrivals[step] += np.asarray(weights[source])
+        lif = LIF(tau_m=neuron.tau_mem, c_m=neuron.tau_mem, e_l=0.0, v_th=1.0, v_reset=0.0, t_ref=0.0)
+        cell = PointNeuron(lif, {"syn": Receptor(Exponential(neuron.tau_syn))})
+        fired, _ = integrate(cell, Arrivals(0.0, {"syn": jnp.asarray(arrivals)}), dt)
+    for n in range(weights.shape[1]):
+        grid = (np.flatnonzero(np.asarray(fired.fired[:, n])) + 1) * dt
+        want = np.sort(np.asarray(exact[0, n]))
+        want = want[np.isfinite(want)]
+        assert len(grid) == len(want)
+        np.testing.assert_allclose(grid, want, atol=3 * dt)
+    assert np.isfinite(np.asarray(exact)).sum() >= 3
+
+
+def test_a_two_layer_event_network_learns_spike_latencies():
+    # Two classes of input spike patterns; the output neuron of the right
+    # class must fire first.
+    rng = np.random.default_rng(0)
+    patterns = rng.uniform(0, 10, (2, 8, 1))
+    labels = jnp.asarray(rng.integers(0, 2, 32))
+    jitter = rng.normal(0, 0.5, (32, 8, 1))
+    inputs = jnp.asarray(np.clip(patterns[np.asarray(labels)] + jitter, 0, None))
+    neuron = EventLIF()
+    params = (jnp.asarray(rng.normal(1.0, 0.5, (8, 12))), jnp.asarray(rng.normal(1.0, 0.5, (12, 2))))
+
+    def loss(params):
+        hidden, _ = spike_times(inputs, params[0], neuron, horizon=40.0, capacity=2)
+        out, _ = spike_times(hidden, params[1], neuron, horizon=40.0, capacity=2)
+        return first_spike_cross_entropy(out, labels, silent=40.0), out
+
+    optimizer = optax.adam(1e-2)
+    state = optimizer.init(params)
+    step = jax.jit(jax.value_and_grad(loss, has_aux=True))
+    for _ in range(60):
+        (value, out), grads = step(params)
+        updates, state = optimizer.update(grads, state)
+        params = optax.apply_updates(params, updates)
+    first = jnp.min(out, -1)
+    accuracy = float(jnp.mean(jnp.argmin(first, -1) == labels))
+    assert accuracy >= 0.95 and np.isfinite(float(value))
