@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from dew.config import to_json
+from dew.config import _to_json
 
 from sparx.encode import Delta, Direct, Events, Latency, Rate, SpikeEncoder
 from sparx.registry import spike_encoders
@@ -77,5 +77,5 @@ def test_events_pass_uint8_spike_counts_unscaled():
 @pytest.mark.parametrize("encoder", [Direct(4), Rate(8), Latency(6, threshold=0.2),
                                      Delta(0.3, off_spikes=True), Events(time_axis=1)])
 def test_every_encoder_rebuilds_from_its_record(encoder):
-    record = to_json(encoder, SpikeEncoder)
+    record = _to_json(encoder, SpikeEncoder)
     assert spike_encoders.from_record(record) == encoder

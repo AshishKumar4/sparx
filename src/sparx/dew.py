@@ -17,7 +17,7 @@ network over time, and reads its outputs as class scores.
     state = trainer.fit(Dataset.from_records({"image": x, "label": y}, batch=128),
                         steps=2000, metrics=[accuracy])
 
-Importing this module needs dew installed (`pip install "sparxml[dew]"`).
+Importing this module needs dew, which sparx installs.
 """
 
 from __future__ import annotations
@@ -199,25 +199,22 @@ class SpikingClassifier(Objective[Ratio]):
 
     def inference_record(self) -> JSON:
         """The model, encoder, readout and schedules a saved run rebuilds its classifier from."""
-        from dew.config import ModelConfig, to_json
+        from dew.config import ModelConfig, _to_json
         if not any(member is type(self) for member in objectives.values()):
             return None
         return {
             "objective": objectives.name_of(type(self)),
-            "model": to_json(ModelConfig.from_model(self.model), ModelConfig),
+            "model": _to_json(ModelConfig.from_model(self.model), ModelConfig),
             "sample": {"key": self.sample.key, "shape": list(self.sample.shape)},
-            "encoder": to_json(self.encoder, SpikeEncoder),
+            "encoder": _to_json(self.encoder, SpikeEncoder),
             "readout": self.readout,
             "labels": self.labels,
-            "schedules": {name: to_json(schedule, ScheduleBase)
+            "schedules": {name: _to_json(schedule, ScheduleBase)
                           for name, schedule in self.schedules.items()},
             "schedule_steps": self.schedule_steps,
         }
 
-    # Dew types `Objective.pipeline` as its own closed `Task` union, which a
-    # plugin's task cannot join; `dew.pipeline` loads this one by
-    # `saved_task` all the same (AshishKumar4/dew#30).
-    def pipeline(  # pyright: ignore[reportIncompatibleMethodOverride]
+    def pipeline(
             self, state, *, ema: bool | None = None) -> SpikingClassification:
         """The trained classifier over `state`'s weights, with the schedules at their final values."""
         variables = self._pipeline_weights(state, ema)
