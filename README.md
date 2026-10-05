@@ -19,6 +19,8 @@ APIs can change before 1.0.
 - [Pure JAX cells](#pure-jax-cells)
 - [Training with dew](#training-with-dew)
 - [Simulating circuits](#simulating-circuits)
+- [Learning beyond backpropagation through time](#learning-beyond-backpropagation-through-time)
+- [Connectomes, serving and exchange](#connectomes-serving-and-exchange)
 - [Results](#results)
 - [Performance](#performance)
 - [Correctness](#correctness)
@@ -253,6 +255,23 @@ print(firing_rates(spikes, 0.1).mean(), cv_isi(spikes).mean())  # about 17 Hz, C
 
 A step runs in NEST's order: synapses deliver what is due, membranes integrate (exactly where the equations are linear) and spike, spikes enter per-population ring buffers, kinetic synapses receive what arrives at the end of the step, plasticity updates, monitors record. `simulate` compiles one chunk of steps and carries the state between chunks, so a long run needs memory for one chunk of records, and a run continued from `result.variables` is the run it would have been unbroken. `sparx.graph.models` builds Brunel's (2000) network and the CUBA and COBA benchmarks; `Projection`s take per-edge weights and delays, pair and triplet STDP, and short-term plasticity.
 
+## Learning beyond backpropagation through time
+
+`sparx.learn` holds the rules design.md section 7 names, each checked against what defines it (`tests/test_learn.py`):
+
+- `eprop`: e-prop (Bellec et al. 2020) for a recurrent layer of any sparx cell and a leaky readout, computed online in memory independent of the sequence length. It equals backpropagation with the recurrent spikes' gradient cut, and its eligibility traces with the true learning signal equal backpropagation, the two identities their own code verifies.
+- `ottt`: online training through time (Xiao et al. 2022), matching their PyTorch modules' gradients to 1e-10.
+- `events.spike_times`: exact spike times of LIF networks with current synapses in continuous time, differentiable: the exact gradient EventProp (Wunderlich and Pehle 2021) computes, checked against finite differences.
+- `convert`: ReLU networks to integrate-and-fire networks by robust threshold balancing (Rueckauer et al. 2017).
+- `sparx.dew.ActivityFit` fits a network's spikes to recorded ones by van Rossum distance (`sparx.losses.van_rossum`, exact on the grid) or smoothed rates.
+
+## Connectomes, serving and exchange
+
+- `sparx.graph.connectome` reads FlyWire (Shiu et al.'s tables) and the male CNS release into a `Connectome` and builds Shiu et al.'s (2024) whole-brain model; on FlyWire v630 it reproduces their published runs (rate correlation 0.999, MN9 at 67.1 Hz against their 67.0 +- 6.6) at about 30 s per simulated second on 4 CPU cores.
+- `simulate(trials=..., mesh=...)` spreads trials, or one network's neurons, over devices, with one device's results.
+- `sparx.serve.StreamServer` serves streaming models to many sessions at once, each with its own neuron state in a slot of one batch; a session's outputs equal a direct call over its stream.
+- `sparx.nir` exchanges networks through NIR; a network exported by snnTorch runs in sparx spike for spike and exports back unchanged.
+
 ## Results
 
 All runs below are the example scripts as committed, on a 4-core x86 CPU with JAX 0.11.2, float32, seed 0. They are short runs that show the library training real data end to end, not tuned results.
@@ -284,7 +303,7 @@ The design keeps the sequential part of a spiking network small: synapses run ov
 - The physical models match NEST 3.10 and Brian2 2.10 (`tools/make_nest_fixtures.py`, `tools/make_brian2_fixtures.py`, `tests/test_simulators.py`): current-based LIF with exponential, alpha and delta synapses to 1e-11 mV and spike for spike; conductance-based LIF, AdEx, Izhikevich (bit for bit, op by op) and Hodgkin-Huxley spike for spike or within a stated step; STDP, triplet STDP and Tsodyks-Markram synapses to every transmitted weight.
 - Recurrent networks with per-edge delays fire with NEST spike for spike; Brunel's four regimes and the CUBA and COBA benchmarks match NEST's and Brian2's rates, irregularity and synchrony within their spread over seeds (`tests/test_graph.py`).
 
-[docs/fidelity.md](docs/fidelity.md) lists, for every model, its references, what was checked and each difference found between them. `pytest -q` runs all of it on CPU in about six minutes.
+[docs/fidelity.md](docs/fidelity.md) lists, for every model, its references, what was checked and each difference found between them. `pytest -q` runs all of it on CPU in about eight minutes; the whole-brain comparison runs when Shiu et al.'s repository is next to sparx (`SPARX_SHIU_REPO`).
 
 ## Installation
 
@@ -306,8 +325,9 @@ For a GPU or TPU, install the matching JAX build first (`jax[cuda12]` or `jax[tp
 - Accelerator measurements of the scan, the PSNs and synapse folding, then fused time-loop kernels (Pallas) where they pay.
 - An associative-scan path for linear dynamics, if it wins on accelerators.
 - Spiking self-attention and spiking sequence models, and more neuromorphic datasets (SSC, N-MNIST, DVS Gesture).
-- Online learning rules (e-prop, OTTT) that train without backpropagation through time.
-- Connectomes: FlyWire and the male CNS as networks, reproducing Shiu et al.'s (2024) whole-brain model; simulation sharded over devices.
+- GPU and TPU measurements of networks and connectomes, and fused kernels where they pay (design.md phase 7).
+- A weight scale for whole-brain models on the male CNS, and a published behaviour to validate it against.
+- Stateful serving in dew itself (AshishKumar4/dew#30), with `sparx.serve` as its first user.
 
 ## License
 

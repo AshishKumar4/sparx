@@ -23,6 +23,7 @@ specific to token generation (AshishKumar4/dew#30).
 from __future__ import annotations
 
 import collections
+from collections.abc import Mapping
 from concurrent.futures import Future
 from typing import Any
 
@@ -37,8 +38,8 @@ __all__ = ["StreamServer"]
 class StreamServer:
     """Sessions of a streaming model, `slots` at a time, advanced a `frame` of steps per round."""
 
-    def __init__(self, model: nn.Module, params: Any, *, slots: int, frame: int,
-                 sample_shape: tuple[int, ...], dtype: Any = jnp.float32):
+    def __init__(self, model: nn.Module, params: Mapping[str, Any], *, slots: int, frame: int,
+                 sample_shape: tuple[int, ...], dtype: jnp.dtype | type = jnp.float32):
         self.model, self.params, self.slots, self.frame = model, dict(params), slots, frame
         self.sample_shape, self.dtype = tuple(sample_shape), dtype
         empty = jnp.zeros((0, slots, *self.sample_shape), dtype)
@@ -77,7 +78,7 @@ class StreamServer:
             future.cancel()
         self.free.append(self.sessions.pop(session))
 
-    def submit(self, session: int, frame: Any) -> Future:
+    def submit(self, session: int, frame: np.ndarray | jax.Array) -> Future:
         """Queue one frame `[frame, *sample_shape]` of `session`'s stream; the future holds its outputs."""
         frame = np.asarray(frame, self.dtype)
         if frame.shape != (self.frame, *self.sample_shape):

@@ -23,8 +23,10 @@ def test_interleaved_sessions_equal_their_own_streams():
     with jax.enable_x64(new_val=True):
         params = model.init(jax.random.key(0), jnp.zeros((1, 1, features)))
         params = jax.tree.map(lambda w: 2.0 * w, params)
-        streams = {name: rng.random((frames * frame, features)) for name, frames in (("a", 4), ("b", 2), ("c", 3))}
-        server = StreamServer(model, params, slots=2, frame=frame, sample_shape=(features,), dtype=jnp.float64)
+        lengths = {"a": 4, "b": 2, "c": 3}
+        streams = {name: rng.random((frames * frame, features)) for name, frames in lengths.items()}
+        server = StreamServer(model, params, slots=2, frame=frame, sample_shape=(features,),
+                              dtype=jnp.float64)
         a, b = server.open(), server.open()
         futures = {"a": [], "b": [], "c": []}
         # Sessions arrive and leave at different times; c takes b's slot.

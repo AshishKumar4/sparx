@@ -341,6 +341,8 @@ Each phase ends with its acceptance tests passing, on the hardware they name.
 
 Phases 0 and 1 come first because every later phase builds on dew's extension points and on knowing which existing models are right.
 
+Status (October 2026): phases 0 to 6 are implemented and their acceptance tests pass on CPU, with these differences from the plan. Phase 2's Izhikevich (2004) twenty-pattern set waits for its source code, which could not be retrieved; the 2003 classes against NEST stand in. Phase 3's Brunel regimes are compared with NEST rather than Brian2. Phase 4's time per simulated second is measured on CPU only, and the male CNS runs but has no published model to validate against. Phase 5's EventProp gradient is computed by implicit differentiation of exact spike times, not by the adjoint pass (the same gradient, more memory). Phase 6's stateful serving lives in `sparx.serve` until dew's `Server` generalizes (dew#30). Phase 7 needs GPU and TPU hardware this work has not had.
+
 ## 14. Decisions to confirm
 
 1. Sparx takes dew as a required dependency, with Python 3.12 and dew's JAX pin. (Recommended.)
