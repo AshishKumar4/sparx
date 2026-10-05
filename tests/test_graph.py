@@ -16,11 +16,15 @@ from sparx.graph import (
     FromEdges,
     Network,
     OneToOne,
+    PoissonInput,
     Population,
     Projection,
     Spikes,
     StateMonitor,
+    simulate,
 )
+from sparx.graph.analysis import cv_isi, firing_rates, population_fano
+from sparx.graph.models import brunel
 
 NEST = np.load(Path(__file__).parent / "fixtures" / "nest.npz")
 DT = float(NEST["meta/dt"])
@@ -129,3 +133,48 @@ def test_the_same_key_builds_the_same_network():
     other = network.init(jax.random.key(4))
     assert not np.array_equal(one["connectome"]["edges"]["a->a:ex"]["pre"],
                               other["connectome"]["edges"]["a->a:ex"]["pre"])
+
+
+BRUNEL = np.load(Path(__file__).parent / "fixtures" / "brunel.npz")
+REGIMES = {"sr": (3.0, 2.0), "ai": (5.0, 2.0), "si_fast": (6.0, 4.0), "si_slow": (4.5, 0.9)}
+
+
+@pytest.mark.parametrize("regime", list(REGIMES))
+def test_brunel_regimes_match_nests_statistics(regime):
+    # Chaotic networks cannot match spike for spike: the excitatory rate,
+    # interspike irregularity and population synchrony agree with NEST's,
+    # on the scale of NEST's own spread over seeds.
+    g, eta = REGIMES[regime]
+    network = brunel(int(BRUNEL["meta/order"]), g=g, eta=eta)
+    result = simulate(network, network.init(jax.random.key(0)), duration=float(BRUNEL["meta/duration"]),
+                      key=jax.random.key(1), monitors=(Spikes("e"),), chunk=100.0)
+    window = result.records[0][round(float(BRUNEL["meta/skip"]) / DT):]
+    rate, cv, fano = firing_rates(window, DT).mean(), cv_isi(window).mean(), population_fano(window, DT)
+    nest_stats = BRUNEL[f"{regime}/stats"]
+    mean, spread = nest_stats.mean(0), nest_stats.std(0)
+    assert abs(rate - mean[0]) <= max(0.03 * mean[0], 4 * spread[0])
+    assert abs(cv - mean[1]) <= 0.02 + 4 * spread[1]
+    assert nest_stats[:, 2].min() / 2 <= fano <= nest_stats[:, 2].max() * 2
+
+
+def small_network():
+    network = Network((Population("a", 200, LIF(), {"ex": Receptor(Exponential(5.0))}),),
+                      (Projection("a", "a", FixedProbability(0.1), weight=20.0, delay=1.5),),
+                      inputs=(PoissonInput("a", rate=1000.0, weight=60.0, count=5),), dt=DT)
+    return network, network.init(jax.random.key(0))
+
+
+def test_simulate_does_not_depend_on_the_chunk_length():
+    network, variables = small_network()
+    runs = [simulate(network, variables, duration=50.0, key=jax.random.key(1), monitors=(Spikes("a"),),
+                     chunk=chunk).records[0] for chunk in (50.0, 7.0)]
+    np.testing.assert_array_equal(*runs)
+    assert runs[0].sum() > 100
+
+
+def test_a_run_continued_from_its_variables_is_the_unbroken_run():
+    network, variables = small_network()
+    whole = simulate(network, variables, duration=50.0, key=jax.random.key(1), monitors=(Spikes("a"),))
+    first = simulate(network, variables, duration=20.0, key=jax.random.key(1), monitors=(Spikes("a"),))
+    second = simulate(network, first.variables, duration=30.0, key=jax.random.key(1), monitors=(Spikes("a"),))
+    np.testing.assert_array_equal(np.concatenate([first.records[0], second.records[0]]), whole.records[0])

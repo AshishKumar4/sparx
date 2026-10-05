@@ -26,6 +26,7 @@ from sparx.graph.network import (
     Spikes,
     StateMonitor,
 )
+from sparx.graph.simulate import Simulation, simulate
 
 __all__ = [
     "AllToAll",
@@ -43,6 +44,8 @@ __all__ = [
     "Population",
     "PopulationRate",
     "Projection",
+    "Simulation",
     "Spikes",
     "StateMonitor",
+    "simulate",
 ]
