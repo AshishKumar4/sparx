@@ -6,6 +6,8 @@ Sparx builds spiking networks out of ordinary Flax linen layers and a small set 
 
 Sparx also simulates circuits as neuroscience states them: neuron models in physical units (LIF, AdEx, Izhikevich, Hodgkin-Huxley), receptor kinetics and plasticity (`sparx.dynamics`), wired into populations and projections with delays (`sparx.graph`). These match NEST and Brian2, spike for spike where the models are deterministic and statistically where they are chaotic.
 
+`import sparx` reaches every part: `sparx.nn`, `sparx.models`, `sparx.dynamics` and the other modules a network is built from load with it, and `sparx.graph`, `sparx.learn`, `sparx.dew`, `sparx.datasets`, `sparx.serve` and `sparx.nir` load the first time they are used.
+
 APIs can change before 1.0.
 
 ## Contents
