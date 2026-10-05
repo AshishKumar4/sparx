@@ -67,6 +67,7 @@ __all__ = [
     "Recurrent",
     "Synaptic",
     "adopt",
+    "history_window",
     "record_rates",
 ]
 
@@ -126,6 +127,25 @@ def record_rates(module: nn.Module, spikes: jax.Array) -> None:
     """Sow `spikes`' time-averaged rate into `"spike_rates"` when that collection is mutable."""
     if module.is_mutable_collection(RATES) and not module.is_initializing():
         module.sow(RATES, "rate", jnp.mean(spikes, axis=0, dtype=jnp.float32))
+
+
+def history_window(module: nn.Module, x: jax.Array, held: int) -> jax.Array:
+    """`x` `[T, ...]` with the `held` steps before it prepended, `[held + T, ...]`, in `x`'s dtype.
+
+    A causal layer that reads `held` steps back keeps those steps in the
+    `"state"` collection when it is mutable, so a stream fed in chunks sees
+    the steps the previous chunk ended on; a fresh stream, or a call that
+    does not carry state, sees zeros before its first step. The window's
+    last `held` steps are stored for the next call.
+    """
+    carrying = module.is_mutable_collection(STATE) and not module.is_initializing()
+    history = module.get_variable(STATE, "carry") if carrying else None
+    if history is None:
+        history = jnp.zeros((held, *x.shape[1:]), x.dtype)
+    window = jnp.concatenate([jnp.asarray(history, x.dtype), x])
+    if carrying:
+        module.put_variable(STATE, "carry", window[window.shape[0] - held:])
+    return window
 
 
 def adopt(neuron: Neuron, owner: nn.Module, name: str) -> Neuron:

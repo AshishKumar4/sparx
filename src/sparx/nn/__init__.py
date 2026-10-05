@@ -14,6 +14,7 @@ from .neurons import (
     Recurrent,
     Synaptic,
     adopt,
+    history_window,
     record_rates,
 )
 from .parallel import PSN, MaskedPSN, SlidingPSN, band_mask
@@ -39,5 +40,6 @@ __all__ = [
     "adopt",
     "band_mask",
     "delay_kernel",
+    "history_window",
     "record_rates",
 ]

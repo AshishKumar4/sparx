@@ -26,7 +26,7 @@ import jax
 import jax.numpy as jnp
 
 from sparx.dynamics.core import membrane_dtype
-from sparx.nn.neurons import STATE
+from sparx.nn.neurons import history_window
 
 __all__ = ["DelayedDense", "delay_kernel"]
 
@@ -80,13 +80,7 @@ class DelayedDense(nn.Module):
         kernel = (delay_kernel(delay, self.max_delay, sigma) * weight).astype(dtype)  # [K, in, out]
 
         held = self.max_delay
-        carrying = self.is_mutable_collection(STATE) and not self.is_initializing()
-        history = self.get_variable(STATE, "carry") if carrying else None
-        if history is None:
-            history = jnp.zeros((held, *x.shape[1:]), x.dtype)
-        window = jnp.concatenate([jnp.asarray(history, x.dtype), x]).astype(dtype)
-        if carrying:
-            self.put_variable(STATE, "carry", window[window.shape[0] - held:].astype(x.dtype))
+        window = history_window(self, x, held).astype(dtype)
 
         steps = x.shape[0]
         # Lag k reads the window from offset held - k: output step t sees x[t - k].

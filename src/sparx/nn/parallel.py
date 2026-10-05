@@ -30,7 +30,7 @@ import jax
 import jax.numpy as jnp
 
 from sparx.dynamics.core import membrane_dtype
-from sparx.nn.neurons import STATE, record_rates
+from sparx.nn.neurons import STATE, history_window, record_rates
 from sparx.surrogate import ATan, Surrogate, spike
 
 __all__ = ["PSN", "MaskedPSN", "SlidingPSN", "band_mask"]
@@ -147,12 +147,8 @@ class SlidingPSN(nn.Module):
         init = _exponential if self.exponential_init else _kaiming_row
         weight = self.param("weight", init, (self.k,), jnp.float32)
         bias = self.param("bias", nn.initializers.constant(-1.0), (), jnp.float32)
-        carrying = self.is_mutable_collection(STATE) and not self.is_initializing()
-        history = self.get_variable(STATE, "carry") if carrying else None
-        if history is None:
-            history = jnp.zeros((self.k - 1, *x.shape[1:]), x.dtype)
-        window = jnp.concatenate([jnp.asarray(history, x.dtype), x])
         steps, held = x.shape[0], self.k - 1
+        window = history_window(self, x, held)
         # The Toeplitz matrix that slides the weights, over the held steps and
         # the new ones: row t reads columns t .. t + k - 1 of the window.
         rows = jnp.arange(steps)[:, None]
@@ -160,6 +156,4 @@ class SlidingPSN(nn.Module):
         offset = cols - rows
         toeplitz = jnp.where((offset >= 0) & (offset < self.k), weight[jnp.clip(offset, 0, self.k - 1)], 0)
         h = _mix(toeplitz, jnp.broadcast_to(bias, (steps,)), window, self.precision)
-        if carrying:
-            self.put_variable(STATE, "carry", window[window.shape[0] - held:])
         return _fire(self, h, self.surrogate, x.dtype)
