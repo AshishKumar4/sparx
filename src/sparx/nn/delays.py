@@ -37,9 +37,14 @@ def delay_kernel(delay: jax.Array, max_delay: int, sigma: float | jax.Array) -> 
     A normalized Gaussian of width `sigma` centered at the delay, clipped to
     `[0, max_delay]`; at `sigma` 0 (a Python number), the one-hot of the
     rounded delay, with no gradient to the delay.
+
+    The clip passes the gradient through unchanged. DCLS has no clip in its
+    kernel and clamps its positions after each update, so a delay at an end
+    of the range gets the kernel's full gradient there; `jnp.clip` would
+    halve it at the end and zero it past it.
     """
     lags = jnp.arange(max_delay + 1, dtype=jnp.float32).reshape((-1,) + (1,) * delay.ndim)
-    center = jnp.clip(delay, 0, max_delay)
+    center = delay + jax.lax.stop_gradient(jnp.clip(delay, 0, max_delay) - delay)
     if isinstance(sigma, (int, float)) and sigma == 0:
         return (lags == jnp.round(jax.lax.stop_gradient(center))).astype(jnp.float32)
     density = jnp.exp(-0.5 * ((lags - center) / sigma) ** 2)

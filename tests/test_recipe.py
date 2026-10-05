@@ -27,15 +27,29 @@ def _fake_shd(cache: Path, seed: int, records: int) -> None:
             file.create_dataset("labels", data=labels)
 
 
-def test_the_recipe_trains_and_its_run_loads_through_dew_pipeline(tmp_path):
+SNN_DELAYS_FLAGS = [
+    "--data.binning", "events", "--readout", "softmax_sum", "--schedule-every", "2",
+    "--model.config", json.dumps({"hidden": [16], "classes": 2, "delays": [3, 3], "extend": True,
+                                  "batch_norm": True, "use_bias": False, "dropout_mask": "sequence",
+                                  "neuron": {"name": "lif", "fields": {"tau": 3.0}}}),
+    "--deployed", json.dumps({"sigma": 0}),
+    "--groups", json.dumps({"delays": {"patterns": ["*/delay"], "bounds": [0, 3],
+                                       "learning_rate": {"name": "cosine", "fields": {"peak": 0.1,
+                                                                                     "warmup_steps": 0}}}}),
+]
+
+
+@pytest.mark.parametrize("delayed", [False, True])
+def test_the_recipe_trains_and_its_run_loads_through_dew_pipeline(tmp_path, delayed):
     _fake_shd(tmp_path, 0, 64)
     env = {**os.environ, "JAX_PLATFORMS": "cpu"}
+    model = ["--model.config", json.dumps({"hidden": [16], "classes": 2, "delays": 3,
+                                           "neuron": {"name": "lif", "fields": {"tau": 3.0}}})]
     command = [sys.executable, str(ROOT / "recipes/snn/train.py"),
                "--data.cache", str(tmp_path), "--data.steps", "20", "--data.channels", "70",
                "--data.loading.workers", "0", "--data.loading.threads", "1",
                "--data.loading.read-buffer", "1",
-               "--model.config", json.dumps({"hidden": [16], "classes": 2, "delays": 3,
-                                             "neuron": {"name": "lif", "fields": {"tau": 3.0}}}),
+               *(SNN_DELAYS_FLAGS if delayed else model),
                "--schedules", json.dumps({"sigma": {"name": "linear", "fields": {"peak": 1.5, "end": 0.5}}}),
                "--trainer.batch-size", "16", "--trainer.steps", "8", "--trainer.log-every", "4",
                "--trainer.eval-every", "8", "--trainer.checkpoint-every", "8",
@@ -53,5 +67,7 @@ def test_the_recipe_trains_and_its_run_loads_through_dew_pipeline(tmp_path):
     loaded = subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, env=env,
                             timeout=600)
     assert loaded.returncode == 0, loaded.stderr[-3000:]
-    # The width schedule ends at 0.5, which the loaded task runs with.
-    assert loaded.stdout.strip() == "SpikingClassification {'sigma': 0.5}"
+    # The width schedule ends at 0.5, which the loaded task runs with unless the rounded delays are deployed.
+    assert loaded.stdout.strip() == f"SpikingClassification {{'sigma': {0.0 if delayed else 0.5}}}"
+    if delayed:
+        assert recorded["groups"]["delays"]["learning_rate"]["name"] == "cosine"

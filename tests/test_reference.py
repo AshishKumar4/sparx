@@ -7,6 +7,7 @@ float32 sums taken in a different order by the two frameworks; the largest
 differences observed, on CPU at float32, are noted at each tolerance.
 """
 
+import math
 from pathlib import Path
 
 import jax
@@ -222,3 +223,121 @@ def test_sew_block_matches_spikingjelly(key, features, strides, connect):
     with jax.enable_x64(new_val=True):
         out = block.apply(_sew_variables(case), jnp.asarray(FIXTURES[f"{case}/x"]), train=False)
         np.testing.assert_array_equal(np.asarray(out), FIXTURES[f"{case}/out"])
+
+
+SNN_DELAYS = np.load(Path(__file__).parent / "fixtures" / "snn_delays.npz")
+_DCLS_KERNEL = 5  # the fixture's dilated kernel: delays of 0 to 4 steps
+
+
+def _snn_delays_network():
+    from sparx.models import SpikingMLP
+    from sparx.nn import LIF
+    # SpikingJelly's decay_input=False LIF keeps 1 - 1 / tau of the membrane a step.
+    tau = -1 / math.log(1 - 1 / float(SNN_DELAYS["tau"]))
+    neuron = LIF(tau=tau, reset="zero", surrogate=ATan(5.0), detach_reset=True)
+    return SpikingMLP(hidden=(5, 5), classes=3, neuron=neuron, delays=(4, 4, 4), extend=True, batch_norm=True,
+                      use_bias=False, readout_tau=tau)
+
+
+def _snn_delays_params(positions):
+    params = {}
+    for layer, name in enumerate(("delayed_0", "delayed_1", "readout")):
+        # DCLS centers its Gaussian at kernel index P + K // 2, which reads K - 1 - that steps back.
+        delay = (_DCLS_KERNEL - 1) - (SNN_DELAYS[positions.format(layer)] + _DCLS_KERNEL // 2)
+        params[name] = {"kernel": jnp.asarray(SNN_DELAYS[f"layer{layer}/weight"].T),
+                        "delay": jnp.asarray(delay.T)}
+    for layer in range(2):
+        params[f"norm_{layer}"] = {"scale": jnp.ones(5), "bias": jnp.zeros(5)}
+    return params
+
+
+def test_a_fully_delayed_network_trains_as_snn_delays():
+    from sparx.losses import softmax_sum_cross_entropy
+    from sparx.nn import RATES
+    net = _snn_delays_network()
+    stats = {f"norm_{layer}": {"mean": jnp.zeros(5), "var": jnp.ones(5)} for layer in range(2)}
+    labels = jnp.asarray(SNN_DELAYS["labels"])
+    sigma = float(SNN_DELAYS["sig"]) + 0.27  # DCLS's effective width
+
+    def loss(params, x):
+        out, updated = net.apply({"params": params, "batch_stats": stats}, x, train=True, sigma=sigma,
+                                 mutable=["batch_stats", RATES])
+        return jnp.mean(softmax_sum_cross_entropy(out, labels)), (out, updated)
+
+    (value, (out, updated)), (grads, grad_x) = jax.value_and_grad(loss, argnums=(0, 1), has_aux=True)(
+        _snn_delays_params("layer{}/P"), jnp.asarray(SNN_DELAYS["x"]))
+    assert all(float(rate.mean()) > 0.05 for rate in jax.tree.leaves(updated[RATES]))  # hidden layers fire
+    # Each delayed synapse appends 2 steps, so 9 input steps reach the readout as 15. Observed at
+    # most 1.2e-7 on the outputs and the loss, 2.1e-7 on the input gradient, 5.7e-7 on any other.
+    np.testing.assert_allclose(out, SNN_DELAYS["train/out"], rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(value, SNN_DELAYS["train/loss"], rtol=1e-6)
+    np.testing.assert_allclose(grad_x, SNN_DELAYS["train/grad_x"], rtol=1e-5, atol=1e-6)
+    for layer, name in enumerate(("delayed_0", "delayed_1", "readout")):
+        np.testing.assert_allclose(grads[name]["kernel"], SNN_DELAYS[f"train/grad_weight{layer}"].T,
+                                   rtol=1e-5, atol=1e-6)
+        # d/d delay = -d/d P.
+        np.testing.assert_allclose(grads[name]["delay"], -SNN_DELAYS[f"train/grad_P{layer}"].T,
+                                   rtol=1e-5, atol=1e-6)
+    for layer in range(2):
+        norm = f"norm_{layer}"
+        np.testing.assert_allclose(grads[norm]["scale"], SNN_DELAYS[f"train/grad_bn_weight{layer}"],
+                                   rtol=1e-5, atol=1e-6)
+        np.testing.assert_allclose(grads[norm]["bias"], SNN_DELAYS[f"train/grad_bn_bias{layer}"],
+                                   rtol=1e-5, atol=1e-6)
+        running = updated["batch_stats"][norm]
+        np.testing.assert_allclose(running["mean"], SNN_DELAYS[f"train/running_mean{layer}"],
+                                   rtol=1e-5, atol=1e-7)
+        # torch keeps the unbiased variance of the n = steps * batch values, flax the biased one.
+        n = (9 + 2 * (layer + 1)) * 4
+        unbiased = 0.9 + (np.asarray(running["var"]) - 0.9) * n / (n - 1)
+        np.testing.assert_allclose(unbiased, SNN_DELAYS[f"train/running_var{layer}"], rtol=1e-5)
+
+
+def test_a_fully_delayed_network_evaluates_as_snn_delays():
+    from sparx.losses import softmax_sum_cross_entropy
+    net = _snn_delays_network()
+    # Their evaluation reads rounded positions and the running statistics.
+    stats = {f"norm_{layer}": {"mean": jnp.asarray(SNN_DELAYS[f"train/running_mean{layer}"]),
+                               "var": jnp.asarray(SNN_DELAYS[f"train/running_var{layer}"])}
+             for layer in range(2)}
+    variables = {"params": _snn_delays_params("eval/P{}"), "batch_stats": stats}
+    out = net.apply(variables, jnp.asarray(SNN_DELAYS["x"]), train=False, sigma=0)
+    # Observed at most 2.4e-7.
+    np.testing.assert_allclose(out, SNN_DELAYS["eval/out"], rtol=1e-5, atol=1e-5)
+    loss = jnp.mean(softmax_sum_cross_entropy(out, jnp.asarray(SNN_DELAYS["labels"])))
+    np.testing.assert_allclose(loss, SNN_DELAYS["eval/loss"], rtol=1e-6)
+
+
+def test_event_binning_reproduces_snn_delays_frames():
+    from sparx.datasets import bin_events
+    frames = SNN_DELAYS["events/frames"]
+    steps = frames.shape[0]
+    ours = bin_events(SNN_DELAYS["events/times"], SNN_DELAYS["events/units"], steps, steps * 0.01, 700,
+                      binning="events")
+    np.testing.assert_array_equal(ours, frames)
+    # The grid keeps the silences their binning drops, so it needs more steps.
+    grid = bin_events(SNN_DELAYS["events/times"], SNN_DELAYS["events/units"], 40, 0.4, 700)
+    assert np.flatnonzero(grid.sum(1)).max() >= steps
+
+
+def test_schedules_stepped_once_an_epoch_are_snn_delays_torch_schedulers():
+    from dew.training.optim import Cosine
+
+    from sparx.dew import ExponentialDecay, OneCycle, stepped
+    epochs, per_epoch = int(SNN_DELAYS["schedule/epochs"]), 3
+    steps = np.arange(epochs) * per_epoch + 1  # a step inside each epoch
+
+    def values(schedule):
+        return np.asarray(jax.vmap(stepped(schedule, epochs * per_epoch, per_epoch))(jnp.asarray(steps)))
+
+    # OneCycleLR(max_lr=5e-3, total_steps=epochs) and its Adam momentum cycle.
+    np.testing.assert_allclose(values(OneCycle(peak=5e-3, start=2e-4, end=2e-8)), SNN_DELAYS["schedule/lr_w"],
+                               rtol=1e-5)
+    np.testing.assert_allclose(values(OneCycle(peak=0.85, start=0.95, end=0.95)), SNN_DELAYS["schedule/b1"],
+                               rtol=1e-6)
+    # CosineAnnealingLR(T_max=epochs) on the positions' rate, 100 times the weights' 1e-3.
+    np.testing.assert_allclose(values(Cosine(peak=0.1, warmup_steps=0)), SNN_DELAYS["schedule/lr_pos"],
+                               rtol=1e-4, atol=1e-8)
+    # decrease_sig: DCLS's raw width from 12 to 0.23 over the first quarter; sparx's width adds 0.27.
+    width = ExponentialDecay(start=12.0, end=0.23, decay_steps=epochs // 4, offset=0.27)
+    np.testing.assert_allclose(values(width), SNN_DELAYS["schedule/sig"] + 0.27, rtol=1e-5)

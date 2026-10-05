@@ -21,12 +21,12 @@ from typing import Literal
 import tyro
 from dew.config import JsonDict, ModelConfig, OptimConfig, RunConfig
 from dew.inputs import Field
-from dew.records import record
-from dew.registry import datasets, schedules
+from dew.records import number, record
+from dew.registry import datasets, from_record, schedules
 from dew.training import TrainState, prepare_process, run_timestamp
 
 import sparx.datasets
-from sparx.dew import RateBand, SpikingClassifier, accuracy
+from sparx.dew import GroupAdam, RateBand, SpikingClassifier, accuracy
 from sparx.registry import spike_encoders
 
 
@@ -46,10 +46,19 @@ class SNNRunConfig(RunConfig):
     sample: str = "spikes"
     """The batch field the encoder reads."""
     labels: str = "label"
-    readout: Literal["mean", "max", "sum", "per_step"] = "max"
+    readout: Literal["mean", "max", "sum", "softmax_sum", "per_step"] = "max"
     rates: RateBand | None = field(default_factory=lambda: RateBand(lower=0.01, upper=0.3))
     schedules: JsonDict = field(default_factory=dict)
     """Model keyword arguments on a schedule over the run, by name: records of dew schedules."""
+    schedule_every: int = 1
+    """Steps between advances of every schedule; an epoch's steps give torch's per-epoch schedulers."""
+    deployed: JsonDict = field(default_factory=dict)
+    """Model keyword arguments evaluation runs with in place of the schedules', such as `{"sigma": 0}`."""
+    groups: JsonDict = field(default_factory=dict)
+    """Parameter groups with optimizers of their own, by name, each the fields of a `sparx.dew.GroupAdam`.
+
+    `optim` updates the parameters no group matches.
+    """
 
 
 def sample_field(config: SNNRunConfig) -> Field:
@@ -67,9 +76,12 @@ def main(config: SNNRunConfig) -> TrainState:
     steps = config.trainer.total_steps(data)
     encoder = spike_encoders.from_record(record(config.encoder, "encoder"))
     scheduled = {name: schedules.from_record(record(value, name)) for name, value in config.schedules.items()}
+    groups = {name: from_record(GroupAdam, value) for name, value in config.groups.items()}
+    deployed = {name: number(value, name) for name, value in config.deployed.items()}
     objective = SpikingClassifier(config.model.build(), sample_field(config), encoder, labels=config.labels,
                                   readout=config.readout, rates=config.rates, schedules=scheduled,
-                                  schedule_steps=steps)
+                                  schedule_steps=steps, schedule_every=config.schedule_every,
+                                  deployed=deployed, groups=groups)
     name = config.trainer.name or (
         f"snn-{datasets.name_of(type(config.data))}/{config.model.architecture}/date-{run_timestamp()}")
     return config.train(objective, data, name=name, metrics=[accuracy],

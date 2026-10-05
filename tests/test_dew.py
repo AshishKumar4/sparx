@@ -12,7 +12,20 @@ from dew.objectives.base import Step
 from dew.training.optim import Linear
 
 import sparx
-from sparx.dew import ActivityFit, RateBand, SpikingClassification, SpikingClassifier, accuracy
+from sparx.dew import (
+    WEIGHT,
+    ActivityFit,
+    GroupAdam,
+    OneCycle,
+    RateBand,
+    SpikingClassification,
+    SpikingClassifier,
+    accuracy,
+    evaluation_pass,
+    holdout,
+    stepped,
+    whole_batches,
+)
 from sparx.encode import Direct, Events, Rate
 from sparx.nn import LI, LIF
 
@@ -138,19 +151,169 @@ def test_schedules_need_their_horizon():
     with pytest.raises(ValueError, match="schedule_steps"):
         SpikingClassifier(Scaled(), Field("image", (8, 8, 1)), Direct(4),
                           schedules={"scale": Linear(peak=1.0)})
+    with pytest.raises(ValueError, match="schedule_steps"):
+        SpikingClassifier(Scaled(), Field("image", (8, 8, 1)), Direct(4),
+                          groups={"all": GroupAdam(("*",), Linear(peak=1e-3, end=1e-3))})
 
 
-def test_a_saved_run_loads_back_through_dew_pipeline_in_a_fresh_process(tmp_path):
+def test_deployed_arguments_replace_the_schedules_in_evaluation_and_the_trained_classifier():
+    objective = SpikingClassifier(Scaled(), Field("image", (8, 8, 1)), Direct(steps=4),
+                                  schedules={"scale": Linear(peak=3.0, end=1.0)}, schedule_steps=4,
+                                  deployed={"scale": 5.0})
+    batch = {key: jnp.asarray(value) for key, value in halves(16, 3).items()}
+    variables = objective.init(jax.random.key(0))
+    step = Step(jnp.asarray(2), jax.random.key(1), None)
+    x = Direct(4)(jax.random.key(1), batch["image"])
+
+    def ce(scale):
+        outputs = Scaled().apply(variables, x, scale)
+        return optax.softmax_cross_entropy_with_integer_labels(jnp.mean(outputs, 0), batch["label"])
+
+    stats, _ = objective.loss(variables, batch, step)
+    np.testing.assert_allclose(stats.mean()[0], ce(2.0).mean(), rtol=1e-5)  # training follows the schedule
+    np.testing.assert_allclose(objective.evaluate(variables, batch, step).losses[:, 0], ce(5.0), rtol=1e-5)
+    assert objective.inference_record()["deployed"] == {"scale": 5.0}  # type: ignore[index]
+
+
+def test_schedules_advance_once_every_schedule_every_steps():
+    # Over 8 steps advancing every 4, the ramp from 3 to 1 runs over 2 of its own steps: 3, then 2.
+    objective = SpikingClassifier(Scaled(), Field("image", (8, 8, 1)), Direct(steps=4),
+                                  schedules={"scale": Linear(peak=3.0, end=1.0)}, schedule_steps=8,
+                                  schedule_every=4)
+    values = [float(objective._scheduled(jnp.asarray(step))["scale"]) for step in range(8)]
+    assert values == [3.0] * 4 + [2.0] * 4
+
+
+def test_the_softmax_sum_readout_is_scored_and_predicted_by_the_summed_probabilities():
+    objective = SpikingClassifier(Net(), Field("image", (8, 8, 1)), Direct(steps=4), readout="softmax_sum")
+    batch = {key: jnp.asarray(value) for key, value in halves(16, 4).items()}
+    variables = objective.init(jax.random.key(0))
+    step = Step(jnp.asarray(0), jax.random.key(1), None)
+    outputs = Net().apply(variables, Direct(4)(jax.random.key(1), batch["image"]))
+    probabilities = jnp.sum(jax.nn.softmax(outputs, -1), 0)
+    expected = optax.softmax_cross_entropy_with_integer_labels(probabilities, batch["label"])
+    stats, _ = objective.loss(variables, batch, step)
+    np.testing.assert_allclose(stats.mean()[0], expected.mean(), rtol=1e-5)
+    scores = objective.evaluate(variables, batch, step)
+    np.testing.assert_array_equal(scores.correct[:, 0], jnp.argmax(probabilities, -1) == batch["label"])
+
+
+def delayed_net():
+    from sparx.models import SpikingMLP
+    return SpikingMLP(hidden=(16,), classes=2, neuron=LIF(tau=2.0), delays=(3, 3), batch_norm=True)
+
+
+def test_a_group_trains_its_parameters_with_its_own_optimizer(tmp_path):
+    # The delays learn at rate 0, so only the trainer's optimizer moves anything.
+    groups = {"delays": GroupAdam(("*/delay",), Linear(peak=0.0, end=0.0))}
+    objective = SpikingClassifier(delayed_net(), Field("image", (8, 8, 1)), Direct(steps=4), readout="max",
+                                  schedules={"sigma": Linear(peak=1.0, end=1.0)}, schedule_steps=10,
+                                  groups=groups)
+    # Two runs from the same key, one step and ten.
+    _, early = fit(objective, tmp_path / "early", steps=1)
+    _, late = fit(objective, tmp_path / "late", steps=10)
+    early, late = early.variables["params"], late.variables["params"]
+    for layer in ("delayed_0", "readout"):
+        np.testing.assert_array_equal(late[layer]["delay"], early[layer]["delay"])
+        assert not np.allclose(late[layer]["kernel"], early[layer]["kernel"])
+    assert not np.allclose(late["norm_0"]["scale"], early["norm_0"]["scale"])
+
+
+def test_bounded_groups_keep_their_parameters_within_bounds(tmp_path):
+    # A rate of 1 per step pushes delays past their range at once; the bounds clamp them.
+    groups = {"delays": GroupAdam(("*/delay",), Linear(peak=1.0, end=1.0), bounds=(0.0, 3.0))}
+    objective = SpikingClassifier(delayed_net(), Field("image", (8, 8, 1)), Direct(steps=4), readout="max",
+                                  schedules={"sigma": Linear(peak=1.0, end=1.0)}, schedule_steps=10,
+                                  groups=groups)
+    _, state = fit(objective, tmp_path, steps=10)
+    delays = np.concatenate([np.ravel(state.variables["params"][layer]["delay"])
+                             for layer in ("delayed_0", "readout")])
+    assert delays.min() >= 0 and delays.max() <= 3
+    assert np.mean((delays == 0) | (delays == 3)) > 0.3
+
+
+def test_group_adam_is_torchs_adam_with_l2_weight_decay_and_a_momentum_schedule():
+    group = GroupAdam(("*",), OneCycle(peak=1e-2, start=1e-3, end=1e-5, warmup=0.4),
+                      b1=OneCycle(peak=0.85, start=0.95, end=0.95, warmup=0.4), weight_decay=1e-2)
+    steps = 10
+    optimizer = group.build(steps)
+    rng = np.random.default_rng(0)
+    params = jnp.asarray(rng.normal(size=5), jnp.float32)
+    state = optimizer.init(params)
+    # torch.optim.Adam's update, with OneCycleLR setting lr and betas[0] before each step.
+    p, m, v = np.asarray(params, np.float64), np.zeros(5), np.zeros(5)
+    lr, b1 = (stepped(schedule, steps) for schedule in (group.learning_rate, OneCycle(0.85, 0.95, 0.95, 0.4)))
+    for t in range(steps):
+        grad = rng.normal(size=5)
+        updates, state = optimizer.update(jnp.asarray(grad, jnp.float32), state, params)
+        params = optax.apply_updates(params, updates)
+        g = grad + 1e-2 * p
+        beta = float(b1(t))
+        m = beta * m + (1 - beta) * g
+        v = 0.999 * v + 0.001 * g ** 2
+        p = p - float(lr(t)) * (m / (1 - beta ** (t + 1))) / (np.sqrt(v / (1 - 0.999 ** (t + 1))) + 1e-8)
+        np.testing.assert_allclose(params, p, rtol=1e-5, atol=1e-7)
+
+
+def test_the_trainers_name_is_refused_for_a_group():
+    with pytest.raises(ValueError, match="trainer"):
+        SpikingClassifier(Net(), Field("image", (8, 8, 1)), Direct(4), schedule_steps=4,
+                          groups={"trainer": GroupAdam(("*",), Linear(peak=1e-3, end=1e-3))})
+
+
+def test_every_record_of_a_split_is_scored_once_whatever_the_batch(tmp_path):
+    # 70 records in batches of 32: dew scores whole batches, and the copies filling the last weigh 0.
+    objective = SpikingClassifier(Net(), Field("image", (8, 8, 1)), Direct(steps=4))
+    val, test = halves(70, 1), halves(45, 5)
+    data = Dataset.from_records(halves(256, 0), batch=32, loading=LOADING)
+    trainer = Trainer(objective, optax.adam(1e-2), key=jax.random.key(0))
+    state = trainer.fit(data, steps=3, log_every=3, eval_every=3, metrics=[accuracy],
+                        validation={"val": evaluation_pass(val, 32), "test": evaluation_pass(test, 32)})
+    classifier = objective.pipeline(state)
+    for split, records in (("val", val), ("test", test)):
+        expected = np.mean(np.asarray(classifier(records["image"])) == records["label"])
+        scores = trainer._display.evaluations[split][-1].scores
+        np.testing.assert_allclose(scores[f"{split}/accuracy"], expected)
+    padded = whole_batches(val, 32)
+    assert len(padded["label"]) == 96 and padded[WEIGHT].sum() == 70
+
+
+def test_a_holdout_splits_the_records_without_overlap():
+    records = {"x": np.arange(100), "y": np.arange(100) * 2}
+    train, held = holdout(records, 0.1, seed=3)
+    assert len(held["x"]) == 10 and len(train["x"]) == 90
+    assert sorted(np.concatenate([train["x"], held["x"]]).tolist()) == list(range(100))
+    np.testing.assert_array_equal(held["y"], held["x"] * 2)
+    with pytest.raises(ValueError, match="empty"):
+        holdout(records, 0.001)
+
+
+@pytest.mark.parametrize("delayed", [False, True])
+def test_a_saved_run_loads_back_through_dew_pipeline_in_a_fresh_process(tmp_path, delayed):
     import json
     import os
     import subprocess
     import sys
 
+    from sparx.dew import ExponentialDecay
     from sparx.models import SpikingMLP
 
     neuron = LIF(tau=2.0, surrogate=sparx.surrogate.FastSigmoid(50.0))
-    net = SpikingMLP(hidden=(16,), classes=2, neuron=neuron)
-    objective = SpikingClassifier(net, Field("image", (8, 8, 1)), Rate(steps=6), readout="max")
+    if delayed:
+        # SNN-delays' shape: every synapse delayed and extended, batch norm, the softmax-sum readout,
+        # a width shrinking once every 2 steps, the delays on their own optimizer, and the rounded
+        # delays deployed.
+        net = SpikingMLP(hidden=(16,), classes=2, neuron=neuron, delays=(3, 2), extend=True, batch_norm=True,
+                         use_bias=False, weight_init="kaiming_uniform", dropout=0.2, dropout_mask="sequence")
+        objective = SpikingClassifier(
+            net, Field("image", (8, 8, 1)), Rate(steps=6), readout="softmax_sum",
+            schedules={"sigma": ExponentialDecay(start=1.5, end=0.23, offset=0.27)}, schedule_steps=8,
+            schedule_every=2, deployed={"sigma": 0},
+            groups={"delays": GroupAdam(("*/delay",), OneCycle(peak=0.1, start=0.01, end=0.0),
+                                        bounds=(0, 3))})
+    else:
+        net = SpikingMLP(hidden=(16,), classes=2, neuron=neuron)
+        objective = SpikingClassifier(net, Field("image", (8, 8, 1)), Rate(steps=6), readout="max")
     run = tmp_path / "run"
     data = Dataset.from_records(halves(64, 0), batch=32, loading=LOADING)
     trainer = Trainer(objective, optax.adam(1e-2), key=jax.random.key(0), checkpoints=Checkpoints(str(run)))
@@ -164,12 +327,17 @@ def test_a_saved_run_loads_back_through_dew_pipeline_in_a_fresh_process(tmp_path
                "assert 'sparx' in sys.modules\n"
                "import numpy as np\n"
                f"images = np.asarray(json.loads({json.dumps(images.tolist())!r}), np.uint8)\n"
-               "print(type(task).__name__, json.dumps(np.asarray(task.logits(images, key=3)).tolist()))\n")
+               "print(type(task).__name__, json.dumps(task.call), "
+               "json.dumps(np.asarray(task.logits(images, key=3)).tolist()))\n")
     done = subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, timeout=600,
                           env={**os.environ, "JAX_PLATFORMS": "cpu"})
     assert done.returncode == 0, done.stderr[-3000:]
-    name, logits = done.stdout.strip().split(" ", 1)
+    name, rest = done.stdout.strip().split(" ", 1)
+    call, end = json.JSONDecoder().raw_decode(rest)
+    logits = rest[end:]
     assert name == SpikingClassification.__name__
+    # The deployed width replaces the schedule's last value in the loaded classifier.
+    assert call == ({"sigma": 0.0} if delayed else {})
     np.testing.assert_array_equal(np.asarray(json.loads(logits), np.float32), np.asarray(expected))
 
 

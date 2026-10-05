@@ -26,6 +26,22 @@ def test_rate_mse_is_snntorch_mse_count_loss_over_steps():
     np.testing.assert_allclose(out, SNNTORCH["mse_count"].mean(-1) / steps, rtol=1e-6)
 
 
+def test_softmax_sum_cross_entropy_is_snn_delays_sum_loss():
+    # Their calc_loss: m = sum over time of softmax(output, dim=2), then CrossEntropyLoss(m, one_hot(y)),
+    # which applies log_softmax to m again; written out in float64.
+    outputs = np.random.default_rng(0).normal(size=(6, 3, 4)) * 3
+    labels = np.asarray([2, 0, 3])
+    e = np.exp(outputs - outputs.max(-1, keepdims=True))
+    m = (e / e.sum(-1, keepdims=True)).sum(0)
+    log_p = m - m.max(-1, keepdims=True) - np.log(np.exp(m - m.max(-1, keepdims=True)).sum(-1, keepdims=True))
+    expected = -log_p[np.arange(3), labels]
+    got = losses.softmax_sum_cross_entropy(jnp.asarray(outputs, jnp.float32), jnp.asarray(labels))
+    np.testing.assert_allclose(got, expected, rtol=1e-6)
+    np.testing.assert_allclose(losses.softmax_sum(jnp.asarray(outputs, jnp.float32)), m, rtol=1e-6)
+    # Each step's probabilities sum to one, so the summed ones sum to the step count.
+    np.testing.assert_allclose(m.sum(-1), 6.0)
+
+
 def test_rate_mse_is_zero_at_the_target_rates():
     labels = jnp.asarray([2, 0])
     spikes = jnp.zeros((10, 2, 3)).at[:8, 0, 2].set(1).at[:2, 0, :2].set(1)

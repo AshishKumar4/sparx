@@ -24,6 +24,22 @@ def test_adjacent_channels_pool_when_downsampled():
     assert out[0, 139] == 1 and out.sum() == 4
 
 
+def test_event_binning_opens_a_step_at_each_event_past_the_last_steps_reach():
+    # 10 ms steps: the first holds events within 10 ms of 0 (10 ms itself included), the next
+    # opens at 10.5 ms, and the silence after 20.5 ms is dropped, so 40 ms lands in step 2.
+    times = np.asarray([0.0, 0.004, 0.010, 0.0105, 0.020, 0.040, 0.0405], np.float16)
+    units = np.asarray([1, 2, 3, 4, 5, 6, 7])
+    out = bin_events(times, units, steps=4, max_time=0.04, channels=700, binning="events")
+    assert [sorted(np.flatnonzero(row).tolist()) for row in out] == [[1, 2, 3], [4, 5], [6, 7], []]
+    # The grid puts the same events in 10 ms bins from 0.
+    grid = bin_events(times.astype(np.float64), units, steps=5, max_time=0.05, channels=700)
+    assert [sorted(np.flatnonzero(row).tolist()) for row in grid] == [[1, 2], [3, 4], [5], [], [6, 7]]
+    empty = bin_events(np.zeros(0), np.zeros(0), steps=3, max_time=0.03, channels=700, binning="events")
+    assert not empty.any()
+    with pytest.raises(ValueError, match="binning"):
+        bin_events(times, units, steps=4, max_time=0.04, channels=700, binning="edges")  # type: ignore[arg-type]
+
+
 def test_channels_must_divide_the_source():
     with pytest.raises(ValueError, match="divide"):
         bin_events(np.zeros(1), np.zeros(1), steps=2, max_time=1.0, channels=300)

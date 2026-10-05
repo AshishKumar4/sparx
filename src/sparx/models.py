@@ -11,8 +11,9 @@ stages of basic blocks at 64, 128, 256 and 512 channels, global average
 pooling and a linear head, all over time-major `[T, B, H, W, C]` inputs.
 
 `SpikingMLP` is the dense network for event data such as SHD: stacked dense
-(or delayed) synapses, optionally recurrent spiking layers, and a leaky
-integrator readout.
+or delayed synapses, optionally with batch norm, optionally recurrent spiking
+layers, and a leaky integrator readout. With every synapse delayed it is the
+network of Hammouamri et al.'s SNN-delays (ICLR 2024).
 
 `neuron` is the template every neuron layer of a model copies, such as
 `sparx.nn.LIF(tau=2.0, detach_reset=True)`. It is a registered value, so a
@@ -48,6 +49,8 @@ type Connect = Literal["add", "and", "iand"]
 # kaiming_normal_(mode="fan_out", nonlinearity="relu"), SpikingJelly's and
 # torchvision's convolution initialization.
 _conv_init = nn.initializers.variance_scaling(2.0, "fan_out", "normal")
+# kaiming_uniform_(nonlinearity="relu"): uniform within sqrt(6 / fan_in).
+_kaiming_uniform = nn.initializers.variance_scaling(2.0, "fan_in", "uniform")
 
 
 def connect(shortcut: jax.Array, residual: jax.Array, how: Connect) -> jax.Array:
@@ -143,36 +146,96 @@ def sew_resnet34(classes: int, **kwargs) -> SEWResNet:
 class SpikingMLP(nn.Module):
     """Dense spiking layers over `[T, B, ...]` with a leaky integrator readout `[T, B, classes]`.
 
-    Each width in `hidden` is a dense synapse followed by a copy of `neuron`;
-    `recurrent` feeds each hidden layer's spikes back to itself
-    (`sparx.nn.Recurrent`). `delays` above 0 makes the first synapse a
-    `sparx.nn.DelayedDense` with delays of up to that many steps, whose
-    Gaussian width is the call's `sigma` (0, the rounded delays, by default).
-    Trailing input axes are flattened. `dropout` acts on hidden spikes in
-    training.
+    Each width in `hidden` is a synapse followed by a copy of `neuron`, and
+    the readout is a synapse followed by an `LI` integrator. `recurrent`
+    feeds each hidden layer's spikes back to itself (`sparx.nn.Recurrent`).
+    Trailing input axes are flattened.
+
+    `delays` makes synapses `sparx.nn.DelayedDense`, whose Gaussian width is
+    the call's `sigma` (0, the rounded delays, by default). An integer above
+    0 delays the first synapse by up to that many steps. A sequence gives
+    every synapse's largest delay, hidden layers then the readout, with 0
+    for a plain dense synapse: Hammouamri et al.'s SNN-delays delays them
+    all. `extend` appends `max_delay // 2` steps of zeros to each delayed
+    synapse's input, as SNN-delays pads it on the right, so spikes delayed
+    past the input's end still arrive and each delayed synapse lengthens
+    the sequence by that much; it changes the output's length, so a stream
+    fed in chunks needs it off.
+
+    `batch_norm` normalizes each hidden synapse's output over time and batch
+    (`nn.BatchNorm`, torch's momentum of 0.1) before the neuron, as
+    SNN-delays does; the readout is not normalized. `use_bias` gives
+    synapses a bias. `weight_init` is the weights' initializer: flax's
+    `lecun_normal`, or torch's `kaiming_uniform_(nonlinearity="relu")`,
+    uniform within `sqrt(6 / fan_in)`, SNN-delays' choice.
+
+    `dropout` acts on hidden spikes in training. `dropout_mask="step"` draws
+    a mask per step; `"sequence"` draws one per sequence and holds it over
+    time, as SpikingJelly's multi-step `Dropout` does, so a dropped neuron
+    is silent for the whole recording.
     """
 
     hidden: Sequence[int]
     classes: int
     neuron: Neuron = LIF()
     recurrent: bool = False
-    delays: int = 0
+    delays: int | Sequence[int] = 0
+    extend: bool = False
+    batch_norm: bool = False
+    use_bias: bool = True
+    weight_init: Literal["lecun_normal", "kaiming_uniform"] = "lecun_normal"
     dropout: float = 0.0
+    dropout_mask: Literal["step", "sequence"] = "step"
     readout_tau: float = 2.0
     learn_readout_tau: bool = False
 
+    def max_delays(self) -> tuple[int, ...]:
+        """Each synapse's largest delay, hidden layers then the readout; 0 for a dense synapse."""
+        layers = len(self.hidden) + 1
+        if isinstance(self.delays, int):
+            return (self.delays,) + (0,) * (layers - 1)
+        delays = tuple(int(d) for d in self.delays)
+        if len(delays) != layers:
+            raise ValueError(f"delays gives {len(delays)} synapses' delays; this network has {layers} "
+                             f"synapses, {len(self.hidden)} hidden and the readout")
+        return delays
+
     @nn.compact
     def __call__(self, x: jax.Array, train: bool = False, sigma: float | jax.Array = 0) -> jax.Array:
+        if self.weight_init not in ("lecun_normal", "kaiming_uniform"):
+            raise ValueError(f"weight_init must be lecun_normal or kaiming_uniform, not {self.weight_init!r}")
+        if self.dropout_mask not in ("step", "sequence"):
+            raise ValueError(f"dropout_mask must be step or sequence, not {self.dropout_mask!r}")
+        kernel_init = (_kaiming_uniform if self.weight_init == "kaiming_uniform"
+                       else nn.initializers.lecun_normal())
+        delays = self.max_delays()
+        # A sequence's mask is drawn for one step and broadcast over time.
+        broadcast = (0,) if self.dropout_mask == "sequence" else ()
+        # Differentiated through its Gaussian, a delayed synapse would keep every lag's product for
+        # the backward pass: 2.6 of the 3.1 GB a step of SNN-delays' SHD network takes at batch 256.
+        # Recomputing it in the backward pass brings the step to 1.6 GB. The rounded delays (a
+        # Python 0) read one lag each and stay as they are, since the recomputation would trace the 0.
+        rounded = isinstance(sigma, (int, float)) and sigma == 0
+        delayed = DelayedDense if rounded else nn.remat(DelayedDense)
+
+        def synapse(x: jax.Array, features: int, max_delay: int, name: str) -> jax.Array:
+            if not max_delay:
+                return nn.Dense(features, use_bias=self.use_bias, kernel_init=kernel_init, name=name)(x)
+            if self.extend:
+                x = jnp.concatenate([x, jnp.zeros((max_delay // 2, *x.shape[1:]), x.dtype)])
+            return delayed(features, max_delay, use_bias=self.use_bias, kernel_init=kernel_init,
+                           name=name)(x, sigma)
+
         x = x.reshape(*x.shape[:2], -1)
         for layer, width in enumerate(self.hidden):
-            if layer == 0 and self.delays:
-                x = DelayedDense(width, self.delays, name="delayed_0")(x, sigma)
-            else:
-                x = nn.Dense(width, name=f"dense_{layer}")(x)
+            x = synapse(x, width, delays[layer], f"delayed_{layer}" if delays[layer] else f"dense_{layer}")
+            if self.batch_norm:
+                x = nn.BatchNorm(use_running_average=not train, momentum=0.9, epsilon=1e-5,
+                                 name=f"norm_{layer}")(x)
             if self.recurrent:
                 x = Recurrent(neuron=self.neuron, name=f"recurrent_{layer}")(x)
             else:
                 x = adopt(self.neuron, self, f"neuron_{layer}")(x)
-            x = nn.Dropout(self.dropout, deterministic=not train)(x)
-        x = nn.Dense(self.classes, name="readout")(x)
+            x = nn.Dropout(self.dropout, broadcast_dims=broadcast, deterministic=not train)(x)
+        x = synapse(x, self.classes, delays[-1], "readout")
         return LI(tau=self.readout_tau, learn_tau=self.learn_readout_tau, name="integrator")(x)

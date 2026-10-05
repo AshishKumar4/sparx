@@ -10,7 +10,9 @@ chooses the reduction (dew's objectives sum it over a `Ratio`). For a loss on
 one readout of the outputs, reduce time first and use optax: the maximum membrane of a leaky
 integrator readout (`jnp.max(v, axis=0)`, Cramer et al., IEEE TNNLS 2020),
 its mean, or the spike count (`jnp.sum(spikes, axis=0)`), each as logits for
-`optax.softmax_cross_entropy_with_integer_labels`.
+`optax.softmax_cross_entropy_with_integer_labels`. `softmax_sum_cross_entropy`
+is the readout of Hammouamri et al.'s SNN-delays, which takes the softmax
+at every step before summing over time.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
-__all__ = ["per_step_cross_entropy", "rate_mse", "van_rossum"]
+__all__ = ["per_step_cross_entropy", "rate_mse", "softmax_sum", "softmax_sum_cross_entropy", "van_rossum"]
 
 
 def per_step_cross_entropy(outputs: jax.Array, labels: jax.Array) -> jax.Array:
@@ -36,6 +38,27 @@ def per_step_cross_entropy(outputs: jax.Array, labels: jax.Array) -> jax.Array:
     labels = jnp.broadcast_to(labels, logits.shape[:-1])
     per_step = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
     return jnp.sum(per_step, axis=0) / steps
+
+
+def softmax_sum(outputs: jax.Array) -> jax.Array:
+    """The class probabilities of every step summed over time, `[T, B, C] -> [B, C]`, in float32.
+
+    Each step votes with a distribution that sums to 1, so no single step's
+    large membrane outweighs the rest, as it does in a sum or maximum of the
+    raw outputs. The argmax is SNN-delays' prediction.
+    """
+    return jnp.sum(jax.nn.softmax(outputs.astype(jnp.float32), axis=-1), axis=0)
+
+
+def softmax_sum_cross_entropy(outputs: jax.Array, labels: jax.Array) -> jax.Array:
+    """Cross entropy of `softmax_sum(outputs)` taken as logits, SNN-delays' `loss='sum'`.
+
+    Their `calc_loss` passes the summed probabilities to torch's
+    `CrossEntropyLoss`, which applies a log-softmax to them again; this
+    keeps that, so the loss is theirs. The summed probabilities lie in
+    `[0, T]`, so the loss cannot fall below `log(1 + (C - 1) exp(-T))`.
+    """
+    return optax.softmax_cross_entropy_with_integer_labels(softmax_sum(outputs), labels)
 
 
 def rate_mse(spikes: jax.Array, labels: jax.Array, correct: float = 0.8, incorrect: float = 0.2) -> jax.Array:

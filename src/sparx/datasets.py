@@ -27,28 +27,69 @@ from dew.data.dataset import Tokenize
 from dew.registry import datasets
 from numpy.typing import ArrayLike
 
-__all__ = ["SHD", "SHD_URL", "bin_events", "shd"]
+__all__ = ["SHD", "SHD_URL", "Binning", "bin_events", "shd"]
 
 SHD_URL = "https://zenkelab.org/datasets/shd/{split}.h5.gz"
 _CHANNELS = 700
 
 
+type Binning = Literal["grid", "events"]
+"""How `bin_events` cuts time into steps.
+
+- `grid`: equal bins from time 0, the usual binning.
+- `events`: SpikingJelly's SHD frames by duration, in the releases SNN-delays
+  (Hammouamri et al., ICLR 2024) trained on: each step opens at the first
+  event not yet counted and holds every event within one step's duration of
+  it. Silences longer than a step are dropped, so a recording is shorter
+  than on the grid and its timing is compressed; times are scaled to
+  milliseconds in the file's own float16, as theirs are.
+"""
+
+
 def bin_events(times: ArrayLike, units: ArrayLike, steps: int, max_time: float, channels: int,
-               source_channels: int = _CHANNELS) -> np.ndarray:
+               source_channels: int = _CHANNELS, binning: Binning = "grid") -> np.ndarray:
     """Count one record's spikes into `[steps, channels]` uint8 bins.
 
-    Time `[0, max_time)` is cut into `steps` equal bins and events at or
-    after `max_time` are dropped. `channels` must divide `source_channels`;
-    adjacent source channels are pooled into each output channel. Counts
-    saturate at 255.
+    A step lasts `max_time / steps`. On the `grid`, time `[0, max_time)` is
+    cut into `steps` equal bins and events at or after `max_time` are
+    dropped; with `binning="events"` steps open at events (`Binning`) and
+    steps past the `steps`-th are dropped. `channels` must divide
+    `source_channels`; adjacent source channels are pooled into each output
+    channel. Counts saturate at 255.
     """
     if source_channels % channels:
         raise ValueError(f"channels must divide {source_channels}, not {channels}")
-    step = np.floor(np.asarray(times, np.float64) / max_time * steps).astype(np.int64)
+    if binning == "grid":
+        step = np.floor(np.asarray(times, np.float64) / max_time * steps).astype(np.int64)
+    elif binning == "events":
+        step = _event_frames(np.asarray(times), round(1000 * max_time / steps, 9))
+    else:
+        raise ValueError(f"binning must be grid or events, not {binning!r}")
     kept = step < steps
     counts = np.zeros((steps, channels), np.int64)
     np.add.at(counts, (step[kept], np.asarray(units, np.int64)[kept] // (source_channels // channels)), 1)
     return np.minimum(counts, 255).astype(np.uint8)
+
+
+def _event_frames(times: np.ndarray, duration: float) -> np.ndarray:
+    """Each event's frame under `Binning`'s `events`, `duration` in ms.
+
+    SpikingJelly's `integrate_events_by_fixed_duration_shd` scans the events
+    once: a frame starts at event `l` and takes every following event `r`
+    while `t[r] - t[l] <= duration`. Its arithmetic is kept, `1000 * t` in
+    the times' dtype, so the frames are theirs exactly.
+    """
+    t = 1000 * times
+    if t.size == 0:
+        return np.zeros(0, np.int64)
+    starts = [0]
+    while True:
+        start = starts[-1]
+        beyond = t[start:] - t[start] > duration
+        if not beyond.any():
+            break
+        starts.append(start + int(np.argmax(beyond)))
+    return np.searchsorted(np.asarray(starts), np.arange(t.size), side="right") - 1
 
 
 def _download(split: str, cache: Path) -> Path:
@@ -69,12 +110,15 @@ def _download(split: str, cache: Path) -> Path:
 
 
 def shd(split: Literal["train", "test"], steps: int = 100, max_time: float = 1.4, channels: int = 700,
-        cache: str | Path | None = None, path: str | Path | None = None) -> dict[str, np.ndarray]:
+        cache: str | Path | None = None, path: str | Path | None = None,
+        binning: Binning = "grid") -> dict[str, np.ndarray]:
     """The SHD `split` as `{"spikes": uint8 [N, steps, channels], "label": int32 [N]}`.
 
     `steps` bins over the first `max_time` seconds. Every spike of the train
     split falls before 1.37 s, and 100 steps of 14 ms is the binning of
-    Zenke's SpyTorch SHD tutorial.
+    Zenke's SpyTorch SHD tutorial. `binning="events"` is SNN-delays' binning
+    (`Binning`); at 10 ms its recordings last at most 124 steps (train) and
+    105 (test), so `steps=124, max_time=1.24` keeps every event.
     The file is read from `path` when given, otherwise downloaded once into
     `cache` (default `~/.cache/sparx`; 131 MB for train, 38 MB for test) and
     decompressed beside it.
@@ -89,7 +133,7 @@ def shd(split: Literal["train", "test"], steps: int = 100, max_time: float = 1.4
         if not (isinstance(times, h5py.Dataset) and isinstance(units, h5py.Dataset)
                 and isinstance(labels, h5py.Dataset)):
             raise ValueError(f"{path} lacks SHD's spikes/times, spikes/units and labels datasets")
-        spikes = np.stack([bin_events(times[i], units[i], steps, max_time, channels)
+        spikes = np.stack([bin_events(times[i], units[i], steps, max_time, channels, binning=binning)
                            for i in range(len(times))])
         return {"spikes": spikes, "label": np.asarray(labels, np.int32)}
 
@@ -110,9 +154,10 @@ class SHD(DatasetSpec):
     max_time: float = 1.4
     channels: int = 700
     cache: str | None = None
+    binning: Binning = "grid"
 
     def load(self, *, batch: int, tokenize: Tokenize | None = None) -> Dataset:
         self.uncaptioned(tokenize)
-        train = shd("train", self.steps, self.max_time, self.channels, self.cache)
-        test = shd("test", self.steps, self.max_time, self.channels, self.cache)
+        train = shd("train", self.steps, self.max_time, self.channels, self.cache, binning=self.binning)
+        test = shd("test", self.steps, self.max_time, self.channels, self.cache, binning=self.binning)
         return Dataset.from_records(train, batch=batch, seed=self.seed, validation=test, loading=self.loading)

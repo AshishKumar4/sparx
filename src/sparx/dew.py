@@ -25,39 +25,52 @@ from __future__ import annotations
 import dataclasses
 import functools
 import inspect
-from collections.abc import Mapping
+from collections.abc import Hashable, Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 from dew.artifacts import TokenScores
+from dew.data import Dataset
+from dew.data.dataset import Reader
 from dew.eval import Mean
 from dew.inputs import Field, InputSpec
 from dew.objectives.base import Aux, Batch, EMASpec, Objective, Ratio, Shown, Step, Variables, thaw
 from dew.records import JSON
 from dew.registry import objectives, schedules as dew_schedules
-from dew.training.optim import ScheduleBase
+from dew.training.optim import ParamGroup, ScheduleBase, param_labels
+from jax.typing import ArrayLike
 
 from sparx.encode import SpikeEncoder
-from sparx.losses import per_step_cross_entropy, van_rossum
+from sparx.losses import per_step_cross_entropy, softmax_sum, softmax_sum_cross_entropy, van_rossum
 from sparx.nn import RATES
 from sparx.rates import firing_rates, rate_penalty
 from sparx.registry import spike_encoders
 
 __all__ = [
+    "WEIGHT",
     "ActivityFit",
+    "ExponentialDecay",
+    "GroupAdam",
+    "OneCycle",
     "RateBand",
     "Readout",
     "SpikingClassification",
     "SpikingClassifier",
     "accuracy",
+    "evaluation_pass",
+    "holdout",
+    "keep_within",
+    "stepped",
+    "whole_batches",
 ]
 
 
-type Readout = Literal["mean", "max", "sum", "per_step"]
+type Readout = Literal["mean", "max", "sum", "softmax_sum", "per_step"]
 """How the outputs `[T, B, C]` are scored against the labels.
 
 - `mean`: cross entropy of the time-averaged outputs, a firing rate for
@@ -65,9 +78,173 @@ type Readout = Literal["mean", "max", "sum", "per_step"]
 - `max`: cross entropy of each class's largest output over time, the readout
   Cramer et al. (IEEE TNNLS 2020) use on a leaky integrator for SHD.
 - `sum`: cross entropy of the summed outputs, the spike count.
+- `softmax_sum`: the softmax of every step summed over time, scored as
+  logits (`sparx.losses.softmax_sum_cross_entropy`), SNN-delays' `loss='sum'`.
 - `per_step`: cross entropy at every step, averaged (`sparx.losses.per_step_cross_entropy`).
   Predictions use the mean.
 """
+
+READOUTS: tuple[Readout, ...] = ("mean", "max", "sum", "softmax_sum", "per_step")
+
+WEIGHT = "weight"
+"""The batch field evaluation weighs each example by, when a batch holds it.
+
+`whole_batches` writes it: 1 for a record, 0 for the copies that fill the
+last batch, so a split of any size is scored over exactly its records."""
+
+
+# Stopgaps for two schedule records dew lacks (dew.training.optim has cosine, power and linear).
+# They belong in dew's table as `one_cycle` and `exponential`; until then they are registered under
+# sparx-prefixed names, so a dew release that adds its own cannot collide with them, and a run
+# records them under those names.
+
+
+@dew_schedules("sparx_one_cycle")
+@dataclass(frozen=True)
+class OneCycle(ScheduleBase):
+    """torch's `OneCycleLR` with its default cosine annealing and two phases.
+
+    The value follows a half cosine from `start` to `peak` until step
+    `warmup * steps - 1`, then another to `end` at step `steps - 1`, and
+    stays there. The step boundaries are torch's, so stepped once an epoch
+    over a run of epochs (`SpikingClassifier`'s `schedule_every`) it gives
+    torch's values. For a learning rate torch starts at `peak / 25` and ends
+    at `start / 1e4`; its Adam momentum cycle (`b1`) is
+    `OneCycle(peak=0.85, start=0.95, end=0.95)`.
+    """
+
+    peak: float
+    start: float
+    end: float
+    warmup: float = 0.3
+
+    def schedule(self, steps: int) -> optax.Schedule:
+        rise, last = self.warmup * steps - 1, steps - 1
+        if not 0 < rise < last:
+            raise ValueError(f"a one-cycle schedule over {steps} steps with warmup {self.warmup} has no "
+                             "rise or no fall; give it more steps")
+
+        def anneal(start: float, end: float, done: jax.Array) -> jax.Array:
+            return end + (start - end) / 2 * (jnp.cos(jnp.pi * done) + 1)
+
+        def value(count: ArrayLike) -> jax.Array:
+            step = jnp.minimum(jnp.asarray(count, jnp.float32), last)
+            return jnp.where(step <= rise, anneal(self.start, self.peak, step / rise),
+                             anneal(self.peak, self.end, (step - rise) / (last - rise)))
+
+        return value
+
+
+@dew_schedules("sparx_exponential_decay")
+@dataclass(frozen=True)
+class ExponentialDecay(ScheduleBase):
+    """A geometric decay from `offset + start` to `offset + end` over `decay_steps`, then constant.
+
+    The value is `offset + start * (end / start) ** (min(step, decay_steps) / decay_steps)`,
+    `decay_steps` being the run when None. SNN-delays shrinks DCLS's raw
+    width this way, from `max_delay // 2` to 0.23 over the first quarter of
+    its epochs; DCLS's width is the raw one plus 0.27, so the
+    `sparx.nn.DelayedDense` width is `ExponentialDecay(12, 0.23, epochs // 4, offset=0.27)`
+    for their 25-step kernels.
+    """
+
+    start: float
+    end: float
+    decay_steps: int | None = None
+    offset: float = 0.0
+
+    def schedule(self, steps: int) -> optax.Schedule:
+        span = steps if self.decay_steps is None else self.decay_steps
+        if span <= 0 or self.start <= 0 or self.end <= 0:
+            raise ValueError("an exponential decay needs positive steps, start and end")
+        ratio = self.end / self.start
+
+        def value(count: ArrayLike) -> jax.Array:
+            done = jnp.minimum(jnp.asarray(count, jnp.float32), span) / span
+            return self.offset + self.start * ratio ** done
+
+        return value
+
+
+def stepped(schedule: ScheduleBase, steps: int, every: int = 1) -> optax.Schedule:
+    """`schedule` advancing once every `every` steps, over `steps // every` steps of its own.
+
+    A torch scheduler stepped once an epoch holds its value through the
+    epoch. With `every` set to the steps of an epoch, a step reads the
+    schedule's value for the epoch it falls in.
+    """
+    if every < 1:
+        raise ValueError(f"a schedule advances every 1 or more steps, not {every}")
+    values = schedule.schedule(max(steps // every, 1))
+    if every == 1:
+        return values
+    return lambda count: values(jnp.asarray(count) // every)
+
+
+def keep_within(lower: float, upper: float) -> optax.GradientTransformation:
+    """Shorten each update so the parameter lands within `[lower, upper]`.
+
+    DCLS clamps its positions to the kernel after every step
+    (`clamp_parameters`), and clamping a `DelayedDense` delay to
+    `[0, max_delay]` is the same. A delay left outside that range would
+    have no gradient, since the kernel clips its center, and would stay
+    there.
+    """
+    def init(params: optax.Params) -> optax.EmptyState:
+        return optax.EmptyState()
+
+    def update(updates: optax.Updates, state: optax.OptState,
+               params: optax.Params | None = None) -> tuple[optax.Updates, optax.OptState]:
+        if params is None:
+            raise ValueError("keep_within reads the parameters; pass them to update")
+        kept = jax.tree.map(lambda u, p: jnp.clip(p + u, lower, upper) - p, updates, params)
+        return kept, state
+
+    return optax.GradientTransformation(init, update)
+
+
+@dataclass(frozen=True)
+class GroupAdam:
+    """Adam for the parameters whose paths match `patterns`, on schedules of its own.
+
+    A path is the parameter's dict keys joined by `/` (`delayed_0/delay`),
+    matched by `fnmatch` with `*` matching `/` too, as dew's `ParamGroup`
+    matches. `learning_rate` and `b1` (0.9 when None) are dew schedule
+    records. `weight_decay` adds `weight_decay * param` to the gradient
+    before Adam's moments, as torch's `Adam(weight_decay=...)` does: an L2
+    penalty, which differs from AdamW's decoupled decay. `bounds` keeps
+    every parameter within `[lower, upper]` after each update
+    (`keep_within`).
+
+    SNN-delays trains its weights with Adam on a one-cycle schedule and its
+    delay positions with Adam at 100 times the rate on a cosine, without
+    weight decay, clamped to the kernel.
+    """
+
+    patterns: tuple[str, ...]
+    learning_rate: ScheduleBase
+    b1: ScheduleBase | None = None
+    b2: float = 0.999
+    eps: float = 1e-8
+    weight_decay: float = 0.0
+    bounds: tuple[float, float] | None = None
+
+    def build(self, steps: int, every: int = 1) -> optax.GradientTransformation:
+        """The optimizer over a run of `steps` updates, its schedules advancing every `every` (`stepped`)."""
+        if self.b1 is None:
+            adam = optax.scale_by_adam(b1=0.9, b2=self.b2, eps=self.eps)
+        else:
+            adam = optax.inject_hyperparams(optax.scale_by_adam)(
+                b1=stepped(self.b1, steps, every), b2=self.b2, eps=self.eps)
+        chain = [optax.add_decayed_weights(self.weight_decay)] if self.weight_decay else []
+        chain += [adam, optax.scale_by_learning_rate(stepped(self.learning_rate, steps, every))]
+        if self.bounds is not None:
+            chain.append(keep_within(*self.bounds))
+        return optax.chain(*chain)
+
+
+_TRAINERS = "trainer"
+"""The group of the parameters no `GroupAdam` matches, which the trainer's optimizer updates."""
 
 
 @dataclass(frozen=True)
@@ -110,10 +287,26 @@ class SpikingClassifier(Objective[Ratio]):
     `{"sigma": Linear(peak=7.5, end=0.5)}` anneals a
     `sparx.nn.DelayedDense`, `{"masking": ...}` a `MaskedPSN`. The value is
     read at `Step.step`, the count of accepted microbatches, in the loss and
-    in evaluation alike.
+    in evaluation alike. `schedule_every` advances every schedule, these and
+    the groups' learning rates, once every that many steps (`stepped`): the
+    steps of an epoch reproduce a torch scheduler stepped once an epoch.
+    `deployed` holds model keyword arguments that evaluation and the trained
+    classifier run with in place of the schedules' values, such as
+    `{"sigma": 0}` to score every delay rounded to a whole step, the network
+    as deployed and as SNN-delays evaluates it.
+
+    `groups` gives parameter groups their own optimizers, by name: each
+    `GroupAdam` updates the parameters its patterns match, the first
+    matching group winning, over `schedule_steps` updates. The trainer's
+    optimizer updates the rest, under `optax.multi_transform`
+    (`optimizer`). Delay positions learn at their own rate this way.
+
+    Evaluation weighs each example by the batch's `WEIGHT` field when it has
+    one (`whole_batches`), so the loss and `accuracy` cover a split of any
+    size exactly.
 
     The objective is registered as `spiking_classifier`, records the model,
-    encoder, readout and schedules with every checkpoint
+    encoder, readout, schedules and deployed arguments with every checkpoint
     (`inference_record`), and loads back as a `SpikingClassification`
     (`SpikingClassification.from_run`, or `pipeline(state)` after training).
     """
@@ -123,11 +316,17 @@ class SpikingClassifier(Objective[Ratio]):
 
     def __init__(self, model: nn.Module, sample: Field, encoder: SpikeEncoder, *, labels: str = "label",
                  readout: Readout = "mean", rates: RateBand | None = None, ema_decay: float | None = None,
-                 schedules: Mapping[str, ScheduleBase] | None = None, schedule_steps: int | None = None):
-        if readout not in ("mean", "max", "sum", "per_step"):
-            raise ValueError(f"readout must be mean, max, sum or per_step, not {readout!r}")
-        if schedules and schedule_steps is None:
-            raise ValueError("schedules run over schedule_steps steps; give it")
+                 schedules: Mapping[str, ScheduleBase] | None = None, schedule_steps: int | None = None,
+                 schedule_every: int = 1, deployed: Mapping[str, float] | None = None,
+                 groups: Mapping[str, GroupAdam] | None = None):
+        if readout not in READOUTS:
+            raise ValueError(f"readout must be one of {', '.join(READOUTS)}, not {readout!r}")
+        if (schedules or groups) and schedule_steps is None:
+            raise ValueError("schedules and groups run over schedule_steps steps; give it")
+        if schedule_every < 1:
+            raise ValueError(f"schedules advance every 1 or more steps, not {schedule_every}")
+        if groups and _TRAINERS in groups:
+            raise ValueError(f"{_TRAINERS!r} names the parameters no group matches; name the group otherwise")
         self.model = model
         self.sample = sample
         self.encoder = encoder
@@ -136,6 +335,9 @@ class SpikingClassifier(Objective[Ratio]):
         self.rates = rates
         self.schedules = dict(schedules or {})
         self.schedule_steps = schedule_steps
+        self.schedule_every = schedule_every
+        self.deployed = {name: float(value) for name, value in (deployed or {}).items()}
+        self.groups = dict(groups or {})
         self.inputs = InputSpec(sample=sample)
         self.ema = None if ema_decay is None else EMASpec(decay=optax.constant_schedule(ema_decay))
         self._train = _takes_train(model)
@@ -143,12 +345,32 @@ class SpikingClassifier(Objective[Ratio]):
     def _scheduled(self, step: jax.Array) -> dict[str, jax.Array]:
         if self.schedule_steps is None:
             return {}
-        return {name: jnp.asarray(schedule.schedule(self.schedule_steps)(step))
+        return {name: jnp.asarray(stepped(schedule, self.schedule_steps, self.schedule_every)(step))
                 for name, schedule in self.schedules.items()}
 
     def _method(self, step: jax.Array, *, train: bool) -> functools.partial[jax.Array]:
-        """The model's `__call__` with `train` (when it takes one) and the scheduled arguments bound."""
-        return _bound(self.model, self._train, train=train, kwargs=self._scheduled(step))
+        """The model's `__call__` with `train` (when it takes one) and the scheduled arguments bound.
+
+        Out of training, the deployed arguments replace the scheduled ones.
+        """
+        kwargs: dict[str, jax.Array | float] = dict(self._scheduled(step))
+        if not train:
+            kwargs |= self.deployed
+        return _bound(self.model, self._train, train=train, kwargs=kwargs)
+
+    def optimizer(self, tx: optax.GradientTransformation, *,
+                  accumulation: int) -> optax.GradientTransformation:
+        """`tx` for the parameters no group matches and each group's `GroupAdam` for its own."""
+        if not self.groups:
+            return tx
+        assert self.schedule_steps is not None  # __init__ refuses groups without it
+        solvers: dict[Hashable, optax.GradientTransformation] = {
+            name: group.build(self.schedule_steps, self.schedule_every)
+            for name, group in self.groups.items()}
+        solvers[_TRAINERS] = tx
+        labels = param_labels([*(ParamGroup(name, group.patterns) for name, group in self.groups.items()),
+                               ParamGroup(_TRAINERS, ("*",))])
+        return optax.multi_transform(solvers, labels)
 
     def init(self, key: jax.Array, variables: Variables | None = None) -> Variables:
         encode_key, init_key = jax.random.split(key)
@@ -180,25 +402,27 @@ class SpikingClassifier(Objective[Ratio]):
 
     @functools.cached_property
     def _scores(self):
-        def scores(variables, field, labels, key, step):
+        def scores(variables, field, labels, weights, key, step):
             x = self.encoder(key, field)
             outputs = self.model.apply(variables, x, method=self._method(step, train=False))
             # `mutable` is unset, so apply returns the outputs alone, not a pair.
             assert not isinstance(outputs, tuple)
             losses = _losses(self.readout, outputs, labels)
             correct = jnp.argmax(_logits(self.readout, outputs), -1) == labels
-            return losses[:, None], jnp.ones_like(losses)[:, None], correct[:, None]
+            return losses[:, None], weights[:, None], correct[:, None]
 
         return jax.jit(scores)
 
     def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
         variables = params if step.ema is None else step.ema
         field, labels = jnp.asarray(batch[self.sample.key]), jnp.asarray(batch[self.labels])
-        losses, weights, correct = self._scores(variables, field, labels, step.key, step.step)
+        weights = (jnp.asarray(batch[WEIGHT], jnp.float32) if WEIGHT in batch
+                   else jnp.ones(labels.shape, jnp.float32))
+        losses, weights, correct = self._scores(variables, field, labels, weights, step.key, step.step)
         return TokenScores(losses=losses, weights=weights, correct=correct)
 
     def inference_record(self) -> JSON:
-        """The model, encoder, readout and schedules a saved run rebuilds its classifier from."""
+        """The model, encoder, readout, schedules and deployed arguments of the classifier."""
         from dew.config import ModelConfig, _to_json
         if not any(member is type(self) for member in objectives.values()):
             return None
@@ -212,15 +436,18 @@ class SpikingClassifier(Objective[Ratio]):
             "schedules": {name: _to_json(schedule, ScheduleBase)
                           for name, schedule in self.schedules.items()},
             "schedule_steps": self.schedule_steps,
+            "schedule_every": self.schedule_every,
+            "deployed": dict(self.deployed),
         }
 
     def pipeline(
             self, state, *, ema: bool | None = None) -> SpikingClassification:
-        """The trained classifier over `state`'s weights, with the schedules at their final values."""
+        """The trained classifier over `state`'s weights, with the schedules at their final values
+        and the deployed arguments over them."""
         variables = self._pipeline_weights(state, ema)
         final = jnp.asarray(self.schedule_steps or 0)
-        return SpikingClassification(self.model, thaw(variables), self.encoder, self.readout,
-                                     {name: float(value) for name, value in self._scheduled(final).items()})
+        call = {name: float(value) for name, value in self._scheduled(final).items()} | self.deployed
+        return SpikingClassification(self.model, thaw(variables), self.encoder, self.readout, call)
 
 
 def _bound(model: nn.Module, takes_train: bool, *, train: bool,
@@ -237,12 +464,16 @@ def _logits(readout: Readout, outputs: jax.Array) -> jax.Array:
         return jnp.max(outputs, axis=0)
     if readout == "sum":
         return jnp.sum(outputs, axis=0)
+    if readout == "softmax_sum":
+        return softmax_sum(outputs)
     return jnp.mean(outputs, axis=0)
 
 
 def _losses(readout: Readout, outputs: jax.Array, labels: jax.Array) -> jax.Array:
     if readout == "per_step":
         return per_step_cross_entropy(outputs, labels)
+    if readout == "softmax_sum":
+        return softmax_sum_cross_entropy(outputs, labels)
     return optax.softmax_cross_entropy_with_integer_labels(_logits(readout, outputs), labels)
 
 
@@ -300,13 +531,19 @@ class SpikingClassification:
                                                      param_dtype=param_dtype)
         encoder = spike_encoders.from_record(named_fields(record["encoder"], "encoder"))
         steps = record.get("schedule_steps")
+        every = record.get("schedule_every", 1)
         call: dict[str, float] = {}
-        if isinstance(steps, int):
+        if isinstance(steps, int) and isinstance(every, int):
             for name, value in named_fields(record["schedules"], "schedules").items():
                 schedule = dew_schedules.from_record(named_fields(value, name))
-                call[name] = float(jnp.asarray(schedule.schedule(steps)(steps)))
+                call[name] = float(jnp.asarray(stepped(schedule, steps, every)(steps)))
+        deployed = record.get("deployed") or {}
+        for name, value in named_fields(deployed, "deployed").items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"the run records a deployed {name}={value!r}, not a number")
+            call[name] = float(value)
         readout = record["readout"]
-        if readout not in ("mean", "max", "sum", "per_step"):
+        if readout not in READOUTS:
             raise ValueError(f"the run records an unknown readout {readout!r}")
         return cls(config.build(), thaw(variables), encoder, readout, call)
 
@@ -314,9 +551,64 @@ class SpikingClassification:
 SpikingClassifier.saved_task = SpikingClassification
 
 
-accuracy = Mean(lambda scores, batch: scores.correct[:, 0], name="accuracy", better="higher",
-                reads=TokenScores)
-"""Validation accuracy from a `SpikingClassifier`'s evaluation, as `val/accuracy`."""
+def _weighted_correct(scores: TokenScores, batch: Batch) -> tuple[float, float]:
+    weights = np.asarray(scores.weights[:, 0], np.float64)
+    return float(np.sum(np.asarray(scores.correct[:, 0]) * weights)), float(np.sum(weights))
+
+
+accuracy = Mean(_weighted_correct, name="accuracy", better="higher", reads=TokenScores)
+"""Accuracy from a `SpikingClassifier`'s evaluation, as `val/accuracy` (or `<split>/accuracy`).
+
+Each example counts by its weight, so the copies `whole_batches` adds count
+for nothing."""
+
+
+def holdout(records: Mapping[str, np.ndarray], fraction: float,
+            seed: int = 0) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    """Split `records` (columns of equal length) into a random `1 - fraction` and `fraction`.
+
+    SHD has no validation split, and SNN-delays selects its epochs on the
+    test set; holding out part of the training set gives a validation set
+    to select on, so the test accuracy stays an estimate.
+    """
+    sizes = {len(column) for column in records.values()}
+    if len(sizes) != 1:
+        raise ValueError(f"columns of one length split together, not lengths {sorted(sizes)}")
+    total = sizes.pop()
+    held = round(fraction * total)
+    if not 0 < held < total:
+        raise ValueError(f"holding out {fraction} of {total} records leaves one side empty")
+    order = np.random.default_rng(seed).permutation(total)
+    kept, out = np.sort(order[held:]), np.sort(order[:held])
+    return ({name: column[kept] for name, column in records.items()},
+            {name: column[out] for name, column in records.items()})
+
+
+def whole_batches(records: Mapping[str, np.ndarray], batch: int) -> dict[str, np.ndarray]:
+    """`records` filled to whole batches with copies of its first record, weighted under `WEIGHT`.
+
+    dew scores a split in whole batches only, so the records past the last
+    whole one would go unscored. Each record has weight 1 and each copy 0,
+    which `SpikingClassifier`'s evaluation and `accuracy` honor.
+    """
+    total = len(next(iter(records.values())))
+    fill = -total % batch
+    padded = {name: np.concatenate([column, np.repeat(column[:1], fill, axis=0)])
+              for name, column in records.items()}
+    padded[WEIGHT] = np.concatenate([np.ones(total, np.float32), np.zeros(fill, np.float32)])
+    return padded
+
+
+def evaluation_pass(records: Mapping[str, np.ndarray], batch: int) -> Reader:
+    """One pass over every record, in order, for `Trainer.fit(validation={...})`.
+
+    The records are filled to whole batches first (`whole_batches`), so a
+    split such as SHD's 2264 test recordings is scored over all of them.
+    """
+    padded = whole_batches(records, batch)
+    reader = Dataset.from_records(padded, batch=batch, validation=padded).val
+    assert reader is not None  # from_records reads a validation split it is given
+    return reader
 
 
 @objectives("activity_fit")
