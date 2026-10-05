@@ -264,7 +264,7 @@ Sparx takes dew as a required dependency. The optional `sparx[dew]` extra goes a
 
 These are small, general extension points, each useful to dew beyond sparx:
 
-1. **Registry plugins.** dew's registry finds members by scanning dew's own sources, so a `run.json` naming a sparx model cannot be rebuilt in a process that has not imported sparx. Add discovery through a `dew.plugins` entry-point group: a package lists its registering modules, and a lookup miss imports them.
+1. **Registry plugins.** dew's registry finds members by scanning dew's own sources, so a `run.json` naming a sparx model cannot be rebuilt in a process that has not imported sparx. Add discovery through a `dew.plugins` entry-point group: a package names a module that imports everything it registers, and a lookup dew's own index misses imports it. (Done: dew's rework of PR #31, with saved tasks declared by each objective and `Registry.share()` as the one writer of shared kinds.)
 2. **Open artifact types.** `Artifact` is a closed union. Spiking evaluation needs activity artifacts (rasters, rates, traces) that metrics read. Make it a registered protocol.
 3. **Open inference tasks and stateful serving.** dew's `Server` keeps per-slot KV caches for token generation. A spiking session keeps per-slot neuron state and advances by input chunks. Generalize the slot to "state the task declares", with KV caches as one implementation, so sparx's streaming task reuses admission, batching and mesh placement.
 4. **Layout rules from plugins.** Let a plugin contribute logical-axis rules (`neurons`, `edges`, `trials`) to `DEFAULT_RULES`, or confirm that passing `Layout(rules=...)` covers it (to verify).

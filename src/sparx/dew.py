@@ -287,7 +287,11 @@ class SpikingClassifier(Objective[Ratio]):
             "schedule_steps": self.schedule_steps,
         }
 
-    def pipeline(self, state, *, ema: bool | None = None) -> SpikingClassification:
+    # Dew types `Objective.pipeline` as its own closed `Task` union, which a
+    # plugin's task cannot join; `dew.pipeline` loads this one by
+    # `saved_task` all the same (AshishKumar4/dew#30).
+    def pipeline(  # pyright: ignore[reportIncompatibleMethodOverride]
+            self, state, *, ema: bool | None = None) -> SpikingClassification:
         """The trained classifier over `state`'s weights, with the schedules at their final values."""
         variables = self._pipeline_weights(state, ema)
         final = jnp.asarray(self.schedule_steps or 0)

@@ -10,19 +10,20 @@ datasets into dew's own tables (`dew.registry.models`, `objectives`,
 - `spike_encoders`: how a batch field becomes a spike train (`sparx.dew`).
 
 Each table records a member as `{"kind": name, **fields}` and is shared with
-dew (`dew.registry.share`), so a model field declared as `Surrogate` or
+dew (`Registry.share`), so a model field declared as `Surrogate` or
 `Neuron` rebuilds from its record and writes back by kind. Sparx names
-itself a dew plugin (`[project.entry-points."dew.plugins"]` in
-`pyproject.toml`), so dew finds these registrations without importing sparx
-first.
+itself a dew plugin: `[project.entry-points."dew.plugins"]` in
+`pyproject.toml` names `sparx.plugin`, which dew imports when a lookup
+misses its own index, so a run naming sparx's members loads in a process
+that never imported sparx.
 """
 
 from typing import Any
 
-from dew.registry import Registry, share
+from dew.registry import Registry
 
 __all__ = ["neurons", "spike_encoders", "surrogates"]
 
-surrogates: Registry[Any, Any] = share(Registry("surrogate", record="kind"))
-neurons: Registry[Any, Any] = share(Registry("neuron", record="kind"))
-spike_encoders: Registry[Any, Any] = share(Registry("spike_encoder", record="kind"))
+surrogates: Registry[Any, Any] = Registry("surrogate", record="kind").share()
+neurons: Registry[Any, Any] = Registry("neuron", record="kind").share()
+spike_encoders: Registry[Any, Any] = Registry("spike_encoder", record="kind").share()

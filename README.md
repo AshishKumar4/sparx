@@ -288,7 +288,7 @@ The design keeps the sequential part of a spiking network small: synapses run ov
 
 ## Installation
 
-Sparx needs Python 3.12 or later and installs dew, which it trains, distributes, checkpoints and serves through; until dew's plugin support (AshishKumar4/dew#31) merges, the dependency names that branch. It has been tested with JAX 0.11.2, Flax 0.12.10 and optax 0.2.8 on CPU.
+Sparx needs Python 3.12 or later and installs dew, which it trains, distributes, checkpoints and serves through; until dew's plugin registry reaches its main branch, the dependency pins the integration commit that carries it. It has been tested with JAX 0.11.2, Flax 0.12.10 and optax 0.2.8 on CPU.
 
 ```bash
 git clone https://github.com/AshishKumar4/sparx.git
