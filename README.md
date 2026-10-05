@@ -262,7 +262,7 @@ A step runs in NEST's order: synapses deliver what is due, membranes integrate (
 - `eprop`: e-prop (Bellec et al. 2020) for a recurrent layer of any sparx cell and a leaky readout, computed online in memory independent of the sequence length. It equals backpropagation with the recurrent spikes' gradient cut, and its eligibility traces with the true learning signal equal backpropagation, the two identities their own code verifies.
 - `ottt`: online training through time (Xiao et al. 2022), matching their PyTorch modules' gradients to 1e-10.
 - `events.spike_times`: exact spike times of LIF networks with current synapses in continuous time, differentiable: the exact gradient EventProp (Wunderlich and Pehle 2021) computes, checked against finite differences.
-- `convert`: ReLU networks to integrate-and-fire networks by robust threshold balancing (Rueckauer et al. 2017).
+- `convert`: ReLU networks, CNNs with batch norm, average and max pooling included, to integrate-and-fire networks by robust threshold balancing (Rueckauer et al. 2017); against their toolbox (snntoolbox), the same weights, the same first-layer spikes and the same predictions.
 - `sparx.dew.ActivityFit` fits a network's spikes to recorded ones by van Rossum distance (`sparx.losses.van_rossum`, exact on the grid) or smoothed rates.
 
 ## Connectomes, serving and exchange
