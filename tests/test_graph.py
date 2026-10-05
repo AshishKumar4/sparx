@@ -25,9 +25,9 @@ from sparx.graph import (
     StateMonitor,
     simulate,
 )
-from sparx.graph.analysis import cv_isi, firing_rates, population_fano
 from sparx.graph.models import brunel, coba, cuba
 from sparx.nn import LIF as LayerLIF
+from sparx.spiketrains import cv_isi, population_fano, rates_hz
 
 NEST = np.load(Path(__file__).parent / "fixtures" / "nest.npz")
 DT = float(NEST["meta/dt"])
@@ -151,7 +151,7 @@ def test_brunel_regimes_match_nests_statistics(regime):
     result = simulate(network, network.init(jax.random.key(0)), duration=float(BRUNEL["meta/duration"]),
                       key=jax.random.key(1), monitors=(Spikes("e"),), chunk=100.0)
     window = result.records[0][round(float(BRUNEL["meta/skip"]) / DT):]
-    rate, cv, fano = firing_rates(window, DT).mean(), cv_isi(window).mean(), population_fano(window, DT)
+    rate, cv, fano = rates_hz(window, DT).mean(), cv_isi(window).mean(), population_fano(window, DT)
     nest_stats = BRUNEL[f"{regime}/stats"]
     mean, spread = nest_stats.mean(0), nest_stats.std(0)
     assert abs(rate - mean[0]) <= max(0.03 * mean[0], 4 * spread[0])
@@ -233,7 +233,7 @@ def test_brette_benchmarks_match_brian2s_statistics(name):
                       monitors=(Spikes("e"), Spikes("i")))
     skip = round(float(BENCHMARKS["meta/skip"]) / DT)
     e, i = result.records[0][skip:], result.records[1][skip:]
-    got = np.array([firing_rates(e, DT).mean(), firing_rates(i, DT).mean(), cv_isi(e).mean(),
+    got = np.array([rates_hz(e, DT).mean(), rates_hz(i, DT).mean(), cv_isi(e).mean(),
                     population_fano(e, DT)])
     brian2 = BENCHMARKS[f"{name}/stats"]
     mean, spread = brian2.mean(0), brian2.std(0)

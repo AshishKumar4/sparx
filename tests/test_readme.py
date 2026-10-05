@@ -77,5 +77,5 @@ def test_the_circuit_example_sustains_irregular_activity():
     exec(_block("import jax\nfrom sparx.dynamics"), scope)
     # Over 200 ms each neuron has few intervals, which biases the CV low;
     # over 400 ms it is 1.2 (tests/test_graph.py).
-    rate, cv = (scope["firing_rates"](scope["spikes"], 0.1).mean(), scope["cv_isi"](scope["spikes"]).mean())
+    rate, cv = (scope["rates_hz"](scope["spikes"], 0.1).mean(), scope["cv_isi"](scope["spikes"]).mean())
     assert 12 < rate < 22 and 0.6 < cv < 1.0, (rate, cv)

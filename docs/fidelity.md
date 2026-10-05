@@ -74,7 +74,7 @@ Reference versions: SpikingJelly at commit c6cb8e46 (2026-10-03), snnTorch 1.0.0
 | `losses.per_step_cross_entropy` | snnTorch `ce_rate_loss` | Within 1e-6 relative | None. |
 | `losses.rate_mse` | snnTorch `mse_count_loss` | Within 1e-6 relative, as snnTorch's value divided by `T` | snnTorch's squared error of counts over `T` grows with `T`; sparx's rates do not, and snnTorch rounds its target counts down. |
 | `losses.van_rossum` | van Rossum 2001; Elephant 1.2.1 `van_rossum_distance` | All pairs of six random trains at three time constants, to 1e-10 (`tools/make_elephant_fixtures.py`) | Elephant's distance is `sqrt(2)` times van Rossum's: it drops the `1/2` of the closed form. Sparx keeps the paper's definition. The integral is exact for spikes on the grid, the tail after the last step included, not a Riemann sum. |
-| `graph.analysis.victor_purpura` | Victor and Purpura 1996; Elephant `victor_purpura_distance` | All pairs, three costs, exactly | None. |
+| `spiketrains.victor_purpura` | Victor and Purpura 1996; Elephant `victor_purpura_distance` | All pairs, three costs, exactly | None. |
 | Surrogates | The papers' formulas | Gradients and forward-mode tangents, and each surrogate's area | None. |
 
 ## Open

@@ -8,10 +8,11 @@ Networks are Flax linen modules over time-major spike trains `[T, ...]`.
 - `sparx.models`: architectures built from them (SEW ResNet).
 - `sparx.encode`: the registered encoders that turn data into spike trains.
 - `sparx.losses` and `sparx.rates`: losses over time, firing-rate readouts and penalties.
+- `sparx.spiketrains`: statistics of and distances between recorded spike trains.
 - `sparx.dew`: spiking objectives for dew's `Trainer` (needs dew installed).
 """
 
-from sparx import cells, encode, losses, models, nn, rates, surrogate
+from sparx import cells, encode, losses, models, nn, rates, spiketrains, surrogate
 from sparx.cells import run
 from sparx.rates import firing_rates, rate_penalty
 from sparx.surrogate import spike
@@ -19,4 +20,4 @@ from sparx.surrogate import spike
 __version__ = "0.1.0"
 
 __all__ = ["__version__", "cells", "encode", "firing_rates", "losses", "models", "nn", "rate_penalty",
-           "rates", "run", "spike", "surrogate"]
+           "rates", "run", "spike", "spiketrains", "surrogate"]

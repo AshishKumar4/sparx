@@ -228,7 +228,7 @@ Training on several devices is dew's: `Trainer(..., mesh=MeshSpec(fsdp=2))` plac
 import jax
 from sparx.dynamics import LIF, Exponential, Receptor
 from sparx.graph import FixedProbability, Network, Population, PopulationRate, Projection, Spikes, simulate
-from sparx.graph.analysis import cv_isi, firing_rates
+from sparx.spiketrains import cv_isi, rates_hz
 
 neuron = LIF(tau_m=20.0, c_m=200.0, e_l=-60.0, v_th=-50.0, v_reset=-60.0, t_ref=5.0,
              reversal={"ex": 0.0, "in": -80.0})
@@ -251,7 +251,7 @@ network = Network(
 result = simulate(network, network.init(jax.random.key(0)), duration=300.0,
                   monitors=(Spikes("e"), PopulationRate("e")))
 spikes = result.records[0][1000:]  # after the first 100 ms
-print(firing_rates(spikes, 0.1).mean(), cv_isi(spikes).mean())  # about 17 Hz, CV about 0.8
+print(rates_hz(spikes, 0.1).mean(), cv_isi(spikes).mean())  # about 17 Hz, CV about 0.8
 ```
 
 A step runs in NEST's order: synapses deliver what is due, membranes integrate (exactly where the equations are linear) and spike, spikes enter per-population ring buffers, kinetic synapses receive what arrives at the end of the step, plasticity updates, monitors record. `simulate` compiles one chunk of steps and carries the state between chunks, so a long run needs memory for one chunk of records, and a run continued from `result.variables` is the run it would have been unbroken. `sparx.graph.models` builds Brunel's (2000) network and the CUBA and COBA benchmarks; `Projection`s take per-edge weights and delays, pair and triplet STDP, and short-term plasticity.

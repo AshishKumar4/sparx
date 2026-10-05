@@ -7,7 +7,7 @@ CV of interspike intervals and population Fano factor over
 `[SKIP, DURATION]` ms to `tests/fixtures/brunel.npz`. Chaotic networks do
 not match spike for spike, so `tests/test_graph.py` compares these
 statistics, with the spread over seeds as the scale of agreement. The
-statistics are `sparx.graph.analysis`, loaded from its file.
+statistics are `sparx.spiketrains`, loaded from its file.
 
     pip install nest-simulator==<version below>
     python tools/make_brunel_fixtures.py
@@ -24,9 +24,9 @@ OUT = ROOT / "tests" / "fixtures" / "brunel.npz"
 ORDER, DURATION, SKIP, DT, SEEDS = 500, 400.0, 100.0, 0.1, tuple(range(1, 9))
 REGIMES = {"sr": (3.0, 2.0), "ai": (5.0, 2.0), "si_fast": (6.0, 4.0), "si_slow": (4.5, 0.9)}
 
-spec = importlib.util.spec_from_file_location("analysis", ROOT / "src" / "sparx" / "graph" / "analysis.py")
-analysis = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(analysis)
+spec = importlib.util.spec_from_file_location("spiketrains", ROOT / "src" / "sparx" / "spiketrains.py")
+spiketrains = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(spiketrains)
 
 
 def run(g, eta, seed, j=0.1, delay=1.5):
@@ -51,8 +51,8 @@ def run(g, eta, seed, j=0.1, delay=1.5):
     spikes = np.zeros((round(DURATION / DT), excitatory), bool)
     spikes[np.rint(events["times"] / DT).astype(int) - 1, events["senders"] - e[0].global_id] = True
     window = spikes[round(SKIP / DT):]
-    return (analysis.firing_rates(window, DT).mean(), analysis.cv_isi(window).mean(),
-            analysis.population_fano(window, DT))
+    return (spiketrains.rates_hz(window, DT).mean(), spiketrains.cv_isi(window).mean(),
+            spiketrains.population_fano(window, DT))
 
 
 def main():

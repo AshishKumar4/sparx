@@ -1,8 +1,13 @@
-"""Classification losses over a network's time-major outputs `[T, B, C]`.
+"""Differentiable losses over a network's time-major outputs `[T, B, ...]`.
 
-Each returns one loss per example, `[B]`, so a caller chooses the reduction
-(dew's objectives sum it over a `Ratio`). For a loss on one readout of the
-outputs, reduce time first and use optax: the maximum membrane of a leaky
+The classification losses take outputs `[T, B, C]` and integer labels;
+`van_rossum` compares spikes with target spike trains, the loss of fitting a
+network to recordings. The statistics that only measure spike trains after a
+run, without a gradient, are `sparx.spiketrains`.
+
+The classification losses return one loss per example, `[B]`, so a caller
+chooses the reduction (dew's objectives sum it over a `Ratio`). For a loss on
+one readout of the outputs, reduce time first and use optax: the maximum membrane of a leaky
 integrator readout (`jnp.max(v, axis=0)`, Cramer et al., IEEE TNNLS 2020),
 its mean, or the spike count (`jnp.sum(spikes, axis=0)`), each as logits for
 `optax.softmax_cross_entropy_with_integer_labels`.

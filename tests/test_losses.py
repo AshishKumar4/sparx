@@ -7,7 +7,6 @@ import numpy as np
 import pytest
 
 from sparx import losses
-from sparx.graph.analysis import victor_purpura
 from sparx.losses import per_step_cross_entropy, rate_mse
 from sparx.nn import LI, LIF, RATES
 from sparx.rates import firing_rates, rate_penalty
@@ -114,11 +113,3 @@ def test_van_rossum_trains_a_spike_toward_its_target():
     gradient = distance(early)
     # Lowering the early spike and raising spikes nearer the target both help.
     assert float(gradient[20, 0]) > 0 and float(gradient[30, 0]) < 0
-
-
-@pytest.mark.parametrize("cost", [0.0, 0.1, 2.0])
-def test_victor_purpura_matches_elephant(cost):
-    spikes, dt = ELEPHANT["spikes"], float(ELEPHANT["dt"])
-    times = [np.flatnonzero(spikes[:, i]) * dt for i in range(spikes.shape[1])]
-    got = np.array([[victor_purpura(a, b, cost) for b in times] for a in times])
-    np.testing.assert_allclose(got, ELEPHANT[f"victor_purpura/{cost}"], rtol=1e-12, atol=1e-12)

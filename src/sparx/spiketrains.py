@@ -1,18 +1,34 @@
-"""Statistics of spike trains, for comparing networks that cannot match spike for spike.
+"""Statistics of and distances between spike trains, for comparing networks that cannot match spike
+for spike.
 
-NumPy only, so reference tools load this file outside sparx. Spikes are
-`[steps, neurons]` arrays of 0 and 1 (or booleans) at step `dt` ms.
+Spikes are `[steps, neurons]` arrays of 0 and 1 (or booleans) at step `dt`
+ms. These read a finished run (a `sparx.graph.simulate` record, a reference
+simulator's output) and have no gradient. The module imports NumPy alone,
+so the fixture tools (`tools/make_brunel_fixtures.py`,
+`tools/make_brian2_benchmarks.py`) load this file in a NEST or Brian2
+environment without JAX or sparx, and the statistics they record for the
+reference are the code the tests apply to sparx.
+
+Van Rossum's distance (`sparx.losses.van_rossum`) also compares spike
+trains. It lives in `sparx.losses` because it is written in JAX to train a
+network by its gradient, as `sparx.dew.ActivityFit` does; here it would make
+the tools above load JAX. The split is by use: a differentiable training
+target is a loss, a measurement of a finished run is here.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["cv_isi", "firing_rates", "population_fano", "spike_steps", "victor_purpura"]
+__all__ = ["cv_isi", "population_fano", "rates_hz", "spike_steps", "victor_purpura"]
 
 
-def firing_rates(spikes: np.ndarray, dt: float) -> np.ndarray:
-    """Each neuron's mean rate, Hz."""
+def rates_hz(spikes: np.ndarray, dt: float) -> np.ndarray:
+    """Each neuron's mean rate in Hz, over a run of `dt` ms steps.
+
+    `sparx.rates.firing_rates` reads a different quantity during training,
+    each layer's mean rate in spikes per step from the sown collection.
+    """
     spikes = np.asarray(spikes)
     return spikes.sum(0) / (spikes.shape[0] * dt / 1000.0)
 

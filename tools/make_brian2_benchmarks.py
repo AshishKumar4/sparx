@@ -25,9 +25,9 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tests" / "fixtures" / "benchmarks.npz"
 DURATION, SKIP, DT, SEEDS = 500.0, 100.0, 0.1, (1, 2, 3, 4)
 
-spec = importlib.util.spec_from_file_location("analysis", ROOT / "src" / "sparx" / "graph" / "analysis.py")
-analysis = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(analysis)
+spec = importlib.util.spec_from_file_location("spiketrains", ROOT / "src" / "sparx" / "spiketrains.py")
+spiketrains = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(spiketrains)
 
 CUBA = """
 dv/dt = (ge + gi - (v - El)) / taum : volt (unless refractory)
@@ -70,8 +70,8 @@ def run(model, seed):
     spikes[np.rint(np.asarray(monitor.t / b2.ms) / DT).astype(int), np.asarray(monitor.i)] = True
     window = spikes[round(SKIP / DT):]
     e, i = window[:, :3200], window[:, 3200:]
-    return (analysis.firing_rates(e, DT).mean(), analysis.firing_rates(i, DT).mean(),
-            analysis.cv_isi(e).mean(), analysis.population_fano(e, DT))
+    return (spiketrains.rates_hz(e, DT).mean(), spiketrains.rates_hz(i, DT).mean(),
+            spiketrains.cv_isi(e).mean(), spiketrains.population_fano(e, DT))
 
 
 def main():
