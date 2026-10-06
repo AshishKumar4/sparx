@@ -226,6 +226,8 @@ def _save(checkpoints: Checkpoints, step: int, state: Variables, key: jax.Array,
     the variables, its step count as the step and its key, and no
     optimizer, average or loss scale.
     """
+    # Remove when AshishKumar4/dew#38 merges: `checkpoints.save_tree(step, {"state": state, "key": key},
+    # control=...)` and `restore_tree` hold the plain tree, without this placeholder `TrainState`.
     zero = jnp.zeros((), jnp.int32)
     held = TrainState(step=jnp.asarray(step, jnp.int32), microstep=zero, updates=zero,
                       variables={"state": state}, opt_state=(), ema=None, key=key, scale=None,

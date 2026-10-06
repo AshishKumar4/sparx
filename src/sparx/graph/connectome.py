@@ -144,10 +144,10 @@ class Connectome:
         del table
         transmitters = feather.read_table(neurotransmitters, columns=["body", "consensus_nt", "predicted_nt"])
         index, known = locate(np.asarray(transmitters.column("body").to_numpy(), np.int64))
-        consensus = np.asarray(transmitters.column("consensus_nt").to_pylist(), object)[known]
-        predicted = np.asarray(transmitters.column("predicted_nt").to_pylist(), object)[known]
-        unclear = np.asarray([c is None or c == "unclear" for c in consensus])
-        chosen = np.where(unclear, predicted, consensus)
+        rows = zip(transmitters.column("consensus_nt").to_pylist(),
+                   transmitters.column("predicted_nt").to_pylist(), known, strict=True)
+        chosen = [predicted if consensus in (None, "unclear") else consensus
+                  for consensus, predicted, kept in rows if kept]
         fallback = signs.get("unclear", 1)
         sign = np.full(len(ids), fallback, np.int32)
         sign[index[known]] = [signs.get(t, fallback) for t in chosen]
