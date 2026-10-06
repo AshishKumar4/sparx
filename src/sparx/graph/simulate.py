@@ -1,8 +1,9 @@
 """Running a network for a long time: compiled chunks, state carried between them, records on the host.
 
     result = simulate(network, variables, duration=1000.0, key=key,
-                      monitors=(SpikeRaster("e"), PopulationRate("e")), chunk=100.0)
-    result.records[0]          # [steps, neurons] spikes of "e", a NumPy array
+                      monitors={"spikes": SpikeRaster("e"), "rate": PopulationRate("e")}, chunk=100.0)
+    result.records["spikes"]   # [steps, neurons] spikes of "e", a NumPy array
+    result.records["rate"]     # [steps] the rate of "e" in Hz
     result.variables           # the variables with the state after the run, to continue from
 
 Simulation without gradients is a function, not a runner beside dew's
@@ -21,7 +22,7 @@ keeps the state of a long run so it resumes after an interruption.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 import jax
@@ -34,7 +35,7 @@ from dew.training.distributed import Layout, MeshSpec
 from dew.training.state import TrainState
 from jax.sharding import Mesh, NamedSharding, SingleDeviceSharding
 
-from sparx.graph.network import Drive, Monitor, Network
+from sparx.graph.network import Drive, Monitor, Network, whole_steps
 
 __all__ = ["LAYOUT", "RULES", "Simulation", "simulate"]
 
@@ -58,12 +59,14 @@ LAYOUT = Layout(rules=RULES)
 
 @dataclass(frozen=True)
 class Simulation:
-    """What `simulate` returns: each monitor's records over the steps this call ran, on the host, and the
-    final variables."""
+    """What `simulate` returns: each monitor's records over the steps this call ran, on the host and under
+    the monitor's name, and the final variables."""
 
-    records: tuple[np.ndarray, ...]
+    records: dict[str, np.ndarray]
     variables: Variables
     dt: float
+    steps: int
+    """The steps this call ran."""
     start: float = 0.0
     """When the records begin, in ms from the start of the run: later than 0 for a run resumed from a
     checkpoint."""
@@ -71,21 +74,22 @@ class Simulation:
     @property
     def times(self) -> np.ndarray:
         """The end of each recorded step, in ms from the start of the run."""
-        steps = len(self.records[0]) if self.records else 0
-        return self.start + (np.arange(steps) + 1) * self.dt
+        return self.start + (np.arange(self.steps) + 1) * self.dt
 
 
 def simulate(network: Network, variables: Variables, *, duration: float,
              key: jax.Array | None = None, drive: Drive | None = None,
-             monitors: Sequence[Monitor] = (), chunk: float = 100.0, trials: int | None = None,
+             monitors: Mapping[str, Monitor] | None = None, chunk: float = 100.0, trials: int | None = None,
              mesh: MeshSpec | None = None, layout: Layout = LAYOUT,
              checkpoints: Checkpoints | None = None) -> Simulation:
     """Run `network` from `variables` for `duration` ms in compiled chunks of `chunk` ms.
 
+    `monitors` are recorded under their names in `Simulation.records`.
     `drive` maps a `CurrentInput`'s name to its values over the whole run,
     `[steps, ...]` (`[trials, steps, ...]` with `trials`); `key` seeds
-    Poisson inputs. The last chunk may be shorter, which compiles it once
-    more.
+    Poisson inputs. `duration` and `chunk` must be whole numbers of steps
+    (`sparx.graph.network.whole_steps`). The last chunk may be shorter,
+    which compiles it once more.
 
     `trials` runs that many independent trials from the same variables, each
     with its own noise (`fold_in(key, trial)`): records and state gain a
@@ -104,17 +108,17 @@ def simulate(network: Network, variables: Variables, *, duration: float,
     that wrote it, and is then the run it would have been without the
     break.
     """
-    steps = round(duration / network.dt)
-    per_chunk = max(1, min(steps, round(chunk / network.dt)))
+    steps = int(whole_steps(duration, network.dt, "the duration"))
+    per_chunk = max(1, min(steps, int(whole_steps(chunk, network.dt, "the chunk"))))
     key = jax.random.key(0) if key is None else key
-    monitors = tuple(monitors)
+    monitors = dict(monitors or {})
     time_axis = 0 if trials is None else 1
     drive = _checked(drive, steps, time_axis)
     fixed = {name: value for name, value in variables.items() if name != "state"}
     state = variables["state"]
 
     def run(fixed: Variables, state: Variables, drive: Mapping[str, jax.Array], key: jax.Array,
-            length: int) -> tuple[tuple[jax.Array, ...], Variables]:
+            length: int) -> tuple[dict[str, jax.Array], Variables]:
         records, updates = network.apply({**fixed, "state": state}, drive, steps=length, monitors=monitors,
                                          rngs={"noise": key}, mutable=["state"])
         return records, updates["state"]
@@ -146,7 +150,7 @@ def simulate(network: Network, variables: Variables, *, duration: float,
         chunks.append(jax.device_get(records))
     if checkpoints is not None:
         checkpoints.wait()
-    return Simulation(_join(monitors, chunks, time_axis), {**fixed, "state": state}, network.dt,
+    return Simulation(_join(monitors, chunks, time_axis), {**fixed, "state": state}, network.dt, steps - done,
                       done * network.dt)
 
 
@@ -167,13 +171,13 @@ def _check_capacity(state: Variables, until: float) -> None:
                            f"before {until} ms; raise Projection.capacity")
 
 
-def _join(monitors: tuple[Monitor, ...], chunks: list[tuple[np.ndarray, ...]],
-          time_axis: int) -> tuple[np.ndarray, ...]:
+def _join(monitors: Mapping[str, Monitor], chunks: list[dict[str, np.ndarray]],
+          time_axis: int) -> dict[str, np.ndarray]:
     """Each monitor's records over the chunks: concatenated over time, or summed if it accumulates."""
     if not chunks:
-        return ()
+        return {}
 
-    def join(monitor: Monitor, parts: tuple[np.ndarray, ...]) -> np.ndarray:
+    def join(monitor: Monitor, parts: list[np.ndarray]) -> np.ndarray:
         if not monitor.accumulate:
             return np.concatenate(parts, axis=time_axis)
         total = parts[0]
@@ -181,7 +185,7 @@ def _join(monitors: tuple[Monitor, ...], chunks: list[tuple[np.ndarray, ...]],
             total = total + part
         return total
 
-    return tuple(join(m, parts) for m, parts in zip(monitors, zip(*chunks, strict=True), strict=True))
+    return {name: join(m, [chunk[name] for chunk in chunks]) for name, m in monitors.items()}
 
 
 type Placement = Callable[[Variables | jax.Array], Variables | jax.Array]
@@ -202,7 +206,7 @@ def _placement(network: Network, mesh: Mesh, layout: Layout, trials: int | None)
     def sharding(path: tuple, leaf: jax.Array) -> NamedSharding:
         shape = jnp.shape(leaf)
         inner = shape[len(lead):]
-        names = [getattr(entry, "key", None) for entry in path]
+        names = [entry.key if isinstance(entry, jax.tree_util.DictKey) else None for entry in path]
         per_edge = "plastic" in names and names[-1] == "weight"
         on_neurons = bool(inner) and inner[-1] in sizes and not per_edge
         axes = (*lead, *(None,) * (len(inner) - on_neurons), *(("neurons",) if on_neurons else ()))

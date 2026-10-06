@@ -26,28 +26,29 @@ network, case = nest_network("iaf_psc_exp")
 steps = 3000
 drive = {"dc": np.broadcast_to(case["current"], (steps, len(case["current"])))}
 result = simulate(network, network.init(jax.random.key(0)), duration=steps * 0.1, drive=drive,
-                  monitors=(SpikeRaster("n"),), mesh=mesh)
-out["neurons"] = np.flatnonzero(result.records[0].ravel()).tolist()
+                  monitors={"n": SpikeRaster("n")}, mesh=mesh)
+out["neurons"] = np.flatnonzero(result.records["n"].ravel()).tolist()
 v = result.variables["state"]["network"]["populations"]["n"]["point_neuron"].neuron.v
 out["neuron_sharding"] = list(v.sharding.spec)
 out["shards"] = len(v.addressable_shards)
 
 # Trials spread: a Poisson-driven network, 8 trials of 50 ms.
 net = Network((Population("a", 64, LIF(), {"ex": Receptor(Exponential(5.0))}),),
-              (Projection("a", "a", FixedProbability(0.1), weight=20.0, delay=1.0),),
-              inputs=(PoissonInput("a", rate=1000.0, weight=60.0, count=5),), dt=0.1, dtype=jnp.float64)
+              (Projection("a", "a", FixedProbability(0.1), weight=20.0, delay=1.0, receptor="ex"),),
+              inputs=(PoissonInput("a", rate=1000.0, weight=60.0, receptor="ex", count=5),), dt=0.1,
+              dtype=jnp.float64)
 result = simulate(net, net.init(jax.random.key(0)), duration=50.0, key=jax.random.key(1), trials=8,
-                  monitors=(SpikeRaster("a"),), mesh=mesh)
-out["trials"] = np.flatnonzero(result.records[0].ravel()).tolist()
-out["trial_shape"] = list(result.records[0].shape)
+                  monitors={"a": SpikeRaster("a")}, mesh=mesh)
+out["trials"] = np.flatnonzero(result.records["a"].ravel()).tolist()
+out["trial_shape"] = list(result.records["a"].shape)
 v = result.variables["state"]["network"]["populations"]["a"]["point_neuron"].neuron.v
 out["trial_sharding"] = list(v.sharding.spec)
 
 # Both: trials over the data axis and each trial's neurons over fsdp.
 if jax.device_count() % 2 == 0:
     result = simulate(net, net.init(jax.random.key(0)), duration=50.0, key=jax.random.key(1), trials=8,
-                      monitors=(SpikeRaster("a"),), mesh=MeshSpec(fsdp=2))
-    out["mixed"] = np.flatnonzero(result.records[0].ravel()).tolist()
+                      monitors={"a": SpikeRaster("a")}, mesh=MeshSpec(fsdp=2))
+    out["mixed"] = np.flatnonzero(result.records["a"].ravel()).tolist()
     v = result.variables["state"]["network"]["populations"]["a"]["point_neuron"].neuron.v
     out["mixed_sharding"] = list(v.sharding.spec)
 print(json.dumps(out))

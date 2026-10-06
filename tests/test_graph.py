@@ -9,7 +9,19 @@ import numpy as np
 import pytest
 from dew.checkpoints import Checkpoints
 
-from sparx.dynamics import LIF, ALIFCell, Delta, Exponential, Receptor, decay, run
+from sparx.dynamics import (
+    LIF,
+    ALIFCell,
+    Delta,
+    Exponential,
+    LICell,
+    LIFCell,
+    PairSTDP,
+    Receptor,
+    Serial,
+    decay,
+    run,
+)
 from sparx.graph import (
     AllToAll,
     ArrivalInput,
@@ -21,6 +33,7 @@ from sparx.graph import (
     OneToOne,
     PoissonInput,
     Population,
+    PopulationRate,
     Projection,
     SpikeCounts,
     SpikeRaster,
@@ -73,8 +86,8 @@ def test_recurrent_network_fires_with_nest_spike_for_spike(model):
     with jax.enable_x64(new_val=True):
         variables = network.init(jax.random.key(0))
         drive = {"dc": np.broadcast_to(case["current"], (steps, len(case["current"])))}
-        (fired,), _ = network.apply(variables, drive, monitors=(SpikeRaster("n"),), mutable=["state"])
-    fired = np.asarray(fired, np.float64)
+        records, _ = network.apply(variables, drive, monitors={"n": SpikeRaster("n")}, mutable=["state"])
+    fired = np.asarray(records["n"], np.float64)
     expected = case["spikes"]
     assert expected.sum() > 300
     if model == "iaf_cond_exp":
@@ -100,12 +113,14 @@ def test_a_delay_of_d_steps_lands_at_the_end_of_step_m_plus_d():
     pops = (Population("a", 1, neuron, {"ex": Receptor(Exponential(2.0))}),
             Population("b", 1, neuron, {"ex": Receptor(Exponential(2.0))}))
     for delay_steps in (0, 1, 7):
-        network = Network(pops, (Projection("a", "b", OneToOne(), weight=100.0, delay=delay_steps * DT),),
+        network = Network(pops, (Projection("a", "b", OneToOne(), weight=100.0, delay=delay_steps * DT,
+                                            receptor="ex"),),
                           inputs=(CurrentInput("a", "kick"),), dt=DT)
         variables = network.init(jax.random.key(0))
         drive = {"kick": np.where(np.arange(60) < 5, 1e5, 0.0)[:, None]}
-        monitors = (SpikeRaster("a"), StateMonitor("b"))
-        (a, v), _ = network.apply(variables, drive, monitors=monitors, mutable=["state"])
+        monitors = {"a": SpikeRaster("a"), "v": StateMonitor("b")}
+        records, _ = network.apply(variables, drive, monitors=monitors, mutable=["state"])
+        a, v = records["a"], records["v"]
         sent = int(np.flatnonzero(np.asarray(a[:, 0]))[0])
         moved = int(np.flatnonzero(np.asarray(v[:, 0]) != neuron.e_l)[0])
         assert moved == sent + delay_steps + 1
@@ -113,7 +128,7 @@ def test_a_delay_of_d_steps_lands_at_the_end_of_step_m_plus_d():
 
 def test_delta_synapses_refuse_zero_delays():
     network = Network((Population("a", 2, LIF(), {"ex": Receptor(Delta())}),),
-                      (Projection("a", "a", AllToAll(), weight=1.0, delay=0.0),), dt=DT)
+                      (Projection("a", "a", AllToAll(), weight=1.0, delay=0.0, receptor="ex"),), dt=DT)
     with pytest.raises(ValueError, match="at least 1 step"):
         network.init(jax.random.key(0))
 
@@ -133,7 +148,7 @@ def test_connectivity_rules_draw_what_they_promise():
 def test_the_same_key_builds_the_same_network():
     network = Network((Population("a", 50, LIF(), {"ex": Receptor(Exponential(2.0))}),),
                       (Projection("a", "a", FixedProbability(0.2),
-                                  weight=lambda rng, n: rng.normal(size=n)),), dt=DT)
+                                  weight=lambda rng, n: rng.normal(size=n), receptor="ex"),), dt=DT)
     one, two = network.init(jax.random.key(3)), network.init(jax.random.key(3))
     jax.tree.map(np.testing.assert_array_equal, one["connectome"], two["connectome"])
     other = network.init(jax.random.key(4))
@@ -152,8 +167,8 @@ def test_brunel_regimes_match_nests_statistics(regime):
     g, eta = REGIMES[regime]
     network = brunel(int(BRUNEL["meta/order"]), g=g, eta=eta)
     result = simulate(network, network.init(jax.random.key(0)), duration=float(BRUNEL["meta/duration"]),
-                      key=jax.random.key(1), monitors=(SpikeRaster("e"),), chunk=100.0)
-    window = result.records[0][round(float(BRUNEL["meta/skip"]) / DT):]
+                      key=jax.random.key(1), monitors={"e": SpikeRaster("e")}, chunk=100.0)
+    window = result.records["e"][round(float(BRUNEL["meta/skip"]) / DT):]
     rate, cv, fano = rates_hz(window, DT).mean(), cv_isi(window).mean(), population_fano(window, DT)
     nest_stats = BRUNEL[f"{regime}/stats"]
     mean, spread = nest_stats.mean(0), nest_stats.std(0)
@@ -164,33 +179,34 @@ def test_brunel_regimes_match_nests_statistics(regime):
 
 def small_network():
     network = Network((Population("a", 200, LIF(), {"ex": Receptor(Exponential(5.0))}),),
-                      (Projection("a", "a", FixedProbability(0.1), weight=20.0, delay=1.5),),
-                      inputs=(PoissonInput("a", rate=1000.0, weight=60.0, count=5),), dt=DT)
+                      (Projection("a", "a", FixedProbability(0.1), weight=20.0, delay=1.5, receptor="ex"),),
+                      inputs=(PoissonInput("a", rate=1000.0, weight=60.0, receptor="ex", count=5),), dt=DT)
     return network, network.init(jax.random.key(0))
 
 
 def test_simulate_does_not_depend_on_the_chunk_length():
     network, variables = small_network()
-    runs = [simulate(network, variables, duration=50.0, key=jax.random.key(1), monitors=(SpikeRaster("a"),),
-                     chunk=chunk).records[0] for chunk in (50.0, 7.0)]
+    runs = [simulate(network, variables, duration=50.0, key=jax.random.key(1),
+                     monitors={"a": SpikeRaster("a")}, chunk=chunk).records["a"] for chunk in (50.0, 7.0)]
     np.testing.assert_array_equal(*runs)
     assert runs[0].sum() > 100
 
 
 def test_a_run_continued_from_its_variables_is_the_unbroken_run():
     network, variables = small_network()
-    whole = simulate(network, variables, duration=50.0, key=jax.random.key(1), monitors=(SpikeRaster("a"),))
-    first = simulate(network, variables, duration=20.0, key=jax.random.key(1), monitors=(SpikeRaster("a"),))
-    second = simulate(network, first.variables, duration=30.0, key=jax.random.key(1),
-                      monitors=(SpikeRaster("a"),))
-    np.testing.assert_array_equal(np.concatenate([first.records[0], second.records[0]]), whole.records[0])
+    monitors = {"a": SpikeRaster("a")}
+    whole = simulate(network, variables, duration=50.0, key=jax.random.key(1), monitors=monitors)
+    first = simulate(network, variables, duration=20.0, key=jax.random.key(1), monitors=monitors)
+    second = simulate(network, first.variables, duration=30.0, key=jax.random.key(1), monitors=monitors)
+    np.testing.assert_array_equal(np.concatenate([first.records["a"], second.records["a"]]),
+                                  whole.records["a"])
 
 
 def test_a_run_resumed_from_its_checkpoint_is_the_unbroken_run(tmp_path):
     # The first call stops after 20 ms, as a preempted run would; the second
     # asks for the whole 50 ms and continues from the checkpoint.
     network, variables = small_network()
-    monitors = (SpikeRaster("a"), SpikeCounts("a"))
+    monitors = {"raster": SpikeRaster("a"), "counts": SpikeCounts("a")}
     whole = simulate(network, variables, duration=50.0, key=jax.random.key(1), monitors=monitors, chunk=10.0)
     directory = str(tmp_path / "run")
     simulate(network, variables, duration=20.0, key=jax.random.key(1), monitors=monitors, chunk=10.0,
@@ -199,8 +215,8 @@ def test_a_run_resumed_from_its_checkpoint_is_the_unbroken_run(tmp_path):
                        chunk=10.0, checkpoints=Checkpoints(directory))
     skipped = round(20.0 / DT)
     assert resumed.start == pytest.approx(20.0)
-    np.testing.assert_array_equal(resumed.records[0], whole.records[0][skipped:])
-    np.testing.assert_array_equal(resumed.records[1], whole.records[0][skipped:].sum(0))
+    np.testing.assert_array_equal(resumed.records["raster"], whole.records["raster"][skipped:])
+    np.testing.assert_array_equal(resumed.records["counts"], whole.records["raster"][skipped:].sum(0))
     np.testing.assert_allclose(resumed.times, whole.times[skipped:])
     jax.tree.map(np.testing.assert_array_equal, resumed.variables["state"], whole.variables["state"])
 
@@ -243,10 +259,10 @@ def test_dense_and_edge_projections_deliver_the_same_spikes():
         return Network((Population("a", 300, LIF(), {"ex": Receptor(Exponential(5.0)),
                                                       "in": Receptor(Exponential(10.0))}),),
                        (Projection("a", "a", FixedInDegree(30, multapses=True), weight=25.0, delay=1.5,
-                                   format=format),
+                                   receptor="ex", format=format),
                         Projection("a", "a", FixedProbability(0.05), weight=-40.0, delay=0.8, receptor="in",
                                    format=format)),
-                       inputs=(PoissonInput("a", rate=1000.0, weight=60.0, count=5),), dt=DT,
+                       inputs=(PoissonInput("a", rate=1000.0, weight=60.0, receptor="ex", count=5),), dt=DT,
                        dtype=jnp.float64)
 
     with jax.enable_x64(new_val=True):
@@ -254,8 +270,8 @@ def test_dense_and_edge_projections_deliver_the_same_spikes():
         for format in ("dense", "edges"):
             net = network(format)
             result = simulate(net, net.init(jax.random.key(0)), duration=100.0, key=jax.random.key(1),
-                              monitors=(SpikeRaster("a"),))
-            runs.append(result.records[0])
+                              monitors={"a": SpikeRaster("a")})
+            runs.append(result.records["a"])
     np.testing.assert_array_equal(*runs)
     assert runs[0].sum() > 500
 
@@ -269,9 +285,9 @@ def test_brette_benchmarks_match_brian2s_statistics(name):
     # interspike irregularity and synchrony of the excitatory one.
     network = {"cuba": cuba, "coba": coba}[name]()
     result = simulate(network, network.init(jax.random.key(0)), duration=float(BENCHMARKS["meta/duration"]),
-                      monitors=(SpikeRaster("e"), SpikeRaster("i")))
+                      monitors={"e": SpikeRaster("e"), "i": SpikeRaster("i")})
     skip = round(float(BENCHMARKS["meta/skip"]) / DT)
-    e, i = result.records[0][skip:], result.records[1][skip:]
+    e, i = result.records["e"][skip:], result.records["i"][skip:]
     got = np.array([rates_hz(e, DT).mean(), rates_hz(i, DT).mean(), cv_isi(e).mean(),
                     population_fano(e, DT)])
     brian2 = BENCHMARKS[f"{name}/stats"]
@@ -302,13 +318,14 @@ def test_a_layer_stack_is_the_same_network_through_sparx_nn_and_graph():
         network = Network(
             (Population("in", sizes[0], neuron, receptors), Population("h", sizes[1], neuron, receptors),
              Population("out", sizes[2], neuron, receptors)),
-            (Projection("in", "h", FromEdges(*every), weight=w1.ravel(), delay=1.0),
+            (Projection("in", "h", FromEdges(*every), weight=w1.ravel(), delay=1.0, receptor="ex"),
              Projection("h", "out", FromEdges(*np.indices(sizes[1:]).reshape(2, -1)), weight=w2.ravel(),
-                        delay=1.0)),
-            inputs=(ArrivalInput("in", "spikes"),), dt=1.0, dtype=jnp.float64)
-        (inputs, hidden, output), _ = network.apply(
+                        delay=1.0, receptor="ex")),
+            inputs=(ArrivalInput("in", "spikes", "ex"),), dt=1.0, dtype=jnp.float64)
+        records, _ = network.apply(
             network.init(jax.random.key(0)), {"spikes": np.concatenate([x * 10, np.zeros((2, sizes[0]))])},
-            monitors=(SpikeRaster("in"), SpikeRaster("h"), SpikeRaster("out")), mutable=["state"])
+            monitors={name: SpikeRaster(name) for name in ("in", "h", "out")}, mutable=["state"])
+        inputs, hidden, output = records["in"], records["h"], records["out"]
     np.testing.assert_array_equal(np.asarray(inputs[:steps]), x > 0)
     np.testing.assert_array_equal(np.asarray(hidden[1:steps + 1]), h > 0)
     np.testing.assert_array_equal(np.asarray(output[2:]), out > 0)
@@ -322,19 +339,18 @@ def test_a_population_of_a_dimensionless_model_is_that_model_on_its_delta_inputs
     drive = np.random.default_rng(3).normal(0.4, 0.9, (steps, size))
     alif = ALIFCell(decay(20.0), decay(200.0), beta=0.3, refractory=2)
     network = Network((Population("a", size, alif, {"ex": Receptor(Delta())}),),
-                      inputs=(ArrivalInput("a", "drive"),), dt=1.0)
-    (fired,), _ = network.apply(network.init(jax.random.key(0)), {"drive": drive},
-                                monitors=(SpikeRaster("a"),), mutable=["state"])
+                      inputs=(ArrivalInput("a", "drive", "ex"),), dt=1.0)
+    records, _ = network.apply(network.init(jax.random.key(0)), {"drive": drive},
+                               monitors={"a": SpikeRaster("a")}, mutable=["state"])
+    fired = records["a"]
     expected = run(alif, jnp.asarray(drive, jnp.float32))[0].fired
     np.testing.assert_array_equal(np.asarray(fired), np.asarray(expected) > 0)
     assert 20 < int(expected.sum()) < steps * size // 2  # it fires, and adaptation holds it back
 
 
 def test_a_dimensionless_population_refuses_a_current():
-    network = Network((Population("a", 3, ALIFCell(0.9, 0.99)),), inputs=(CurrentInput("a", "dc"),),
-                      dt=1.0)
     with pytest.raises(ValueError, match="jump"):
-        network.apply(network.init(jax.random.key(0)), {"dc": np.ones((4, 3))}, mutable=["state"])
+        Network((Population("a", 3, ALIFCell(0.9, 0.99)),), inputs=(CurrentInput("a", "dc"),), dt=1.0)
 
 
 BRIAN2 = np.load(Path(__file__).parent / "fixtures" / "brian2.npz")
@@ -365,8 +381,8 @@ def test_shius_neuron_model_fires_with_brian2_spike_for_spike(format):
     network, drive, expected = shiu_network(format)
     with jax.enable_x64(new_val=True):
         result = simulate(network, network.init(jax.random.key(0)), duration=len(drive) * DT,
-                          drive={"stim": drive}, monitors=(SpikeRaster("n"),))
-    np.testing.assert_array_equal(result.records[0], expected > 0)
+                          drive={"stim": drive}, monitors={"n": SpikeRaster("n")})
+    np.testing.assert_array_equal(result.records["n"], expected > 0)
     assert expected[:, 10:].sum() > 40  # the network, not only the stimulated neurons, fires
 
 
@@ -375,3 +391,124 @@ def test_event_projections_raise_when_over_capacity():
     network = network.clone(projections=(dataclasses.replace(network.projections[0], capacity=2),))
     with jax.enable_x64(new_val=True), pytest.raises(RuntimeError, match="capacity"):
         simulate(network, network.init(jax.random.key(0)), duration=len(drive) * DT, drive={"stim": drive})
+
+
+def test_population_rate_is_the_raster_mean_in_hz():
+    network, variables = small_network()
+    result = simulate(network, variables, duration=30.0, key=jax.random.key(1),
+                      monitors={"raster": SpikeRaster("a"), "rate": PopulationRate("a")})
+    raster, rate = result.records["raster"], result.records["rate"]
+    np.testing.assert_allclose(rate, raster.mean(1) * 1000.0 / DT, rtol=1e-6)
+    np.testing.assert_allclose(rate.mean(), rates_hz(raster, DT).mean(), rtol=1e-6)
+    assert rate.mean() > 1.0
+
+
+def test_a_conductance_receptor_without_a_reversal_potential_is_refused_when_built():
+    receptors = {"ex": Receptor(Exponential(5.0), "conductance")}
+    with pytest.raises(ValueError, match=r"population 'a': conductance receptor 'ex'.*'ampa', 'nmda'"):
+        Network((Population("a", 3, LIF(), receptors),))
+    Network((Population("a", 3, LIF(reversal={"ex": 0.0}), receptors),))  # named, so accepted
+
+
+def test_a_projection_onto_a_missing_receptor_names_the_ones_there_are():
+    population = Population("a", 3, LIF(), {"ampa": Receptor(Exponential(5.0))})
+    with pytest.raises(ValueError, match=r"receptor 'ex', which population 'a' lacks; it has 'ampa'"):
+        Network((population,), (Projection("a", "a", AllToAll(), receptor="ex"),))
+    with pytest.raises(ValueError, match=r"receptor 'gaba_a', which population 'a' lacks"):
+        Network((population,), inputs=(PoissonInput("a", rate=10.0, weight=1.0, receptor="gaba_a"),))
+
+
+@pytest.mark.parametrize("kind", ["current", "conductance"])
+def test_a_dimensionless_population_refuses_a_kinetic_receptor_when_built(kind):
+    receptors = {"ex": Receptor(Exponential(5.0), kind)}
+    with pytest.raises(ValueError, match=r"population 'a'") as refused:
+        Network((Population("a", 3, ALIFCell(0.9, 0.99), receptors),), dt=1.0)
+    assert "'ex'" in str(refused.value) and "ALIFCell" in str(refused.value)
+
+
+def test_a_time_off_the_step_grid_is_refused():
+    network = Network((Population("a", 2, LIF(), {"ex": Receptor(Exponential(2.0))}),),
+                      (Projection("a", "a", AllToAll(), delay=0.15, receptor="ex"),), dt=0.1)
+    with pytest.raises(ValueError, match=r"delay must be a whole number of steps of 0.1 ms; \[0.15\]"):
+        network.init(jax.random.key(0))
+    network, variables = small_network()
+    with pytest.raises(ValueError, match="duration must be a whole number"):
+        simulate(network, variables, duration=1.05)
+    with pytest.raises(ValueError, match="chunk must be a whole number"):
+        simulate(network, variables, duration=1.0, chunk=0.25)
+
+
+def test_poisson_inputs_ask_for_their_key():
+    network, variables = small_network()
+    with pytest.raises(ValueError, match=r"rngs=.'noise': key."):
+        network.apply(variables, steps=3, mutable=["state"])
+
+
+def test_initial_state_is_drawn_per_field_and_receptor():
+    neuron = LIF(tau_m=20.0, e_l=-60.0)
+    receptors = {"ampa": Receptor(Exponential(5.0), "conductance")}
+    initial = {"v": lambda rng, n: rng.uniform(-60.0, -50.0, n), "ampa": np.arange(4.0)}
+    network = Network((Population("a", 4, neuron, receptors, initial=initial),))
+    state = network.init(jax.random.key(0))["state"]["network"]["populations"]["a"]["point_neuron"]
+    v = np.asarray(state.neuron.v)
+    assert v.dtype == np.float32 and np.all((v >= -60.0) & (v < -50.0)) and len(np.unique(v)) == 4
+    np.testing.assert_array_equal(state.synapses["ampa"], np.arange(4.0))
+    np.testing.assert_array_equal(state.neuron.refractory, 0.0)  # what it does not name stays at rest
+    with pytest.raises(ValueError, match=r"initial 'u' is neither.*'v'.*'ampa'"):
+        Network((Population("a", 4, neuron, receptors, initial={"u": 0.0}),))
+
+
+def test_a_state_monitor_records_the_neurons_it_names_and_reads_a_serial_models_voltage():
+    network, variables = small_network()
+    monitors = {"all": StateMonitor("a"), "some": StateMonitor("a", neurons=(3, 0, 7))}
+    result = simulate(network, variables, duration=10.0, key=jax.random.key(1), monitors=monitors)
+    assert result.records["some"].shape == (100, 3)
+    np.testing.assert_array_equal(result.records["some"], result.records["all"][:, [3, 0, 7]])
+
+    # A Serial model fires on its second model's membrane, which the default reads.
+    synaptic = Serial(LICell(decay(5.0)), LIFCell(decay(20.0)))
+    serial = Network((Population("a", 2, synaptic, {"ex": Receptor(Delta())}),),
+                     inputs=(ArrivalInput("a", "drive", "ex"),), dt=1.0)
+    drive = np.full((6, 2), 0.3)
+    records, _ = serial.apply(serial.init(jax.random.key(0)), {"drive": drive},
+                              monitors={"v": StateMonitor("a")}, mutable=["state"])
+    final = run(synaptic, jnp.asarray(drive, jnp.float32))[1]
+    np.testing.assert_allclose(records["v"][-1], final[1].v, rtol=1e-6)
+
+
+def test_connections_read_each_storage_back_as_the_edges_it_was_given():
+    pre, post = np.array([2, 0, 1, 0]), np.array([1, 2, 0, 1])
+    weight, delay = np.array([1.0, 2.0, 3.0, 4.0]), np.array([0.2, 0.1, 0.3, 0.1])
+    order = np.lexsort((post, pre))
+    receptors = {"ex": Receptor(Exponential(2.0)), "in": Receptor(Exponential(2.0))}
+    for format in ("edges", "dense", "events"):
+        per_edge = format == "edges"
+        network = Network((Population("a", 3, LIF(), receptors),), (
+            Projection("a", "a", FromEdges(pre, post), weight=weight, delay=delay if per_edge else 0.1,
+                       receptor="ex", format=format),
+            Projection("a", "a", FromEdges(pre, post), weight=-weight, receptor="in", trainable=True)),
+            dt=0.1)
+        connections = network.connections(network.init(jax.random.key(0)))
+        got = connections["a->a:ex"]
+        np.testing.assert_array_equal(got.pre, pre[order])
+        np.testing.assert_array_equal(got.post, post[order])
+        np.testing.assert_array_equal(got.weight, weight[order])
+        np.testing.assert_allclose(got.delay, delay[order] if per_edge else 0.1)
+        np.testing.assert_array_equal(connections["a->a:in"].weight, -weight[order])
+
+
+def test_connections_read_plastic_weights_as_learned():
+    network = Network((Population("a", 40, LIF(), {"ex": Receptor(Exponential(5.0))}),),
+                      (Projection("a", "a", FixedProbability(0.2), weight=20.0, delay=1.0, receptor="ex",
+                                  plasticity=PairSTDP(lambda_=0.05)),),
+                      inputs=(PoissonInput("a", rate=1000.0, weight=60.0, receptor="ex", count=5),), dt=DT)
+    variables = network.init(jax.random.key(0))
+    before = network.connections(variables)["a->a:ex"]
+    result = simulate(network, variables, duration=50.0, key=jax.random.key(1))
+    learned = network.connections(result.variables)["a->a:ex"]
+    np.testing.assert_array_equal(learned.pre, before.pre)
+    np.testing.assert_array_equal(learned.post, before.post)
+    np.testing.assert_array_equal(before.weight, 20.0)
+    plastic = result.variables["state"]["network"]["plastic"]["a->a:ex"]["weight"]
+    np.testing.assert_array_equal(np.sort(learned.weight), np.sort(np.asarray(plastic)))
+    assert not np.allclose(learned.weight, 20.0)

@@ -4,7 +4,7 @@
     sugar = brain.index(SUGAR_IDS)                      # FlyWire root IDs -> neuron indices
     network = shiu2024(brain, stimuli=[(sugar, 150.0)])
     result = simulate(network, network.init(key), duration=1000.0, key=key,
-                      monitors=(SpikeCounts("brain"),))
+                      monitors={"counts": SpikeCounts("brain")})
 
 A `Connectome` is a neuron table and an edge list with signed synapse
 counts: the sign is the presynaptic neuron's predicted transmitter's

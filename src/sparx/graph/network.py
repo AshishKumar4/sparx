@@ -1,14 +1,17 @@
 """Networks of populations joined by projections, stepped on one clock.
 
+    receptors = {"ampa": Receptor(Exponential(5.0), "conductance"),
+                 "gaba_a": Receptor(Exponential(10.0), "conductance")}
     network = Network(
-        populations=(Population("e", 3200, LIF(...), {"ex": Receptor(Exponential(5.0), "conductance"), ...}),
-                     Population("i", 800, ...)),
-        projections=(Projection("e", "e", FixedProbability(0.02), weight=6.0, delay=0.1, receptor="ex"), ...),
+        populations=(Population("e", 3200, LIF(...), receptors), Population("i", 800, LIF(...), receptors)),
+        projections=(Projection("e", "e", FixedProbability(0.02), weight=6.0, delay=0.1, receptor="ampa"),
+                     ...),
         dt=0.1,
     )
     variables = network.init(key)
-    outputs, updates = network.apply(variables, steps=10_000, monitors=(SpikeRaster("e"),),
+    records, updates = network.apply(variables, steps=10_000, monitors={"spikes": SpikeRaster("e")},
                                      rngs={"noise": key}, mutable=["state"])
+    records["spikes"]                       # [steps, 3200] booleans
 
 A `Network` is a Flax module, so dew trains, shards and checkpoints it. Its
 variables are split by role (design.md section 5.1):
@@ -19,6 +22,15 @@ variables are split by role (design.md section 5.1):
 | `params` | the weights of trainable projections |
 | `state` | per population, neuron and synapse states and a ring buffer of recent spikes; per plastic |
 |         | projection, traces and weights; per depressing projection, release; the step count |
+
+`Network.connections(variables)` reads every projection's edges, weights
+and delays back out of them, whichever collection holds the weights.
+
+The network is checked when it is constructed. Every receptor a projection
+or input names exists on its target, every conductance receptor has a
+reversal potential in its neuron model, and each neuron model accepts what
+its receptors and inputs deliver, so a dimensionless model given a kinetic
+synapse is refused before any step runs.
 
 One step covers `(t, t + dt]` and runs in NEST's order, which the
 single-neuron tests pin against NEST and Brian2 (`sparx.dynamics.core`):
@@ -33,45 +45,82 @@ single-neuron tests pin against NEST and Brian2 (`sparx.dynamics.core`):
 5. Plasticity updates traces and weights.
 6. Monitors record.
 
-A spike sent in step `m` over a delay of `D` steps (`round(delay / dt)`)
-is due at the end of step `m + D`: NEST's and Brian2's timing for a
-delay of `D dt` (they stamp the spike differently, NEST at the end of its
-step and Brian2 at the start, but deliver it alike). Kinetic synapses take
-`D >= 0`, Brian2's default being 0; delta synapses need `D >= 1`, since a
-jump due in the step that sent it would feed back into that step's
-threshold test.
+A spike sent in step `m` over a delay of `D` steps (`delay / dt`, which
+must be whole) is due at the end of step `m + D`: NEST's and Brian2's
+timing for a delay of `D dt` (they stamp the spike differently, NEST at the
+end of its step and Brian2 at the start, but deliver it alike). Kinetic
+synapses take `D >= 0`, Brian2's default being 0; delta synapses need
+`D >= 1`, since a jump due in the step that sent it would feed back into
+that step's threshold test.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal, TypedDict
+from typing import Literal, NamedTuple, Protocol, TypedDict, runtime_checkable
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
+from dew.objectives.base import Variables
 
 from sparx.dynamics.core import NeuronModel
 from sparx.dynamics.plasticity import Plasticity, TsodyksMarkram, TsodyksMarkramState
 from sparx.dynamics.synapses import PointNeuron, PointNeuronState, Receptor
 from sparx.graph.connectivity import Connectivity, EdgeList
 
-__all__ = ["ArrivalInput", "CurrentInput", "Drive", "Monitor", "Network", "NetworkState", "PlasticState",
-           "PoissonInput", "Population", "PopulationRate", "PopulationState", "Projection", "ReleaseState",
-           "SpikeCounts", "SpikeRaster", "SpikeTimes", "StateMonitor"]
+__all__ = ["ArrivalInput", "Connections", "CurrentInput", "Drive", "Monitor", "Network", "NetworkState",
+           "PerEdge", "PerNeuron", "PlasticState", "PoissonInput", "Population", "PopulationRate",
+           "PopulationState", "Projection", "ReleaseState", "Reversing", "SpikeCounts", "SpikeRaster",
+           "SpikeTimes", "StateMonitor", "whole_steps"]
 
 DENSE_LIMIT = 2 ** 25
 EVENT_BLOCK = 4096
 DENSE_DENSITY = 0.02
+GRID_TOLERANCE = 1e-3
+"""How far from a whole number of steps, in steps, a time may be and still count as on the grid: wide
+enough for float32 delays of a few hundred ms, and far narrower than any time meant to fall between
+steps."""
 
-PerEdge = float | np.ndarray | Callable[[np.random.Generator, int], np.ndarray]
+type PerEdge = float | np.ndarray | Callable[[np.random.Generator, int], np.ndarray]
 """A value for every edge: one for all, an array in the connectivity's order, or `f(rng, count)`."""
+
+type PerNeuron = float | np.ndarray | Callable[[np.random.Generator, int], np.ndarray]
+"""A value for every neuron of a population: one for all, an array `[size]`, or `f(rng, size)`."""
 
 type Drive = Mapping[str, jax.Array | np.ndarray | float]
 """External input by the name of the `CurrentInput` or `ArrivalInput` that reads it: `[T, ...]` per step,
 or a constant."""
+
+
+def whole_steps(time: float | np.ndarray, dt: float, what: str) -> np.ndarray:
+    """`time` (ms) as a whole number of steps of `dt`; raises if it falls between steps.
+
+    Rounding a time onto the grid moves it by up to half a step, and which
+    way a time near half a step goes depends on floating-point error in
+    `time / dt` (0.15 ms at a 0.1 ms step is 1 step or 2). Delays decide
+    when spikes land and durations how many steps run, so a time off the
+    grid is refused and the caller picks the step it meant.
+    """
+    exact = np.asarray(time, np.float64) / dt
+    steps = np.rint(exact)
+    off = np.abs(exact - steps) > GRID_TOLERANCE
+    if np.any(off):
+        shown = np.unique(np.asarray(time)[off])[:3].tolist()
+        raise ValueError(f"{what} must be a whole number of steps of {dt} ms; {shown} is not. Round it to "
+                         f"the grid, as `np.round(x / dt) * dt` does")
+    return steps.astype(np.int64)
+
+
+@runtime_checkable
+class Reversing(Protocol):
+    """A neuron model that reads conductances, against the reversal potential (mV) of each receptor by
+    name: the physical models of `sparx.dynamics.neurons`."""
+
+    @property
+    def reversal(self) -> Mapping[str, float]: ...
 
 
 @dataclass(frozen=True)
@@ -80,11 +129,15 @@ class Population:
 
     `neuron` is any neuron model of `sparx.dynamics`, physical or
     dimensionless; a dimensionless one (`ALIFCell`, say) takes its input
-    through delta receptors, as voltage jumps. `initial(rng, state)` may
-    replace the resting state each neuron starts from (random voltages,
-    say); it gets a NumPy generator and the `PointNeuronState` at rest, with
-    `[size]` leaves. `reset_synapses` and `freeze_synapses` are
-    `PointNeuron`'s options.
+    through delta receptors, as voltage jumps. A conductance receptor is
+    named for a reversal potential of the neuron model (`LIF`'s defaults are
+    `ampa`, `nmda`, `gaba_a` and `gaba_b`).
+
+    `initial` sets where each neuron starts, by name: a field of the neuron
+    model's state (`"v"`) or a receptor, whose synapse state it sets, each
+    to one value for all, an array `[size]` or `f(rng, size)` drawn from a
+    NumPy generator seeded by the network's key. Everything else starts at
+    rest. `reset_synapses` and `freeze_synapses` are `PointNeuron`'s options.
     """
 
     name: str
@@ -92,7 +145,7 @@ class Population:
     neuron: NeuronModel
     receptors: Mapping[str, Receptor] = field(default_factory=dict)
     hold: Literal["mean", "start"] = "mean"
-    initial: Callable[[np.random.Generator, PointNeuronState], PointNeuronState] | None = None
+    initial: Mapping[str, PerNeuron] = field(default_factory=dict)
     reset_synapses: bool = False
     freeze_synapses: bool = False
 
@@ -107,11 +160,14 @@ class Population:
 class Projection:
     """Synapses from population `pre` onto receptor `receptor` of population `post`.
 
-    `weight` is in the receptor's unit (pA, nS or mV) and `delay` in ms,
-    rounded to whole steps; either may be per edge. `plasticity` (a
-    `Plasticity` rule, pair or triplet STDP) makes the weights state that evolves with the spikes;
-    `short_term` scales each spike by its presynaptic neuron's release.
-    `trainable` puts fixed weights in `params` for gradient training.
+    `receptor` has no default: it sets the unit of `weight` (pA, nS or mV)
+    and, through the reversal potential, the sign of a conductance, so a
+    weight means nothing without it. `delay` is in ms and must be a whole
+    number of steps (`whole_steps`); either may be per edge. `plasticity`
+    (a `Plasticity` rule, pair or triplet STDP) makes the weights state that
+    evolves with the spikes; `short_term` scales each spike by its
+    presynaptic neuron's release. `trainable` puts fixed weights in
+    `params` for gradient training.
     """
 
     pre: str
@@ -119,7 +175,7 @@ class Projection:
     connectivity: Connectivity
     weight: PerEdge = 1.0
     delay: PerEdge = 1.0
-    receptor: str = "ex"
+    receptor: str = field(kw_only=True)
     plasticity: Plasticity | None = None
     short_term: TsodyksMarkram | None = None
     trainable: bool = False
@@ -152,7 +208,7 @@ class PoissonInput:
     target: str
     rate: float
     weight: float
-    receptor: str = "ex"
+    receptor: str
     count: int = 1
     neurons: tuple[int, ...] | None = None
 
@@ -173,20 +229,24 @@ class ArrivalInput:
 
     target: str
     name: str
-    receptor: str = "ex"
+    receptor: str
 
 
 class Monitor:
-    """Something recorded every step: `record(spikes, states)` with both keyed by population.
+    """Something recorded every step: `record(spikes, states, dt)` with spikes and states keyed by
+    population, and `dt` the step in ms.
 
     A record is one array per step, stacked over the run into `[T, ...]`.
     A monitor with `accumulate = True` is summed over the steps of a run
-    instead of stacked, so its memory does not grow with the run.
+    instead of stacked, so its memory does not grow with the run. Monitors
+    are passed by name (`monitors={"rate": PopulationRate("e")}`), and the
+    records come back under the same names.
     """
 
     accumulate: bool = False
 
-    def record(self, spikes: Mapping[str, jax.Array], states: Mapping[str, PointNeuronState]) -> jax.Array:
+    def record(self, spikes: Mapping[str, jax.Array], states: Mapping[str, PointNeuronState],
+               dt: float) -> jax.Array:
         raise NotImplementedError
 
 
@@ -196,7 +256,7 @@ class SpikeRaster(Monitor):
 
     population: str
 
-    def record(self, spikes, states):
+    def record(self, spikes, states, dt):
         return spikes[self.population] > 0
 
 
@@ -207,7 +267,7 @@ class SpikeCounts(Monitor):
     population: str
     accumulate = True
 
-    def record(self, spikes, states):
+    def record(self, spikes, states, dt):
         return (spikes[self.population] > 0).astype(jnp.int32)
 
 
@@ -219,45 +279,130 @@ class SpikeTimes(Monitor):
     population: str
     capacity: int = 64
 
-    def record(self, spikes, states):
+    def record(self, spikes, states, dt):
         fired = spikes[self.population] > 0
         return jnp.nonzero(fired, size=self.capacity, fill_value=-1)[0].astype(jnp.int32)
 
 
 @dataclass(frozen=True)
 class PopulationRate(Monitor):
-    """The fraction of `population` that fired in the step; divide by `dt` for a rate."""
+    """The rate of `population` in each step, in Hz: the fraction of its neurons that fired in the step,
+    over the step's length in seconds.
+
+    Hz is the unit of `PoissonInput.rate` and `sparx.spiketrains.rates_hz`,
+    so a rate read here compares with them without conversion.
+    """
 
     population: str
 
-    def record(self, spikes, states):
-        return jnp.mean(spikes[self.population])
+    def record(self, spikes, states, dt):
+        return jnp.mean(spikes[self.population]) * (1000.0 / dt)
+
+
+@runtime_checkable
+class _Membrane(Protocol):
+    """A neuron state with a membrane voltage, as the state of each single sparx neuron model has."""
+
+    @property
+    def v(self) -> jax.Array: ...
+
+
+@runtime_checkable
+class _Wrapper(Protocol):
+    """A neuron state that holds another model's, as a `RecurrentCell`'s does."""
+
+    @property
+    def inner(self) -> _NeuronState: ...
+
+
+type _NeuronState = _Membrane | _Wrapper | tuple[_NeuronState, ...]
+"""What a neuron state holds its voltage in: itself, the model it wraps, or the last of several in series."""
+
+
+@runtime_checkable
+class _Record(Protocol):
+    """A neuron state with named fields (a NamedTuple), which `Population.initial` sets by name."""
+
+    @property
+    def _fields(self) -> tuple[str, ...]: ...
+
+
+def _membrane(state: PointNeuronState) -> jax.Array:
+    """The voltage `v` of a population's neuron model; for models in series (`Serial`), the last one's,
+    whose threshold fires the population, and for a `RecurrentCell`, its inner model's."""
+    neuron: object = state.neuron
+    while not isinstance(neuron, _Membrane):
+        if isinstance(neuron, _Wrapper):
+            neuron = neuron.inner
+        elif isinstance(neuron, tuple) and neuron:
+            neuron = neuron[-1]
+        else:
+            raise TypeError(f"{type(neuron).__name__} has no voltage `v`; give StateMonitor a `read`")
+    return neuron.v
 
 
 @dataclass(frozen=True)
 class StateMonitor(Monitor):
-    """`read(state)` of `population` each step; `read` defaults to the membrane voltage."""
+    """`read(state)` of `population` each step, for the neurons `neurons` (indices) or all of them.
+
+    `read` takes the population's `PointNeuronState` and returns one value
+    per neuron; it defaults to the membrane voltage. A voltage trace of
+    every neuron costs `steps * size` values, 32 MB for 800 neurons over
+    1 s at 0.1 ms, so `neurons` keeps the few a figure shows.
+    """
 
     population: str
-    read: Callable[[PointNeuronState], jax.Array] = lambda state: state.neuron.v
+    read: Callable[[PointNeuronState], jax.Array] = _membrane
+    neurons: tuple[int, ...] | None = None
 
-    def record(self, spikes, states):
-        return self.read(states[self.population])
+    def record(self, spikes, states, dt):
+        values = self.read(states[self.population])
+        return values if self.neurons is None else values[np.asarray(self.neurons)]
+
+
+class Connections(NamedTuple):
+    """A projection's synapses, one entry per edge, sorted by presynaptic then postsynaptic neuron.
+
+    `weight` is in the receptor's unit, with a leading trial axis for a
+    plastic projection simulated over trials; `delay` is in ms.
+    """
+
+    pre: np.ndarray
+    post: np.ndarray
+    weight: np.ndarray
+    delay: np.ndarray
+
+
+def _drawn(value: PerEdge, rng: np.random.Generator, count: int, what: str) -> np.ndarray:
+    """`count` values: one repeated, an array of that length as given, or `value(rng, count)`."""
+    if callable(value):
+        out = np.asarray(value(rng, count), np.float64)
+    elif np.ndim(value) == 0:
+        out = np.full(count, float(value))
+    else:
+        out = np.asarray(value, np.float64)
+    if out.shape != (count,):
+        raise ValueError(f"{what} has shape {out.shape}, and needs {count} values")
+    return out
 
 
 def _per_edge(value: PerEdge, rng: np.random.Generator, edges: EdgeList, what: str) -> np.ndarray:
-    if callable(value):
-        out = np.asarray(value(rng, len(edges)), np.float64)
-    elif np.ndim(value) == 0:
-        return np.full(len(edges), float(value))  # type: ignore[arg-type]
-    else:
-        out = np.asarray(value, np.float64)
-        if out.shape != (len(edges),):
-            raise ValueError(f"{what} has shape {out.shape}, the projection has {len(edges)} edges")
-        out = out[edges.order]
-    if out.shape != (len(edges),):
-        raise ValueError(f"{what} gave shape {out.shape} for {len(edges)} edges")
-    return out
+    out = _drawn(value, rng, len(edges), what)
+    # A given array follows the connectivity's order; edges are stored in another.
+    return out if callable(value) or np.ndim(value) == 0 else out[edges.order]
+
+
+def _initial(population: Population, state: PointNeuronState, rng: np.random.Generator) -> PointNeuronState:
+    """`state` at rest with the fields `population.initial` names set, drawn in the order it names them."""
+    neuron, synapses = state.neuron, dict(state.synapses)
+    for name, value in population.initial.items():
+        drawn = _drawn(value, rng, population.size, f"population {population.name!r} initial {name!r}")
+        if name in population.receptors:
+            synapses[name] = jnp.asarray(drawn, jnp.result_type(synapses[name]))
+        else:
+            dtype = jnp.result_type(getattr(neuron, name))
+            neuron = neuron._replace(**{name: jnp.asarray(drawn, dtype)})
+    return PointNeuronState(neuron, synapses)
 
 
 def _dense(p: Projection, delays: np.ndarray, edges: int, pre: int, post: int) -> bool:
@@ -327,6 +472,86 @@ class NetworkState(TypedDict):
     """The steps run so far."""
 
 
+def _check_receptor(population: Population, receptor: str, what: str) -> None:
+    if receptor not in population.receptors:
+        named = ", ".join(map(repr, population.receptors)) or "none"
+        raise ValueError(f"{what} targets receptor {receptor!r}, which population {population.name!r} lacks; "
+                         f"it has {named}")
+
+
+def _check_conductances(population: Population) -> None:
+    """Refuse a conductance receptor that the neuron model has no reversal potential for.
+
+    A model reads each conductance against its reversal potential for the
+    receptor's name, so a name it lacks would fail at the first step.
+    """
+    neuron, model = population.neuron, type(population.neuron).__name__
+    where = f"population {population.name!r}"
+    for name, receptor in population.receptors.items():
+        if receptor.kind != "conductance" or receptor.synapse.lands != "synapse":
+            continue
+        if not isinstance(neuron, Reversing):
+            raise ValueError(f"{where}: receptor {name!r} is a conductance, and {model} has no reversal "
+                             f"potentials to read it against")
+        if name not in neuron.reversal:
+            known = ", ".join(map(repr, neuron.reversal))
+            raise ValueError(f"{where}: conductance receptor {name!r} has no reversal potential; "
+                             f"{model}.reversal has {known}. Name the receptor after one of them, or give "
+                             f"{model} a reversal potential for it")
+
+
+def _check_inputs(population: Population, rest: PointNeuronState, current: bool, dt: float) -> None:
+    """Refuse a population whose neuron model will not take what its kinetic receptors and current input
+    deliver.
+
+    Whether a model takes currents is the model's own answer, so one step
+    is traced on abstract values as the network will step it. A
+    dimensionless model then refuses a kinetic synapse before a run starts,
+    with the population named.
+    """
+    kinetic = [name for name, r in population.receptors.items() if r.synapse.lands == "synapse"]
+    if not kinetic and not current:
+        return
+    held = jnp.zeros((population.size,), jnp.float32) if current else 0.0
+    try:
+        jax.eval_shape(lambda state: population.point_neuron.advance(state, held, jnp.zeros(()), dt), rest)
+    except ValueError as error:
+        sources = [f"receptor {name!r} ({type(population.receptors[name].synapse).__name__})"
+                   for name in kinetic] + (["a CurrentInput"] if current else [])
+        raise ValueError(f"population {population.name!r}: {type(population.neuron).__name__} cannot read "
+                         f"{' or '.join(sources)}: {error}. Its input has to arrive as voltage jumps, "
+                         f"through Delta receptors") from error
+
+
+def _check_initial(population: Population, rest: PointNeuronState) -> None:
+    """Refuse an `initial` entry that names neither a field of the neuron model's state nor a receptor
+    whose synapse state is one array."""
+    where, model = f"population {population.name!r}", type(population.neuron).__name__
+    fields = rest.neuron._fields if isinstance(rest.neuron, _Record) else ()
+    for name in population.initial:
+        if name in population.receptors and name in fields:
+            raise ValueError(f"{where}: initial {name!r} names both a receptor and a field of {model}'s "
+                             f"state; rename the receptor")
+        if name in population.receptors and not isinstance(rest.synapses[name], jax.ShapeDtypeStruct):
+            synapse = type(population.receptors[name].synapse).__name__
+            raise ValueError(f"{where}: initial {name!r} sets receptor {name!r}, whose {synapse} state is "
+                             f"not one array")
+        if name not in population.receptors and name not in fields:
+            known = ", ".join(map(repr, (*fields, *population.receptors)))
+            raise ValueError(f"{where}: initial {name!r} is neither a field of {model}'s state nor a "
+                             f"receptor; it can set {known}")
+
+
+def _check_population(population: Population, current: bool, dt: float) -> None:
+    _check_conductances(population)
+    # The checks read the state's structure, which is the same in every dtype; float32 traces whether or
+    # not float64 is enabled where the network is built.
+    shape, dtype = (population.size,), jnp.dtype(jnp.float32)
+    rest = jax.eval_shape(lambda: population.point_neuron.init_state(shape, dtype))
+    _check_inputs(population, rest, current, dt)
+    _check_initial(population, rest)
+
+
 class Network(nn.Module):
     """Populations and projections stepped together; see the module docstring."""
 
@@ -337,7 +562,8 @@ class Network(nn.Module):
     dtype: jax.typing.DTypeLike = jnp.float32
     """The dtype of the state: membranes, synapses, traces and spike buffers."""
 
-    def _check(self) -> dict[str, Population]:
+    def __post_init__(self) -> None:
+        super().__post_init__()
         populations = {p.name: p for p in self.populations}
         if len(populations) != len(self.populations):
             raise ValueError("population names must be unique")
@@ -348,16 +574,15 @@ class Network(nn.Module):
             for side in (p.pre, p.post):
                 if side not in populations:
                     raise ValueError(f"projection {p.key} names unknown population {side!r}")
-            if p.receptor not in populations[p.post].receptors:
-                raise ValueError(f"projection {p.key} targets receptor {p.receptor!r}, "
-                                 f"which {p.post!r} lacks")
+            _check_receptor(populations[p.post], p.receptor, f"projection {p.key}")
         for source in self.inputs:
             if source.target not in populations:
                 raise ValueError(f"input onto unknown population {source.target!r}")
-            receptor = getattr(source, "receptor", None)
-            if receptor is not None and receptor not in populations[source.target].receptors:
-                raise ValueError(f"input onto receptor {receptor!r}, which {source.target!r} lacks")
-        return populations
+            if not isinstance(source, CurrentInput):
+                _check_receptor(populations[source.target], source.receptor, f"a {type(source).__name__}")
+        currents = {source.target for source in self.inputs if isinstance(source, CurrentInput)}
+        for population in self.populations:
+            _check_population(population, population.name in currents, self.dt)
 
     def _build(self, populations: Mapping[str, Population]) -> dict[str, dict[str, np.ndarray]]:
         """Draw every projection's edges, delays (whole steps) and weights from one key."""
@@ -366,7 +591,8 @@ class Network(nn.Module):
         for p in self.projections:
             pre, post = populations[p.pre], populations[p.post]
             edges = p.connectivity.edges(rng, pre.size, post.size, p.pre == p.post)
-            delays = np.rint(_per_edge(p.delay, rng, edges, f"{p.key} delay") / self.dt).astype(np.int32)
+            delays = whole_steps(_per_edge(p.delay, rng, edges, f"{p.key} delay"), self.dt,
+                                 f"{p.key}: a delay").astype(np.int32)
             minimum = 1 if post.receptors[p.receptor].synapse.lands == "before_threshold" else 0
             if len(delays) and delays.min() < minimum:
                 raise ValueError(f"{p.key}: delays must be at least {minimum} step(s) of {self.dt} ms "
@@ -416,8 +642,8 @@ class Network(nn.Module):
         out: dict[str, PopulationState] = {}
         for name, pop in populations.items():
             point_neuron = pop.point_neuron.init_state((pop.size,), dtype)
-            if pop.initial is not None:
-                point_neuron = pop.initial(rng, point_neuron)
+            if pop.initial:
+                point_neuron = _initial(pop, point_neuron, rng)
             buffer = jnp.zeros((lags[name], pop.size), dtype)
             out[name] = {"point_neuron": point_neuron, "buffer": buffer}
         plastic: dict[str, PlasticState] = {}
@@ -434,11 +660,48 @@ class Network(nn.Module):
         return {"populations": out, "plastic": plastic, "short_term": short_term, "overflow": overflow,
                 "t": jnp.zeros((), jnp.int32)}
 
+    def connections(self, variables: Variables) -> dict[str, Connections]:
+        """Every projection's synapses after a run, by projection key, as NEST's `GetConnections` reads them.
+
+            pre, post, weight, delay = network.connections(result.variables)["e->e:ampa"]
+
+        Weights come from where the projection keeps them: the state for a
+        plastic one (as learned so far), `params` for a trainable one, the
+        connectome otherwise. A dense projection stores a matrix and no edge
+        list, so its connections are the matrix's nonzero entries, with
+        repeated pairs summed.
+        """
+        sizes = {p.name: p.size for p in self.populations}
+        out = {}
+        for p in self.projections:
+            e = {name: np.asarray(a) for name, a in variables["connectome"]["edges"][p.key].items()}
+            if p.plasticity is not None:
+                weight = np.asarray(variables["state"]["network"]["plastic"][p.key]["weight"])
+            elif p.trainable:
+                weight = np.asarray(variables["params"][f"weight:{p.key}"])
+            else:
+                weight = np.asarray(variables["connectome"][f"weight:{p.key}"])
+            if "by_pre" in e:
+                pre = np.repeat(np.arange(sizes[p.pre], dtype=np.int32), e["count"][:-1])
+                post = e["by_pre"]
+            elif "pre" in e:
+                pre, post = e["pre"], e["post"]
+            else:
+                pre, post = np.nonzero(weight)
+                weight = weight[pre, post]
+            order = np.lexsort((post, pre))
+            delay = np.broadcast_to(e["delay"] * self.dt, pre.shape)
+            out[p.key] = Connections(pre[order].astype(np.int32), post[order].astype(np.int32),
+                                     weight[..., order], delay[order])
+        return out
+
     @nn.compact
     def __call__(self, drive: Drive | None = None, *, steps: int | None = None,
-                 monitors: Sequence[Monitor] = ()) -> tuple[jax.Array, ...]:
-        """Advance `steps` steps (or as many as `drive` has); returns each monitor's records over time."""
-        populations = self._check()
+                 monitors: Mapping[str, Monitor] | None = None) -> dict[str, jax.Array]:
+        """Advance `steps` steps (or as many as `drive` has); returns each monitor's records over time, under
+        the monitor's name."""
+        populations = {p.name: p for p in self.populations}
+        monitors = dict(monitors or {})
         built: dict[str, dict[str, np.ndarray]] = {}
 
         def build():
@@ -460,46 +723,50 @@ class Network(nn.Module):
                                                lambda k=p.key: jnp.asarray(build()[k]["weight"])).value
         state = self.variable("state", "network", lambda: self._rest(populations, weights, self._lags(edges)))
         if self.is_initializing():
-            return ()
+            return {}
         drive = dict(drive or {})
         timed = [int(np.shape(v)[0]) for v in jax.tree.leaves(drive) if np.ndim(v) > 0]
         if steps is None and not timed:
             raise ValueError("pass `steps` or a time-major `drive`")
         length: int = steps if steps is not None else timed[0]
-        key = self.make_rng("noise") if any(isinstance(s, PoissonInput) for s in self.inputs) else None
-        stepper = _Stepper(self, populations, edges, weights, tuple(monitors), key)
+        key = None
+        if any(isinstance(s, PoissonInput) for s in self.inputs):
+            if not self.has_rng("noise"):
+                raise ValueError("the network has Poisson inputs, which draw from the `noise` key: "
+                                 "apply it with rngs={'noise': key}")
+            key = self.make_rng("noise")
+        stepper = _Stepper(self, populations, edges, weights, monitors, key)
         held = {name: jnp.broadcast_to(jnp.asarray(value, self.dtype), (length, *np.shape(value)[1:]))
                 if np.ndim(value) > 0 else jnp.full((length,), value, self.dtype)
                 for name, value in drive.items()}
-        state.value, records = _scan(stepper, state.value, held, length, tuple(monitors))
+        state.value, records = _scan(stepper, state.value, held, length, monitors)
         return records
 
 
 def _scan(stepper: _Stepper, state: NetworkState, held: Mapping[str, jax.Array], steps: int,
-          monitors: tuple[Monitor, ...]) -> tuple[NetworkState, tuple[jax.Array, ...]]:
+          monitors: Mapping[str, Monitor]) -> tuple[NetworkState, dict[str, jax.Array]]:
     """Run `steps` steps; stack each monitor's records, or sum them for accumulating monitors."""
-    summed = [i for i, m in enumerate(monitors) if m.accumulate]
+    summed = [name for name, m in monitors.items() if m.accumulate]
     if not summed:
         return jax.lax.scan(stepper, state, held, length=steps)
     shapes = jax.eval_shape(stepper, state, jax.tree.map(lambda x: x[0], held))[1]
-    totals = tuple(jnp.zeros(shapes[i].shape, shapes[i].dtype) for i in summed)
+    zeros = {name: jnp.zeros(shapes[name].shape, shapes[name].dtype) for name in summed}
 
     def step(carry, drive_t):
         current, totals = carry
         current, records = stepper(current, drive_t)
-        totals = tuple(total + records[i] for total, i in zip(totals, summed, strict=True))
-        return (current, totals), tuple(r for i, r in enumerate(records) if i not in summed)
+        totals = {name: totals[name] + records[name] for name in summed}
+        return (current, totals), {name: r for name, r in records.items() if name not in totals}
 
-    (state, totals), stacked = jax.lax.scan(step, (state, totals), held, length=steps)
-    stacked_iter, total_iter = iter(stacked), iter(totals)
-    return state, tuple(next(total_iter) if i in summed else next(stacked_iter) for i in range(len(monitors)))
+    (state, totals), stacked = jax.lax.scan(step, (state, zeros), held, length=steps)
+    return state, {name: totals[name] if name in totals else stacked[name] for name in monitors}
 
 
 class _Stepper:
     """A network's step, closed over its structure and fixed variables, in the documented order."""
 
-    def __init__(self, network: Network, populations: Mapping[str, Population], edges, weights, monitors,
-                 key):
+    def __init__(self, network: Network, populations: Mapping[str, Population], edges, weights,
+                 monitors: Mapping[str, Monitor], key):
         self.network, self.populations, self.edges, self.weights = network, populations, edges, weights
         self.monitors, self.key, self.dt = monitors, key, network.dt
         self.into: dict[str, list[Projection]] = {name: [] for name in populations}
@@ -612,7 +879,7 @@ class _Stepper:
             plastic[p.key] = {"traces": traces, "weight": weight}
 
     def __call__(self, state: NetworkState,
-                 drive_t: Mapping[str, jax.Array]) -> tuple[NetworkState, tuple[jax.Array, ...]]:
+                 drive_t: Mapping[str, jax.Array]) -> tuple[NetworkState, dict[str, jax.Array]]:
         t, pops = state["t"], state["populations"]
         plastic, short_term = dict(state["plastic"]), dict(state["short_term"])
         self.overflowed: dict[str, jax.Array] = {}
@@ -658,8 +925,8 @@ class _Stepper:
 
         # 5-6. Plasticity, then monitors.
         self.plasticity(t, plastic, fired, buffers)
-        records = tuple(m.record(fired, {n: v["point_neuron"] for n, v in new_pops.items()})
-                        for m in self.monitors)
+        states = {n: v["point_neuron"] for n, v in new_pops.items()}
+        records = {name: m.record(fired, states, self.dt) for name, m in self.monitors.items()}
         overflow = {k: v + self.overflowed.get(k, jnp.zeros((), bool)).astype(jnp.int32)
                     for k, v in state["overflow"].items()}
         return {"populations": new_pops, "plastic": plastic, "short_term": short_term, "overflow": overflow,

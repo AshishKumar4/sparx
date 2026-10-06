@@ -38,12 +38,13 @@ def test_connectome_indexes_ids_and_silences_neurons():
 
 def test_spike_counts_and_times_agree_with_full_spike_records():
     network = Network((Population("a", 300, LIF(), {"ex": Receptor(Exponential(5.0))}),),
-                      (Projection("a", "a", FixedProbability(0.05), weight=30.0, delay=1.0),),
-                      inputs=(PoissonInput("a", rate=1000.0, weight=60.0, count=5),), dt=DT)
+                      (Projection("a", "a", FixedProbability(0.05), weight=30.0, delay=1.0, receptor="ex"),),
+                      inputs=(PoissonInput("a", rate=1000.0, weight=60.0, receptor="ex", count=5),), dt=DT)
     result = simulate(network, network.init(jax.random.key(0)), duration=60.0, key=jax.random.key(1),
-                      monitors=(SpikeRaster("a"), SpikeCounts("a"), SpikeTimes("a", capacity=300)),
+                      monitors={"spikes": SpikeRaster("a"), "counts": SpikeCounts("a"),
+                                "times": SpikeTimes("a", capacity=300)},
                       chunk=25.0)
-    spikes, counts, times = result.records
+    spikes, counts, times = (result.records[name] for name in ("spikes", "counts", "times"))
     np.testing.assert_array_equal(counts, spikes.sum(0))
     rebuilt = np.zeros_like(spikes)
     steps, slots = np.nonzero(times >= 0)
@@ -98,7 +99,7 @@ def test_shiu2024_reproduces_their_published_sugar_activation():
     variables = network.init(jax.random.key(0))
     trials = 3
     counts = sum(simulate(network, variables, duration=1000.0, key=jax.random.key(trial),
-                          monitors=(SpikeCounts("brain"),), chunk=1000.0).records[0]
+                          monitors={"brain": SpikeCounts("brain")}, chunk=1000.0).records["brain"]
                  for trial in range(trials))
     rates = counts / trials
     ids, theirs, spread = (published[f"sugarR_100Hz/{k}"] for k in ("ids", "rate", "std"))
@@ -166,6 +167,6 @@ def test_shiu2024_on_the_male_cns_activates_mn9_from_sugar_neurons_at_the_matche
     assert w_syn == pytest.approx(0.163, abs=0.001)
     network = shiu2024(brain, stimuli=[(brain.index(sugar), 100.0)], w_syn=w_syn)
     rates = simulate(network, network.init(jax.random.key(0)), duration=1000.0, key=jax.random.key(0),
-                     monitors=(SpikeCounts("brain"),), chunk=1000.0).records[0]
+                     monitors={"brain": SpikeCounts("brain")}, chunk=1000.0).records["brain"]
     assert rates[brain.index([MALECNS_MN9])[0]] > 40.0
     assert 200 < np.count_nonzero(rates) < 2000

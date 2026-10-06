@@ -243,32 +243,36 @@ Training on several devices is dew's: `Trainer(..., mesh=MeshSpec(fsdp=2))` plac
 ```python
 import jax
 from sparx.dynamics import LIF, Exponential, Receptor
-from sparx.graph import FixedProbability, Network, Population, PopulationRate, Projection, SpikeRaster, simulate
+from sparx.graph import (FixedProbability, Network, Population, PopulationRate, Projection, SpikeRaster,
+                         StateMonitor, simulate)
 from sparx.spiketrains import cv_isi, rates_hz
 
-neuron = LIF(tau_m=20.0, c_m=200.0, e_l=-60.0, v_th=-50.0, v_reset=-60.0, t_ref=5.0,
-             reversal={"ex": 0.0, "in": -80.0})
-receptors = {"ex": Receptor(Exponential(5.0), "conductance"), "in": Receptor(Exponential(10.0), "conductance")}
-
-def kick(rng, state):  # start from random voltages and conductances
-    v = rng.uniform(-60.0, -50.0, state.neuron.v.shape).astype("float32")
-    g = {"ex": rng.normal(40.0, 15.0, v.shape), "in": rng.normal(200.0, 120.0, v.shape)}
-    return state._replace(neuron=state.neuron._replace(v=v),
-                          synapses={k: x.astype("float32") for k, x in g.items()})
+neuron = LIF(tau_m=20.0, c_m=200.0, e_l=-60.0, v_th=-50.0, v_reset=-60.0, t_ref=5.0)
+receptors = {"ampa": Receptor(Exponential(5.0), "conductance"),  # LIF reverses ampa at 0 mV
+             "gaba_a": Receptor(Exponential(10.0), "conductance")}  # and gaba_a at -80 mV
+initial = {"v": lambda rng, n: rng.uniform(-60.0, -50.0, n),  # random voltages (mV)
+           "ampa": lambda rng, n: rng.normal(40.0, 15.0, n),  # and conductances (nS)
+           "gaba_a": lambda rng, n: rng.normal(200.0, 120.0, n)}
 
 network = Network(
-    populations=(Population("e", 3200, neuron, receptors, initial=kick),
-                 Population("i", 800, neuron, receptors, initial=kick)),
+    populations=(Population("e", 3200, neuron, receptors, initial=initial),
+                 Population("i", 800, neuron, receptors, initial=initial)),
     projections=tuple(Projection(pre, post, FixedProbability(0.02), weight=6.0 if pre == "e" else 67.0,
-                                 delay=0.0, receptor="ex" if pre == "e" else "in")
+                                 delay=0.0, receptor="ampa" if pre == "e" else "gaba_a")
                       for pre in ("e", "i") for post in ("e", "i")),
     dt=0.1,
 )
-result = simulate(network, network.init(jax.random.key(0)), duration=300.0,
-                  monitors=(SpikeRaster("e"), PopulationRate("e")))
-spikes = result.records[0][1000:]  # after the first 100 ms
+monitors = {"spikes": SpikeRaster("e"), "rate": PopulationRate("e"),
+            "v": StateMonitor("e", neurons=(0, 1, 2))}  # three voltage traces
+result = simulate(network, network.init(jax.random.key(0)), duration=300.0, monitors=monitors)
+spikes = result.records["spikes"][1000:]  # [steps, 3200] after the first 100 ms
 print(rates_hz(spikes, 0.1).mean(), cv_isi(spikes).mean())  # about 17 Hz, CV about 0.8
+print(result.records["rate"][1000:].mean(), result.records["v"].shape)  # the same rate in Hz; (3000, 3)
 ```
+
+The network is checked when it is built: a projection or input onto a receptor its population lacks, a conductance receptor without a reversal potential in the neuron model, or a kinetic synapse onto a dimensionless model (`ALIFCell`, which takes voltage jumps through `Delta` receptors) raises a `ValueError` that names the population and receptor. Every projection and input names its receptor, which sets the weight's unit. Delays, `duration` and `chunk` must be whole numbers of steps, and a time between steps raises a `ValueError` too.
+
+Records come back under the names the monitors were given, and every rate is in Hz, as `PoissonInput(rate=...)` and `rates_hz` are. After a run, `network.connections(result.variables)` reads each projection's synapses as NumPy arrays, the way NEST's `GetConnections` does: `pre, post, weight, delay = network.connections(result.variables)["e->e:ampa"]`, with STDP's weights as learned.
 
 A step runs in NEST's order: synapses deliver what is due, membranes integrate (exactly where the equations are linear) and spike, spikes enter per-population ring buffers, kinetic synapses receive what arrives at the end of the step, plasticity updates, monitors record. `simulate` compiles one chunk of steps and carries the state between chunks, so a long run needs memory for one chunk of records, and a run continued from `result.variables` is the run it would have been unbroken. With `checkpoints=dew.Checkpoints(directory)` it writes the state after every chunk, and a run started again on the same directory continues from the last one. `sparx.graph` builds Brunel's (2000) network and the CUBA and COBA benchmarks (`brunel`, `cuba`, `coba`); `Projection`s take per-edge weights and delays, pair and triplet STDP (any `sparx.dynamics.Plasticity` rule), and short-term plasticity.
 
