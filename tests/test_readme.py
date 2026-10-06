@@ -84,6 +84,16 @@ def test_the_circuit_example_sustains_irregular_activity():
     assert records["v"].shape == (3000, 3)
 
 
+def test_the_graded_signalling_example_releases_fires_and_modulates():
+    scope = {}
+    exec(_block("import jax\nimport numpy as np\nfrom sparx.dynamics import LIF, Exponential, Graded"), scope)
+    records = scope["result"].records
+    release, spikes, dopamine = records["release"], records["spikes"], records["dopamine"]
+    assert release.shape == (3000, 20) and 0 < release.min() < release.max() < 1
+    assert 10 < spikes.mean() * 1e4 < 60  # the relay fires at 30 Hz, in Hz at 0.1 ms steps
+    assert dopamine.shape == (3000,) and dopamine[-1] > 1
+
+
 def test_the_conversion_example_builds_a_spiking_stack():
     scope = {}
     exec(_block("from functools import partial"), scope)

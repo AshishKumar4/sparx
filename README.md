@@ -287,6 +287,41 @@ A population holds any neuron model of `sparx.dynamics`, and its synapses reach 
 
 The builders are registered in `sparx.registry.networks`, so a network is a record that rebuilds in another process: `sparx.graph.from_record({"name": "brunel", "fields": {"order": 2500, "g": 5.0}})`, or for a model on a connectome, `{"name": "shiu2024", "fields": {"connectome": {"name": "flywire", "fields": {"completeness": ..., "connectivity": ...}}, "stimuli": ...}}`, which names the reader of its tables (`sparx.registry.connectomes`).
 
+### Graded signalling
+
+Many neurons never spike. Much of the fly's visual system releases transmitter continuously as a function of voltage, and FLYNN (Wang and Chen 2026) trains leaky tanh rate units on the whole fly connectome. A model's output is therefore `Output(value, offset)`, and a model that is `graded` sends a real value every step instead of a spike. `GradedPotential` is a passive membrane in mV whose output is a sigmoidal release of its voltage (Prinz et al. 2004), and a `Graded` synapse follows the weighted release with its own time constant. `RateCell` (`sparx.nn.Rate` as a layer) is FLYNN's unit, `h <- alpha h + (1 - alpha) tanh(W h + x + b)`, also with ReLU or a sigmoid. A graded population projects through edge or dense delivery; event delivery stays the path for spikes and refuses it.
+
+Three more mechanisms sit beside the projections. `StochasticRelease(p, quantal)` makes each synapse release with probability `p` at each presynaptic spike, drawn per edge from the `noise` key, and scaled by short-term depression when the projection has it. `GapJunction` couples two populations' membranes with `I = g (v_partner - v)` in both directions, solved to second order in `dt`. A `Modulator` turns a population's spikes into a volume-transmitted concentration with a time constant, which every `Plasticity` rule reads each step as a third factor:
+
+```python
+import jax
+import numpy as np
+from sparx.dynamics import LIF, Exponential, Graded, GradedPotential, Receptor, StochasticRelease
+from sparx.graph import (CurrentInput, FixedProbability, GapJunction, Modulator, ModulatorTrace, Network,
+                         OutputTrace, Population, Projection, SpikeRaster, simulate)
+
+receptors = {"ampa": Receptor(Graded(tau=5.0), "conductance"),  # follows the graded release it receives
+             "gaba_a": Receptor(Exponential(10.0), "conductance")}
+network = Network(
+    populations=(Population("graded", 20, GradedPotential()),  # never spikes, sends its release (0 to 1)
+                 Population("relay", 50, LIF(), receptors)),
+    projections=(Projection("graded", "relay", FixedProbability(0.3), weight=3.0, delay=0.0, receptor="ampa"),
+                 Projection("relay", "relay", FixedProbability(0.2), weight=10.0, delay=1.0, receptor="gaba_a",
+                            release=StochasticRelease(p=0.4))),  # each synapse releases with p = 0.4
+    inputs=(CurrentInput("graded", "light"),),
+    junctions=(GapJunction("graded", "graded", FixedProbability(0.2), weight=2.0),),  # nS, both ways
+    modulators=(Modulator("dopamine", "relay", tau=200.0, release=0.01),),  # each relay spike adds 0.01
+    dt=0.1,
+)
+light = np.random.default_rng(0).uniform(100.0, 400.0, (3000, 20))  # pA, per step and graded neuron
+result = simulate(network, network.init(jax.random.key(0)), duration=300.0, key=jax.random.key(1),
+                  drive={"light": light}, monitors={"release": OutputTrace("graded"),
+                                                    "spikes": SpikeRaster("relay"),
+                                                    "dopamine": ModulatorTrace("dopamine")})
+```
+
+`OutputTrace` records what a population sends, graded or not; the spike monitors refuse a graded population. [docs/fidelity.md](docs/fidelity.md#signalling-beyond-spikes) lists what each of these is checked against.
+
 ## Learning beyond backpropagation through time
 
 `sparx.learn` holds the rules design.md section 7 names, each checked against what defines it (`tests/test_learn.py`):
