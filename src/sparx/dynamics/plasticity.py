@@ -17,10 +17,16 @@ operations in the same order, so the weights it transmits are the same.
 Delays are dendritic, as in NEST's STDP synapses: a presynaptic spike is at
 the synapse when it is sent, and a postsynaptic spike reaches it `delay`
 later. The caller passes postsynaptic spikes as they arrive.
+
+A rule also reads the network's neuromodulators each step, by name
+(`sparx.graph.Modulator`): volume-transmitted concentrations such as
+dopamine's, the third factor of a three-factor rule. The STDP rules here
+are two-factor and ignore them.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import NamedTuple, Protocol
 
 import jax
@@ -44,11 +50,14 @@ class Plasticity[Traces](Protocol):
         ...
 
     def step(self, traces: Traces, weights: jax.Array, pre_spikes: jax.Array, post_arrivals: jax.Array,
-             pre: jax.Array, post: jax.Array, dt: float) -> tuple[Traces, jax.Array]:
+             pre: jax.Array, post: jax.Array, dt: float, *,
+             modulators: Mapping[str, jax.Array]) -> tuple[Traces, jax.Array]:
         """One step: traces decay over `dt`, then this step's spikes update weights and traces.
 
         `pre_spikes[N_pre]` and `post_arrivals[N_post]` are 0 or 1;
-        `weights[E]` belong to the edges `pre[E] -> post[E]`.
+        `weights[E]` belong to the edges `pre[E] -> post[E]`. `modulators`
+        holds each neuromodulator's concentration after this step's release,
+        by name, a scalar each (with a leading trial axis under `vmap`).
         """
         ...
 
@@ -136,7 +145,8 @@ class PairSTDP:
         return STDPTraces(jnp.zeros(pre, dtype), jnp.zeros(post, dtype))
 
     def step(self, traces: STDPTraces, weights: jax.Array, pre_spikes: jax.Array, post_arrivals: jax.Array,
-             pre: jax.Array, post: jax.Array, dt: float) -> tuple[STDPTraces, jax.Array]:
+             pre: jax.Array, post: jax.Array, dt: float, *,
+             modulators: Mapping[str, jax.Array]) -> tuple[STDPTraces, jax.Array]:
         """As `Plasticity.step`."""
         k_pre = traces.pre * jnp.exp(-dt / self.tau_plus)
         k_post = traces.post * jnp.exp(-dt / self.tau_minus)
@@ -185,7 +195,8 @@ class TripletSTDP:
                              jnp.zeros(post, dtype))
 
     def step(self, traces: TripletTraces, weights: jax.Array, pre_spikes: jax.Array, post_arrivals: jax.Array,
-             pre: jax.Array, post: jax.Array, dt: float) -> tuple[TripletTraces, jax.Array]:
+             pre: jax.Array, post: jax.Array, dt: float, *,
+             modulators: Mapping[str, jax.Array]) -> tuple[TripletTraces, jax.Array]:
         """As `PairSTDP.step`."""
         k_pre = traces.pre * jnp.exp(-dt / self.tau_plus)
         r = traces.pre_triplet * jnp.exp(-dt / self.tau_x)

@@ -51,7 +51,7 @@ def run_stdp(rule, case):
 
         def step(carry, spikes):
             traces, weights = carry
-            traces, weights = rule.step(traces, weights, *spikes, index, index, DT)
+            traces, weights = rule.step(traces, weights, *spikes, index, index, DT, modulators={})
             return (traces, weights), weights
 
         weights0 = jnp.full(n, float(case["initial"]), jnp.float64)

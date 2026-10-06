@@ -21,7 +21,8 @@ variables are split by role (design.md section 5.1):
 | `connectome` | each projection's edges, delays, and its weights unless trainable |
 | `params` | the weights of trainable projections |
 | `state` | per population, neuron and synapse states and a ring buffer of recent outputs; per plastic |
-|         | projection, traces and weights; per depressing projection, release; the step count |
+|         | projection, traces and weights; per depressing projection, release; each modulator's |
+|         | concentration; the step count |
 
 `Network.connections(variables)` reads every projection's edges, weights
 and delays back out of them, whichever collection holds the weights.
@@ -39,7 +40,8 @@ graded population delivers the weighted values through dense or edge
 delivery onto a `Graded` synapse, or onto a `Delta` receptor of a
 dimensionless model as its jump; event delivery, which skips the neurons
 that did not fire, is for spikes only. Gap junctions (`GapJunction`) couple
-the membranes of two populations.
+the membranes of two populations, and modulators (`Modulator`) turn a
+population's spikes into a concentration that plasticity reads.
 
 One step covers `(t, t + dt]` and runs in NEST's order, which the
 single-neuron tests pin against NEST and Brian2 (`sparx.dynamics.core`):
@@ -49,10 +51,11 @@ single-neuron tests pin against NEST and Brian2 (`sparx.dynamics.core`):
 2. Each population advances its membranes on its synapses' output and its
    gap junctions (`GapJunction`), and emits its output (spikes, or graded
    values).
-3. The outputs enter each population's ring buffer.
+3. The outputs enter each population's ring buffer, and each modulator
+   takes up the spikes of its source.
 4. Every other synapse receives what is due at the end of the step, which
    shapes the membrane from the next step on.
-5. Plasticity updates traces and weights.
+5. Plasticity updates traces and weights, reading the modulators.
 6. Monitors record.
 
 A spike sent in step `m` over a delay of `D` steps (`delay / dt`, which
@@ -66,6 +69,7 @@ that step's threshold test.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, NamedTuple, Protocol, TypedDict, runtime_checkable
@@ -81,10 +85,11 @@ from sparx.dynamics.plasticity import Plasticity, TsodyksMarkram, TsodyksMarkram
 from sparx.dynamics.synapses import Graded, PointNeuron, PointNeuronState, Receptor, StochasticRelease
 from sparx.graph.connectivity import Connectivity, EdgeList
 
-__all__ = ["ArrivalInput", "Connections", "CurrentInput", "Drive", "GapJunction", "Monitor", "Network",
-           "NetworkState", "OutputTrace", "PerEdge", "PerNeuron", "PlasticState", "PoissonInput",
-           "Population", "PopulationRate", "PopulationState", "Projection", "ReleaseState", "Reversing",
-           "SpikeCounts", "SpikeRaster", "SpikeTimes", "StateMonitor", "whole_steps"]
+__all__ = ["ArrivalInput", "Connections", "CurrentInput", "Drive", "GapJunction", "Modulator",
+           "ModulatorTrace", "Monitor", "Network", "NetworkState", "OutputTrace", "PerEdge", "PerNeuron",
+           "PlasticState", "PoissonInput", "Population", "PopulationRate", "PopulationState", "Projection",
+           "ReleaseState", "Reversing", "SpikeCounts", "SpikeRaster", "SpikeTimes", "StateMonitor",
+           "whole_steps"]
 
 DENSE_LIMIT = 2 ** 25
 EVENT_BLOCK = 4096
@@ -292,9 +297,32 @@ class GapJunction:
         return self.name or f"{self.a}<->{self.b}"
 
 
+@dataclass(frozen=True)
+class Modulator:
+    """A neuromodulator that the spikes of `source` release and volume transmission spreads, one
+    concentration for the whole network.
+
+        dc/dt = -c / tau + release * sum_k delta(t - t_k)
+
+    over the spikes `t_k` of `source`'s neurons, or of the neurons
+    `neurons` (indices) when given, such as the dopaminergic neurons of a
+    connectome. Each spike adds `release` to the concentration, which decays
+    with `tau` (ms) between spikes, exactly on the step grid. The
+    concentration is in the network's state (`NetworkState["modulators"]`,
+    by `name`), and each `Plasticity` rule reads it every step as a third
+    factor.
+    """
+
+    name: str
+    source: str
+    tau: float
+    release: float = 1.0
+    neurons: tuple[int, ...] | None = None
+
+
 class Monitor:
-    """Something recorded every step: `record(outputs, states, dt)` with outputs and states keyed by
-    population, and `dt` the step in ms.
+    """Something recorded every step: `record(outputs, states, dt, modulators)` with outputs and states
+    keyed by population, `dt` the step in ms, and the modulators' concentrations by name.
 
     A record is one array per step, stacked over the run into `[T, ...]`.
     A monitor with `accumulate = True` is summed over the steps of a run
@@ -305,8 +333,8 @@ class Monitor:
 
     accumulate: bool = False
 
-    def record(self, outputs: Mapping[str, jax.Array], states: Mapping[str, PointNeuronState],
-               dt: float) -> jax.Array:
+    def record(self, outputs: Mapping[str, jax.Array], states: Mapping[str, PointNeuronState], dt: float,
+               modulators: Mapping[str, jax.Array]) -> jax.Array:
         raise NotImplementedError
 
 
@@ -316,7 +344,7 @@ class SpikeRaster(Monitor):
 
     population: str
 
-    def record(self, outputs, states, dt):
+    def record(self, outputs, states, dt, modulators):
         return outputs[self.population] > 0
 
 
@@ -327,7 +355,7 @@ class SpikeCounts(Monitor):
     population: str
     accumulate = True
 
-    def record(self, outputs, states, dt):
+    def record(self, outputs, states, dt, modulators):
         return (outputs[self.population] > 0).astype(jnp.int32)
 
 
@@ -339,7 +367,7 @@ class SpikeTimes(Monitor):
     population: str
     capacity: int = 64
 
-    def record(self, outputs, states, dt):
+    def record(self, outputs, states, dt, modulators):
         fired = outputs[self.population] > 0
         return jnp.nonzero(fired, size=self.capacity, fill_value=-1)[0].astype(jnp.int32)
 
@@ -355,7 +383,7 @@ class PopulationRate(Monitor):
 
     population: str
 
-    def record(self, outputs, states, dt):
+    def record(self, outputs, states, dt, modulators):
         return jnp.mean(outputs[self.population]) * (1000.0 / dt)
 
 
@@ -367,9 +395,19 @@ class OutputTrace(Monitor):
     population: str
     neurons: tuple[int, ...] | None = None
 
-    def record(self, outputs, states, dt):
+    def record(self, outputs, states, dt, modulators):
         values = outputs[self.population]
         return values if self.neurons is None else values[np.asarray(self.neurons)]
+
+
+@dataclass(frozen=True)
+class ModulatorTrace(Monitor):
+    """The concentration of the modulator named `modulator` after each step."""
+
+    modulator: str
+
+    def record(self, outputs, states, dt, modulators):
+        return modulators[self.modulator]
 
 
 _SPIKE_MONITORS = (SpikeRaster, SpikeCounts, SpikeTimes, PopulationRate)
@@ -432,7 +470,7 @@ class StateMonitor(Monitor):
     read: Callable[[PointNeuronState], jax.Array] = _membrane
     neurons: tuple[int, ...] | None = None
 
-    def record(self, outputs, states, dt):
+    def record(self, outputs, states, dt, modulators):
         values = self.read(states[self.population])
         return values if self.neurons is None else values[np.asarray(self.neurons)]
 
@@ -548,6 +586,8 @@ class NetworkState(TypedDict):
     """By projection key, the projections with short-term release."""
     overflow: dict[str, jax.Array]
     """Per event projection, how many steps had more spiking neurons than its capacity."""
+    modulators: dict[str, jax.Array]
+    """Each modulator's concentration, by name."""
     t: jax.Array
     """The steps run so far."""
 
@@ -688,12 +728,23 @@ def _check_sources(network: Network, populations: Mapping[str, Population]) -> N
 
 
 def _check_couplings(network: Network, populations: Mapping[str, Population]) -> None:
-    """Refuse gap junctions that name what the network lacks or whose populations cannot take them."""
+    """Refuse gap junctions and modulators that name what the network lacks or cannot take."""
     for junction in network.junctions:
         for side in (junction.a, junction.b):
             if side not in populations:
                 raise ValueError(f"gap junction {junction.key} names unknown population {side!r}")
             _check_coupled(populations[side], junction.key, network.dt)
+    names = [m.name for m in network.modulators]
+    if len(set(names)) != len(names):
+        raise ValueError(f"modulator names must be unique, got {names}")
+    for m in network.modulators:
+        if m.source not in populations:
+            raise ValueError(f"modulator {m.name!r} names unknown population {m.source!r}")
+        if populations[m.source].graded:
+            raise ValueError(f"modulator {m.name!r} is released by spikes, and population {m.source!r} is "
+                             f"graded")
+        if m.tau <= 0:
+            raise ValueError(f"modulator {m.name!r} needs a positive time constant, not {m.tau}")
 
 
 def _check_population(population: Population, current: bool, dt: float) -> None:
@@ -717,6 +768,8 @@ class Network(nn.Module):
     """The dtype of the state: membranes, synapses, traces and spike buffers."""
     junctions: Sequence[GapJunction] = ()
     """Gap junctions, electrical coupling between the membranes of populations."""
+    modulators: Sequence[Modulator] = ()
+    """Neuromodulators released by populations' spikes, which plasticity reads."""
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -818,8 +871,9 @@ class Network(nn.Module):
                 short_term[p.key] = {"release": p.short_term.init_state((pre,), dtype),
                                      "buffer": jnp.zeros((lags[p.pre], pre), dtype)}
         overflow = {p.key: jnp.zeros((), jnp.int32) for p in self.projections if p.format == "events"}
+        modulators = {m.name: jnp.zeros((), dtype) for m in self.modulators}
         return {"populations": out, "plastic": plastic, "short_term": short_term, "overflow": overflow,
-                "t": jnp.zeros((), jnp.int32)}
+                "modulators": modulators, "t": jnp.zeros((), jnp.int32)}
 
     def _noise(self) -> jax.Array | None:
         """The key Poisson inputs and stochastic release draw from, None when nothing draws."""
@@ -1084,9 +1138,20 @@ class _Stepper:
                 slope[here] = slope.get(here, 0.0) + jax.ops.segment_sum(rise, mine, size)
         return {name: Gap(conductance[name], Term(drive[name], slope[name], jnp.inf)) for name in conductance}
 
+    def modulate(self, before: Mapping[str, jax.Array],
+                 fired: Mapping[str, jax.Array]) -> dict[str, jax.Array]:
+        """Each modulator's concentration after the step: decayed over it, then raised by its spikes."""
+        out = {}
+        for m in self.network.modulators:
+            spikes = fired[m.source] if m.neurons is None else fired[m.source][np.asarray(m.neurons)]
+            released = m.release * jnp.sum(spikes, dtype=before[m.name].dtype)
+            out[m.name] = before[m.name] * math.exp(-self.dt / m.tau) + released
+        return out
+
     def plasticity(self, t: jax.Array, plastic: dict[str, PlasticState], fired: Mapping[str, jax.Array],
-                   buffers: Mapping[str, jax.Array]) -> None:
-        """STDP: presynaptic spikes as sent, postsynaptic ones after the projection's (dendritic) delay."""
+                   buffers: Mapping[str, jax.Array], modulators: Mapping[str, jax.Array]) -> None:
+        """STDP: presynaptic spikes as sent, postsynaptic ones after the projection's (dendritic) delay;
+        the modulators as they are after this step's release."""
         for p in self.network.projections:
             if p.plasticity is None:
                 continue
@@ -1095,7 +1160,8 @@ class _Stepper:
             ring = buffers[p.post]
             arrived = ring[(t - delay) % ring.shape[0]]
             traces, weight = p.plasticity.step(plastic[p.key]["traces"], plastic[p.key]["weight"],
-                                               fired[p.pre], arrived, e["pre"], e["post"], self.dt)
+                                               fired[p.pre], arrived, e["pre"], e["post"], self.dt,
+                                               modulators=modulators)
             plastic[p.key] = {"traces": traces, "weight": weight}
 
     def __call__(self, state: NetworkState,
@@ -1137,7 +1203,9 @@ class _Stepper:
             moved[name], out = advance(name, gaps.get(name))
             outputs[name] = out.value
 
-        # 3. Outputs into the ring buffers; short-term release scales spikes as they are sent.
+        # 3. Outputs into the ring buffers; short-term release scales spikes as they are sent; modulators take
+        # up the spikes.
+        modulators = self.modulate(state["modulators"], outputs)
         buffers = {}
         for name in self.populations:
             ring = pops[name]["buffer"]
@@ -1158,10 +1226,10 @@ class _Stepper:
             new_pops[name] = {"point_neuron": point_neuron, "buffer": buffers[name]}
 
         # 5-6. Plasticity, then monitors.
-        self.plasticity(t, plastic, outputs, buffers)
+        self.plasticity(t, plastic, outputs, buffers, modulators)
         states = {n: v["point_neuron"] for n, v in new_pops.items()}
-        records = {name: m.record(outputs, states, self.dt) for name, m in self.monitors.items()}
+        records = {name: m.record(outputs, states, self.dt, modulators) for name, m in self.monitors.items()}
         overflow = {k: v + self.overflowed.get(k, jnp.zeros((), bool)).astype(jnp.int32)
                     for k, v in state["overflow"].items()}
         return {"populations": new_pops, "plastic": plastic, "short_term": short_term, "overflow": overflow,
-                "t": t + 1}, records
+                "modulators": modulators, "t": t + 1}, records

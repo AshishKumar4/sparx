@@ -1,4 +1,5 @@
-"""Signalling beyond spikes in networks: graded transmission, stochastic release and gap junctions."""
+"""Signalling beyond spikes in networks: graded transmission, stochastic release, gap junctions and
+neuromodulation."""
 
 from pathlib import Path
 
@@ -7,6 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 import reference
+from flax import struct
 
 from sparx.dynamics import (
     LIF,
@@ -32,6 +34,8 @@ from sparx.graph import (
     CurrentInput,
     FromEdges,
     GapJunction,
+    Modulator,
+    ModulatorTrace,
     Network,
     OneToOne,
     OutputTrace,
@@ -278,3 +282,52 @@ def test_a_gap_junction_refuses_a_model_without_a_physical_membrane():
         Network((Population("a", 2, RateCell(0.9)),), junctions=(GapJunction("a", "a", AllToAll()),))
 
 
+# Neuromodulation.
+
+
+@struct.dataclass
+class ReadsModulator:
+    """A rule that sets every weight to a modulator's concentration: the third factor, read alone."""
+
+    name: str = struct.field(pytree_node=False, default="dopamine")
+
+    def init_state(self, pre: int, post: int, dtype: jnp.dtype = jnp.float32) -> tuple[()]:
+        return ()
+
+    def step(self, traces, weights, pre_spikes, post_arrivals, pre, post, dt, *, modulators):
+        return traces, jnp.full_like(weights, modulators[self.name])
+
+
+def test_a_modulator_follows_its_equation_and_plasticity_reads_it():
+    # dc/dt = -c / tau + release * sum_k delta(t - t_k) over the spikes of neurons 1 and 3: after a spike
+    # at the end of step m, c(t) = sum release exp(-(t - t_m) / tau).
+    steps, dt, tau, release = 300, 0.5, 20.0, 0.25
+    spikes = (np.random.default_rng(2).random((steps, 5)) < 0.05).astype(np.float32)
+    modulator = Modulator("dopamine", "s", tau=tau, release=release, neurons=(1, 3))
+    network = Network((forced(5), Population("t", 2, LIFCell(0.9), {"in": Receptor(Delta())})),
+                      (Projection("s", "t", AllToAll(), weight=0.0, delay=dt, receptor="in",
+                                  plasticity=ReadsModulator()),),
+                      (ArrivalInput("s", "x", "x"),), dt=dt, modulators=(modulator,))
+    variables = network.init(jax.random.key(0))
+    records, updated = network.apply(variables, {"x": spikes},
+                                     monitors={"c": ModulatorTrace("dopamine"), "s": SpikeRaster("s")},
+                                     mutable=["state"])
+    np.testing.assert_array_equal(records["s"], spikes > 0)
+    t = (np.arange(steps) + 1) * dt
+    since = t[:, None] - t[None, :]
+    counted = spikes[:, [1, 3]].sum(axis=1)
+    kernel = np.where(since >= 0, np.exp(-np.maximum(since, 0) / tau), 0.0)
+    expected = (kernel * counted * release).sum(axis=1)
+    np.testing.assert_allclose(records["c"], expected, rtol=1e-5, atol=1e-6)  # observed 2.3e-7
+    state = updated["state"]["network"]
+    assert float(state["modulators"]["dopamine"]) == float(records["c"][-1])
+    weights = network.connections({**variables, **updated})["s->t:in"].weight
+    np.testing.assert_array_equal(weights, np.full(10, records["c"][-1]))
+    assert counted.sum() > 20 and spikes[:, [0, 2, 4]].sum() > 0  # only the named neurons release
+
+
+def test_a_modulator_refuses_a_graded_source_and_an_unknown_one():
+    with pytest.raises(ValueError, match="graded"):
+        Network((Population("g", 2, GradedPotential()),), modulators=(Modulator("da", "g", tau=10.0),))
+    with pytest.raises(ValueError, match="unknown population"):
+        Network((Population("g", 2, GradedPotential()),), modulators=(Modulator("da", "x", tau=10.0),))
