@@ -71,6 +71,7 @@ from sparx.dynamics.synapses import (
     PointNeuron,
     PointNeuronState,
     Receptor,
+    StochasticRelease,
     SynapseModel,
 )
 
@@ -118,6 +119,7 @@ __all__ = [
     "Reset",
     "STDPTraces",
     "Serial",
+    "StochasticRelease",
     "SynapseModel",
     "SynapticInput",
     "Term",

@@ -76,7 +76,7 @@ from dew.objectives.base import Variables
 
 from sparx.dynamics.core import NeuronModel
 from sparx.dynamics.plasticity import Plasticity, TsodyksMarkram, TsodyksMarkramState
-from sparx.dynamics.synapses import Graded, PointNeuron, PointNeuronState, Receptor
+from sparx.dynamics.synapses import Graded, PointNeuron, PointNeuronState, Receptor, StochasticRelease
 from sparx.graph.connectivity import Connectivity, EdgeList
 
 __all__ = ["ArrivalInput", "Connections", "CurrentInput", "Drive", "Monitor", "Network", "NetworkState",
@@ -179,10 +179,12 @@ class Projection:
     number of steps (`whole_steps`); either may be per edge. `plasticity`
     (a `Plasticity` rule, pair or triplet STDP) makes the weights state that
     evolves with the spikes; `short_term` scales each spike by its
-    presynaptic neuron's release. `trainable` puts fixed weights in
-    `params` for gradient training. A projection from a graded population
-    transmits `weight` times the presynaptic value every step, and takes
-    none of the spike-driven options.
+    presynaptic neuron's release; `release` makes each edge transmit a spike
+    only with a probability, drawn from the network's `noise` key.
+    `trainable` puts fixed weights in `params` for gradient training. A
+    projection from a graded population transmits `weight` times the
+    presynaptic value every step, and takes none of the spike-driven
+    options.
     """
 
     pre: str
@@ -193,6 +195,7 @@ class Projection:
     receptor: str = field(kw_only=True)
     plasticity: Plasticity | None = None
     short_term: TsodyksMarkram | None = None
+    release: StochasticRelease | None = None
     trainable: bool = False
     name: str | None = None
     format: Literal["auto", "edges", "dense", "events"] = "auto"
@@ -202,7 +205,8 @@ class Projection:
     `DENSE_DENSITY`, where a matrix product costs less than the gather on CPUs and accelerators.
     `"events"` visits only the edges of neurons that spiked, for large graphs with sparse activity
     (connectomes): its cost per step is the spiking neurons' out-degree, not the edge count. A graded
-    population has no silent neurons to skip, so its projections are edges or dense."""
+    population has no silent neurons to skip, so its projections are edges or dense; one with stochastic
+    release draws per edge, so it is edges or events."""
     capacity: int = 4096
     """For `format="events"`: the most presynaptic neurons spiking in one step that a step delivers. A step
     over capacity is counted, and `simulate` raises. Their edges have no limit."""
@@ -442,9 +446,12 @@ def _dense(p: Projection, delays: np.ndarray, edges: int, pre: int, post: int) -
     if p.format != "auto":
         if p.format == "dense" and (np.ndim(delays) or p.plasticity is not None or p.trainable):
             raise ValueError(f"{p.key}: a dense projection needs one delay and fixed weights")
+        if p.format == "dense" and p.release is not None:
+            raise ValueError(f"{p.key}: stochastic release draws per edge, so its projection is edges or "
+                             f"events")
         return p.format == "dense"
     small = pre * post <= DENSE_LIMIT and edges >= DENSE_DENSITY * pre * post
-    return small and not np.ndim(delays) and p.plasticity is None and not p.trainable
+    return small and not np.ndim(delays) and p.plasticity is None and not p.trainable and p.release is None
 
 
 def _poisson_table(mean: float) -> np.ndarray:
@@ -581,9 +588,9 @@ def _check_graded(p: Projection, pre: Population, post: Population) -> None:
     A graded population sends a value every step. It reaches a `Graded`
     synapse, which follows it, or a delta receptor as a jump; a spiking
     synapse would add the value as if it were a spike, once per step, and
-    the spike-driven options (events, plasticity, short-term release) have
-    no spike to act on. A `Graded` synapse fed spikes would hold each one
-    for a step, so it takes only graded input.
+    the spike-driven options (events, plasticity, short-term and stochastic
+    release) have no spike to act on. A `Graded` synapse fed spikes would
+    hold each one for a step, so it takes only graded input.
     """
     synapse = post.receptors[p.receptor].synapse
     if not pre.graded:
@@ -600,7 +607,7 @@ def _check_graded(p: Projection, pre: Population, post: Population) -> None:
     if p.format == "events":
         raise ValueError(f"{p.key}: population {p.pre!r} is graded, and event delivery visits only neurons "
                          f"that spiked; use format 'edges' or 'dense'")
-    for option in ("plasticity", "short_term"):
+    for option in ("plasticity", "short_term", "release"):
         if getattr(p, option) is not None:
             raise ValueError(f"{p.key}: {option} acts on spikes, and population {p.pre!r} is graded")
 
@@ -734,6 +741,17 @@ class Network(nn.Module):
         return {"populations": out, "plastic": plastic, "short_term": short_term, "overflow": overflow,
                 "t": jnp.zeros((), jnp.int32)}
 
+    def _noise(self) -> jax.Array | None:
+        """The key Poisson inputs and stochastic release draw from, None when nothing draws."""
+        drawing = [type(s).__name__ for s in self.inputs if isinstance(s, PoissonInput)]
+        drawing += [f"stochastic release on {p.key}" for p in self.projections if p.release is not None]
+        if not drawing:
+            return None
+        if not self.has_rng("noise"):
+            raise ValueError(f"the network draws from the `noise` key ({', '.join(drawing)}): apply it with "
+                             f"rngs={{'noise': key}}")
+        return self.make_rng("noise")
+
     def connections(self, variables: Variables) -> dict[str, Connections]:
         """Every projection's synapses after a run, by projection key, as NEST's `GetConnections` reads them.
 
@@ -804,13 +822,7 @@ class Network(nn.Module):
             raise ValueError("pass `steps` or a time-major `drive`")
         length: int = steps if steps is not None else timed[0]
         _check_monitors(monitors, populations)
-        key = None
-        if any(isinstance(s, PoissonInput) for s in self.inputs):
-            if not self.has_rng("noise"):
-                raise ValueError("the network has Poisson inputs, which draw from the `noise` key: "
-                                 "apply it with rngs={'noise': key}")
-            key = self.make_rng("noise")
-        stepper = _Stepper(self, populations, edges, weights, monitors, key)
+        stepper = _Stepper(self, populations, edges, weights, monitors, self._noise())
         held = {name: jnp.broadcast_to(jnp.asarray(value, self.dtype), (length, *np.shape(value)[1:]))
                 if np.ndim(value) > 0 else jnp.full((length,), value, self.dtype)
                 for name, value in drive.items()}
@@ -855,25 +867,41 @@ class _Stepper:
         self.into: dict[str, list[Projection]] = {name: [] for name in populations}
         for p in network.projections:
             self.into[p.post].append(p)
+        # Each stochastic projection draws from its own stream, numbered after the Poisson inputs' streams.
+        self.streams = {p.key: len(network.inputs) + i for i, p in enumerate(network.projections)
+                        if p.release is not None}
 
     def is_delta(self, population: str, receptor: str) -> bool:
         return self.populations[population].receptors[receptor].synapse.lands == "before_threshold"
 
+    def release_key(self, t, p: Projection) -> jax.Array | None:
+        """The key of `p`'s release draws in step `t`, or None for a projection that transmits every spike."""
+        if p.release is None:
+            return None
+        assert self.key is not None
+        return jax.random.fold_in(jax.random.fold_in(self.key, t), self.streams[p.key])
+
     def deliver(self, t, p: Projection, weight, ring) -> jax.Array:
         """Weighted outputs of `p` due at the end of step `t`, summed per postsynaptic neuron."""
         e = self.edges[p.key]
+        key = self.release_key(t, p)
         if "by_pre" in e:
-            return self.events(p, e, weight, ring[(t - e["delay"]) % ring.shape[0]])
+            return self.events(p, e, weight, ring[(t - e["delay"]) % ring.shape[0]], key)
         if "pre" not in e:
             return ring[(t - e["delay"]) % ring.shape[0]] @ weight
         if e["delay"].ndim == 0:
             sent = ring[(t - e["delay"]) % ring.shape[0]][e["pre"]]
         else:
             sent = ring[(t - e["delay"]) % ring.shape[0], e["pre"]]
-        return jax.ops.segment_sum(weight * sent, e["post"], num_segments=self.populations[p.post].size,
+        if p.release is None:
+            transmitted = weight * sent
+        else:
+            assert key is not None
+            transmitted = p.release.transmit(key, weight, sent)
+        return jax.ops.segment_sum(transmitted, e["post"], num_segments=self.populations[p.post].size,
                                    indices_are_sorted=True)
 
-    def events(self, p: Projection, e, weight, sent) -> jax.Array:
+    def events(self, p: Projection, e, weight, sent, key: jax.Array | None) -> jax.Array:
         """Delivery that visits only the edges of neurons that spiked.
 
         The spiking neurons' out-edges, contiguous when edges are sorted by
@@ -882,6 +910,8 @@ class _Stepper:
         the step needs; each slot finds its neuron by binary search. The
         cost follows the activity, not the edge count. More than
         `p.capacity` spiking neurons in a step is counted in the state.
+        With stochastic release, each block draws its slots' releases from
+        `key` folded with the block's index.
         """
         out = jnp.zeros(self.populations[p.post].size, weight.dtype)
         if weight.shape[0] == 0:
@@ -899,7 +929,13 @@ class _Stepper:
             edge = e["start"][active[owner]] + slot - (ends[owner] - degree[owner])
             valid = slot < total
             edge = jnp.where(valid, edge, 0)
-            value = jnp.where(valid, weight[edge] * sent.at[active[owner]].get(mode="fill", fill_value=0), 0)
+            spiked = sent.at[active[owner]].get(mode="fill", fill_value=0)
+            if p.release is None:
+                value = jnp.where(valid, weight[edge] * spiked, 0)
+            else:
+                assert key is not None
+                drawn = p.release.transmit(jax.random.fold_in(key, i), weight[edge], spiked)
+                value = jnp.where(valid, drawn, 0)
             return out.at[e["by_pre"][edge]].add(value)
 
         blocks = (total + EVENT_BLOCK - 1) // EVENT_BLOCK

@@ -15,6 +15,8 @@ Arrivals land at the end of the step (`sparx.dynamics.core`), so a spike
 shapes the membrane from the next step on, as in NEST and Brian2. Each
 kinetic is integrated exactly. A graded population sends a value every
 step, and its synapse (`Graded`) follows that value with its own kinetics.
+`StochasticRelease` makes a spiking projection's transmission a random
+draw per synapse.
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ __all__ = [
     "PointNeuron",
     "PointNeuronState",
     "Receptor",
+    "StochasticRelease",
     "SynapseModel",
 ]
 
@@ -230,6 +233,35 @@ class Graded:
     def step(self, state: GradedState, arriving: jax.Array | float, dt: float) -> GradedState:
         value = state.target + (state.value - state.target) * jnp.exp(-dt / self.tau)
         return GradedState(value, jnp.broadcast_to(arriving, value.shape).astype(value.dtype))
+
+
+@struct.dataclass
+class StochasticRelease:
+    """Release that succeeds at random: each spike, each synapse releases with probability `p`.
+
+    A presynaptic spike reaches each of its synapses, and each releases
+    independently, a Bernoulli draw per edge per spike from the network's
+    `noise` key. A release transmits `quantal` times the edge's weight, so
+    the current one spike sends over `n` edges of weight `w` is binomial,
+    with mean `n p q w` and variance `n p (1 - p) (q w)^2`; `quantal = 1 / p`
+    keeps the mean of the deterministic projection. On a projection with
+    short-term plasticity (`TsodyksMarkram`) the probability is `p` times
+    the spike's efficacy `u x`, so depression and facilitation change how
+    often a synapse releases, and a release always transmits one quantum
+    (`p = 1` makes the efficacy the probability). The resources `x` still
+    deplete by their mean, as in the deterministic model; depletion by the
+    releases that happened, as in Fuhrmann et al.'s (2002) stochastic
+    synapse, is not modeled.
+    """
+
+    p: jax.Array | float = 0.5
+    quantal: jax.Array | float = 1.0
+
+    def transmit(self, key: jax.Array, weight: jax.Array, sent: jax.Array) -> jax.Array:
+        """What edges of `weight` transmit for presynaptic values `sent` (0, 1 or an efficacy), one draw
+        each."""
+        released = jax.random.uniform(key, jnp.shape(weight)) < self.p * sent
+        return jnp.where(released, self.quantal * weight, jnp.zeros((), weight.dtype)).astype(weight.dtype)
 
 
 @struct.dataclass

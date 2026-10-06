@@ -1,4 +1,4 @@
-"""Graded transmission in networks."""
+"""Signalling beyond spikes in networks: graded transmission and stochastic release."""
 
 
 import jax
@@ -14,11 +14,13 @@ from sparx.dynamics import (
     Exponential,
     Graded,
     GradedPotential,
+    LICell,
     LIFCell,
     PairSTDP,
     PointNeuron,
     RateCell,
     Receptor,
+    StochasticRelease,
     SynapticInput,
     TsodyksMarkram,
     run,
@@ -116,6 +118,8 @@ def test_a_graded_population_refuses_event_delivery_and_spike_driven_options():
         build(format="events")
     with pytest.raises(ValueError, match="Graded synapse"):
         build(receptor="exp")
+    with pytest.raises(ValueError, match="release acts on spikes"):
+        build(release=StochasticRelease(0.5))
     with pytest.raises(ValueError, match="short_term acts on spikes"):
         build(short_term=TsodyksMarkram())
     with pytest.raises(ValueError, match="plasticity acts on spikes"):
@@ -128,5 +132,71 @@ def test_a_graded_population_refuses_event_delivery_and_spike_driven_options():
                       mutable=["state"])
     with pytest.raises(ValueError, match="never spikes"):
         PointNeuron(GradedPotential(), {}, reset_synapses=True)
+
+
+# Stochastic release.
+
+
+def released(format: str, p: float, quantal: float, *, short_term: TsodyksMarkram | None = None,
+             steps: int = 400, senders: int = 200, receivers: int = 50) -> np.ndarray:
+    """What each of `receivers` neurons receives per step from `senders` neurons that fire every step,
+    all to all with weight 1, through stochastic release: `[steps - 1, receivers]`."""
+    network = Network((forced(senders), Population("r", receivers, LICell(0.0), {"in": Receptor(Delta())})),
+                      (Projection("s", "r", AllToAll(), weight=1.0, delay=1.0, receptor="in", format=format,
+                                  capacity=senders, release=StochasticRelease(p, quantal),
+                                  short_term=short_term),),
+                      (ArrivalInput("s", "x", "x"),), dt=1.0)
+    records, _ = network.apply(network.init(jax.random.key(0)), {"x": np.ones((steps, senders))},
+                               monitors={"in": OutputTrace("r")}, rngs={"noise": jax.random.key(1)},
+                               mutable=["state"])
+    return np.asarray(records["in"], np.float64)[1:]  # a delay of one step: nothing arrives in the first
+
+
+@pytest.mark.parametrize("format", ["edges", "events"])
+def test_stochastic_release_is_binomial_per_edge(format):
+    # 200 synapses onto each neuron, each releasing with p = 0.3 a quantum of 2.5 times its weight: the
+    # input is 2.5 Binomial(200, 0.3), mean 150 and variance 2.5^2 * 42 = 262.5.
+    p, quantal, k = 0.3, 2.5, 200
+    received = released(format, p, quantal)
+    n = received.size  # 399 steps * 50 neurons
+    mean, variance = k * p * quantal, k * p * (1 - p) * quantal ** 2
+    # Within 4 standard errors; observed 0.02 and 0.74 for the mean, 2.4 and 0.8 for the variance.
+    assert abs(received.mean() - mean) < 4 * np.sqrt(variance / n)
+    assert abs(received.var() / variance - 1) < 4 * np.sqrt(2 / n)
+    assert np.all(received % quantal == 0)  # whole quanta
+    # Each edge draws on its own: neurons sharing every presynaptic spike are uncorrelated.
+    correlation = np.corrcoef(received.T)[np.triu_indices(received.shape[1], 1)]
+    assert abs(correlation.mean()) < 0.01 and np.abs(correlation).max() < 0.3  # observed 0.002, 0.22
+
+
+def test_stochastic_release_needs_the_noise_key_and_edges():
+    network = Network((forced(2), Population("r", 2, LICell(0.0), {"in": Receptor(Delta())})),
+                      (Projection("s", "r", AllToAll(), delay=1.0, receptor="in", format="edges",
+                                  release=StochasticRelease(0.5)),),
+                      (ArrivalInput("s", "x", "x"),), dt=1.0)
+    with pytest.raises(ValueError, match="noise"):
+        network.apply(network.init(jax.random.key(0)), steps=2, mutable=["state"])
+    with pytest.raises(ValueError, match="edges or events"):
+        dense = Projection("s", "r", AllToAll(), delay=1.0, receptor="in", format="dense",
+                           release=StochasticRelease(0.5))
+        Network(network.populations, (dense,), network.inputs, dt=1.0).init(jax.random.key(0))
+
+
+@pytest.mark.parametrize("format", ["edges", "events"])
+def test_with_short_term_plasticity_a_synapse_releases_with_p_times_the_efficacy(format):
+    # Each step every sender fires; Tsodyks-Markram depression sets the efficacy u x of step t, and each
+    # synapse releases with probability p u x: the input of a neuron is Binomial(200, p u x).
+    p, k, steps = 0.8, 200, 300
+    depression = TsodyksMarkram(U=0.4, tau_rec=20.0)
+    received = released(format, p, 1.0, short_term=depression, steps=steps)
+    state = depression.init_state((1,), jnp.float32)
+    efficacy = []
+    for _ in range(steps - 1):
+        state, e = depression.step(state, jnp.ones(1), 1.0)
+        efficacy.append(float(e[0]))
+    q = p * np.asarray(efficacy)[:, None]  # the efficacy sent at step t arrives at step t + 1
+    z = (received - k * q) / np.sqrt(k * q * (1 - q))
+    assert abs(z.mean()) < 4 / np.sqrt(z.size) and abs(z.std() - 1) < 0.05
+    assert efficacy[0] > 2 * efficacy[-1]  # the synapses depressed
 
 
