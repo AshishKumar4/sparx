@@ -36,7 +36,7 @@ def lif_unroll(args):
     print(f"LIF forward+backward, T={args.steps} B={args.batch} F={args.features}")
     for unroll in (1, 2, 4, 8, 16):
         def loss(x, unroll=unroll):
-            return jnp.sum(run(LIFCell(0.8), x, unroll=unroll)[0].fired)
+            return jnp.sum(run(LIFCell(0.8), x, unroll=unroll)[0].value)
         fn = jax.jit(jax.grad(loss))
         print(f"  unroll={unroll:<3} {timed(fn, x, repeats=args.repeats) * 1e3:8.2f} ms")
 
@@ -59,8 +59,8 @@ def per_step(params, x):
 
     def step(states, x_t):
         a, s = cell.step(states[0], SynapticInput(jump=x_t @ first["kernel"] + first["bias"]), 1.0)
-        b, s = cell.step(states[1], SynapticInput(jump=s.fired @ second["kernel"] + second["bias"]), 1.0)
-        return (a, b), s.fired
+        b, s = cell.step(states[1], SynapticInput(jump=s.value @ second["kernel"] + second["bias"]), 1.0)
+        return (a, b), s.value
 
     features = first["kernel"].shape[1]
     states = (cell.init_state((*x.shape[1:-1], features), x.dtype),) * 2

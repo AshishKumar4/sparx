@@ -102,7 +102,7 @@ def test_the_eligibility_factorization_is_exactly_backpropagation(kind):
                 state, z, y = carry
                 u, shift = xs
                 state, spikes = cell.step(state, SynapticInput(jump=u @ params.w_in + z @ params.w_rec), 1.0)
-                z = spikes.fired
+                z = spikes.value
                 z = z + shift
                 y = kappa * y + z @ params.w_out + params.b_out
                 return (state, z, y), y
@@ -499,7 +499,7 @@ def test_event_simulation_is_the_lif_integrated_on_a_fine_grid():
         cell = PointNeuron(lif, {"syn": Receptor(Exponential(neuron.tau_syn))})
         fired, _ = run(cell, Arrivals(0.0, {"syn": jnp.asarray(arrivals)}), dt=dt)
     for n in range(weights.shape[1]):
-        grid = (np.flatnonzero(np.asarray(fired.fired[:, n])) + 1) * dt
+        grid = (np.flatnonzero(np.asarray(fired.value[:, n])) + 1) * dt
         want = np.sort(np.asarray(exact[0, n]))
         want = want[np.isfinite(want)]
         assert len(grid) == len(want)

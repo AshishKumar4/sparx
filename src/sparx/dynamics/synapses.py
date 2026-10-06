@@ -26,7 +26,7 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 
-from sparx.dynamics.core import NeuronModel, Spikes, SynapticInput, Term, membrane_dtype
+from sparx.dynamics.core import NeuronModel, Output, SynapticInput, Term, membrane_dtype
 
 __all__ = [
     "Alpha",
@@ -252,6 +252,15 @@ class PointNeuron[State]:
     reset_synapses: bool = struct.field(pytree_node=False, default=False)
     freeze_synapses: bool = struct.field(pytree_node=False, default=False)
 
+    def __post_init__(self):
+        if self.neuron.graded and (self.reset_synapses or self.freeze_synapses):
+            raise ValueError(f"{type(self.neuron).__name__} is graded and never spikes, so it has no spike "
+                             f"for reset_synapses or freeze_synapses to act on")
+
+    @property
+    def graded(self) -> bool:
+        return self.neuron.graded
+
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> PointNeuronState[State]:
         synapses = {name: r.synapse.init_state(shape, dtype) for name, r in self.receptors.items()}
         return PointNeuronState(self.neuron.init_state(shape, dtype), synapses)
@@ -261,7 +270,7 @@ class PointNeuron[State]:
         return [name for name, r in self.receptors.items() if r.synapse.lands == where]
 
     def advance(self, state: PointNeuronState[State], current: jax.Array | float, jump: jax.Array | float,
-                dt: float) -> tuple[PointNeuronState[State], Spikes]:
+                dt: float) -> tuple[PointNeuronState[State], Output]:
         """Move the membrane over a step on the synapses' output, with `jump` (mV) landing at its end."""
         currents: list[Term] = []
         conductance: dict[str, jax.Array] = {}
@@ -274,15 +283,15 @@ class PointNeuron[State]:
                 held = (term.amplitude if self.hold == "start" else term.mean(dt) for term in terms)
                 conductance[name] = sum(held, jnp.zeros(()))
         received = SynapticInput(current, tuple(currents), conductance, jump)
-        cell, spikes = self.neuron.step(state.neuron, received, dt)
-        return PointNeuronState(cell, state.synapses), spikes
+        cell, out = self.neuron.step(state.neuron, received, dt)
+        return PointNeuronState(cell, state.synapses), out
 
     def receive(self, state: PointNeuronState[State], arriving: Mapping[str, jax.Array], dt: float,
                 fired: jax.Array, frozen: jax.Array) -> PointNeuronState[State]:
         """Decay the synapses over the step and add the weights due at its end; jumps after the
         threshold land on the neuron.
 
-        `fired` is the step's spikes, and `frozen` where the neuron was
+        `fired` is the step's output, and `frozen` where the neuron was
         refractory during the step, as `frozen` read it before the step;
         `reset_synapses` and `freeze_synapses` act on them.
         """
@@ -320,7 +329,7 @@ class PointNeuron[State]:
         return jnp.asarray(sum(jumps, jnp.zeros(())))
 
     def step(self, state: PointNeuronState[State], inputs: Arrivals,
-             dt: float) -> tuple[PointNeuronState[State], Spikes]:
+             dt: float) -> tuple[PointNeuronState[State], Output]:
         frozen = self.frozen(state, dt)
-        state, spikes = self.advance(state, inputs.current, self.delta(inputs.spikes), dt)
-        return self.receive(state, inputs.spikes, dt, spikes.fired, frozen), spikes
+        state, out = self.advance(state, inputs.current, self.delta(inputs.spikes), dt)
+        return self.receive(state, inputs.spikes, dt, out.value, frozen), out

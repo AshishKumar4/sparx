@@ -3,7 +3,7 @@
 Each model meets the contract of `sparx.dynamics.core`,
 
     model.init_state(shape, dtype) -> state
-    model.step(state, SynapticInput, dt) -> (state, Spikes)
+    model.step(state, SynapticInput, dt) -> (state, Output)
 
 and `sparx.dynamics.run` scans one over time. Time is counted in steps:
 a decay is what is left after one unit of time, a step of `dt` decays by
@@ -28,8 +28,10 @@ thresholds, weights) are pytree leaves, so they can be traced,
 differentiated and sharded; its choices (reset rule, surrogate) are static
 fields. The membrane runs in float32 (float64 when the input is float64)
 whatever the input's dtype (`membrane_dtype`); spikes come back in the
-input's dtype, which holds 0 and 1 exactly. `sparx.nn` builds these models
-from module attributes and parameters; pure JAX code can use them directly.
+input's dtype, which holds 0 and 1 exactly. The leaky integrator `LICell`
+is graded, its output a real value each step. `sparx.nn` builds these
+models from module attributes and parameters; pure JAX code can use them
+directly.
 """
 
 from __future__ import annotations
@@ -44,8 +46,8 @@ from flax.typing import PrecisionLike
 
 from sparx.dynamics.core import (
     NeuronModel,
+    Output,
     Reset,
-    Spikes,
     SynapticInput,
     fire,
     jump_after_threshold,
@@ -74,8 +76,8 @@ def _jump(inputs: SynapticInput) -> jax.Array:
     return jnp.asarray(inputs.jump)
 
 
-def _at_end(fired: jax.Array) -> Spikes:
-    return Spikes(fired, jnp.ones_like(fired))
+def _at_end(value: jax.Array) -> Output:
+    return Output(value, jnp.ones_like(value))
 
 
 def _never(v: jax.Array) -> jax.Array:
@@ -101,11 +103,12 @@ class LIFCell:
     reset: Reset = struct.field(pytree_node=False, default="subtract")
     surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
     detach_reset: bool = struct.field(pytree_node=False, default=False)
+    graded = False
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> MembraneState:
         return MembraneState(jnp.zeros(shape, membrane_dtype(dtype)))
 
-    def step(self, state: MembraneState, inputs: SynapticInput, dt: float) -> tuple[MembraneState, Spikes]:
+    def step(self, state: MembraneState, inputs: SynapticInput, dt: float) -> tuple[MembraneState, Output]:
         x = _jump(inputs)
         v = self.decay ** dt * state.v + x
         v, s = fire(v, self.threshold, self.surrogate, self.reset, detach_reset=self.detach_reset)
@@ -120,7 +123,7 @@ class LIFCell:
 
 @struct.dataclass
 class LICell:
-    """A leaky integrator that never fires; it reports its membrane as `Spikes.fired`.
+    """A leaky integrator that never fires; its output is its membrane, a graded value.
 
     The usual readout of a spiking classifier: the last layer integrates the
     spikes it receives and the loss reads its membrane. As the first model
@@ -128,11 +131,12 @@ class LICell:
     """
 
     decay: jax.Array | float
+    graded = True
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> MembraneState:
         return MembraneState(jnp.zeros(shape, membrane_dtype(dtype)))
 
-    def step(self, state: MembraneState, inputs: SynapticInput, dt: float) -> tuple[MembraneState, Spikes]:
+    def step(self, state: MembraneState, inputs: SynapticInput, dt: float) -> tuple[MembraneState, Output]:
         v = self.decay ** dt * state.v + _jump(inputs)
         return MembraneState(v), _at_end(v)
 
@@ -146,7 +150,7 @@ class LICell:
 
 @struct.dataclass
 class Serial[First, Second]:
-    """Two models in series: each step, the first's `Spikes.fired` is the second's input jump.
+    """Two models in series: each step, the first's `Output.value` is the second's input jump.
 
     `Serial(LICell(synapse_decay), LIFCell(decay))` is the current-based
     LIF, whose input charges a decaying synaptic current that the membrane
@@ -156,23 +160,27 @@ class Serial[First, Second]:
         v[t] = decay * v[t-1] + i[t]
 
     snnTorch's `Synaptic` and the CUBA neurons of Zenke and Vogels (2021).
-    Longer chains nest. The spikes are the second model's, in the dtype it
-    gives them. In physical units the counterpart is a `PointNeuron` with an
-    `Exponential` synapse, where an arrival shapes the membrane from the
-    next step on.
+    Longer chains nest. The output is the second model's, in the dtype it
+    gives it, and the pair is graded when the second model is. In physical
+    units the counterpart is a `PointNeuron` with an `Exponential` synapse,
+    where an arrival shapes the membrane from the next step on.
     """
 
     first: NeuronModel[First]
     second: NeuronModel[Second]
 
+    @property
+    def graded(self) -> bool:
+        return self.second.graded
+
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> tuple[First, Second]:
         return self.first.init_state(shape, dtype), self.second.init_state(shape, dtype)
 
     def step(self, state: tuple[First, Second], inputs: SynapticInput,
-             dt: float) -> tuple[tuple[First, Second], Spikes]:
-        first, out = self.first.step(state[0], inputs, dt)
-        second, spikes = self.second.step(state[1], SynapticInput(jump=out.fired), dt)
-        return (first, second), spikes
+             dt: float) -> tuple[tuple[First, Second], Output]:
+        first, between = self.first.step(state[0], inputs, dt)
+        second, out = self.second.step(state[1], SynapticInput(jump=between.value), dt)
+        return (first, second), out
 
     def is_refractory(self, state: tuple[First, Second], dt: float) -> jax.Array:
         return self.second.is_refractory(state[1], dt)
@@ -223,12 +231,13 @@ class ALIFCell:
     surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
     detach_reset: bool = struct.field(pytree_node=False, default=False)
     refractory: float = struct.field(pytree_node=False, default=0)
+    graded = False
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> ALIFState:
         zeros = jnp.zeros(shape, membrane_dtype(dtype))
         return ALIFState(zeros, zeros, zeros)
 
-    def step(self, state: ALIFState, inputs: SynapticInput, dt: float) -> tuple[ALIFState, Spikes]:
+    def step(self, state: ALIFState, inputs: SynapticInput, dt: float) -> tuple[ALIFState, Output]:
         x = _jump(inputs)
         steps = round(self.refractory / dt)
         theta = self.threshold + self.beta * state.a
@@ -251,19 +260,20 @@ class ALIFCell:
 
 class RecurrentState[State](NamedTuple):
     inner: State
-    spikes: jax.Array
+    output: jax.Array
+    """The step's output, fed back in the next."""
 
 
 @struct.dataclass
 class RecurrentCell[State]:
-    """Feed a model's spikes back to its own input jump through `weight`, `[F, F]`.
+    """Feed a model's output back to its own input jump through `weight`, `[F, F]`.
 
         output[t] = inner.step(x[t] + output[t-1] @ weight)
 
     Wrapping `ALIFCell` gives the recurrent adaptive network (LSNN) of Bellec
     et al. (2020). The product runs at `precision`, the matrix product
     precision of `jax.lax.dot`. `cut_gradient` stops the gradient at the
-    fed-back spikes (the weight still receives its gradient), which is the
+    fed-back output (the weight still receives its gradient), which is the
     gradient e-prop computes online (their `stop_z_gradients`).
     """
 
@@ -272,19 +282,23 @@ class RecurrentCell[State]:
     precision: PrecisionLike = struct.field(pytree_node=False, default=None)
     cut_gradient: bool = struct.field(pytree_node=False, default=False)
 
+    @property
+    def graded(self) -> bool:
+        return self.inner.graded
+
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> RecurrentState[State]:
         return RecurrentState(self.inner.init_state(shape, dtype), jnp.zeros(shape, dtype))
 
     def step(self, state: RecurrentState[State], inputs: SynapticInput,
-             dt: float) -> tuple[RecurrentState[State], Spikes]:
-        fed_back = jax.lax.stop_gradient(state.spikes) if self.cut_gradient else state.spikes
+             dt: float) -> tuple[RecurrentState[State], Output]:
+        fed_back = jax.lax.stop_gradient(state.output) if self.cut_gradient else state.output
         feedback = jnp.matmul(fed_back.astype(self.weight.dtype), self.weight, precision=self.precision)
         fed = dataclasses.replace(inputs, jump=inputs.jump + feedback)
-        inner, spikes = self.inner.step(state.inner, fed, dt)
-        # The feedback promotes the step's input, so the spikes are cast back
+        inner, out = self.inner.step(state.inner, fed, dt)
+        # The feedback promotes the step's input, so the output is cast back
         # to the dtype the carry started with, the input's.
-        fired = spikes.fired.astype(state.spikes.dtype)
-        return RecurrentState(inner, fired), Spikes(fired, spikes.offset)
+        value = out.value.astype(state.output.dtype)
+        return RecurrentState(inner, value), Output(value, out.offset)
 
     def is_refractory(self, state: RecurrentState[State], dt: float) -> jax.Array:
         return self.inner.is_refractory(state.inner, dt)

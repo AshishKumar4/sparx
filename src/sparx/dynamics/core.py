@@ -4,9 +4,17 @@ A neuron model advances one step of `dt` from its state and the synaptic
 input it receives that step:
 
     model.init_state(shape, dtype) -> state
-    model.step(state, SynapticInput, dt) -> (state, Spikes)
+    model.step(state, SynapticInput, dt) -> (state, Output)
+    model.graded                             # False: Output.value is 0 or 1 (spikes)
 
-and `run(model, inputs)` scans the step over time-major inputs. Two
+and `run(model, inputs)` scans the step over time-major inputs. A spiking
+model's output is its spikes, events of 0 or 1. A graded model's output is
+a real value each step, as the transmitter release of a neuron that never
+spikes is a continuous function of its voltage, or the activity of a rate
+unit. `graded` is fixed for a model, so whatever delivers its output
+(`sparx.graph.Network`) chooses between an event path, which visits only
+the neurons that fired, and a dense one, which reads every value, before
+any step is traced. Two
 families meet this contract. The physical models (`sparx.dynamics.neurons`)
 are in units, checked where values are read in (design.md 4.4):
 
@@ -53,8 +61,8 @@ from sparx.surrogate import Surrogate, spike
 __all__ = [
     "Model",
     "NeuronModel",
+    "Output",
     "Reset",
-    "Spikes",
     "SynapticInput",
     "Term",
     "crossing",
@@ -127,31 +135,36 @@ class SynapticInput:
         return sum((term.at(s) for term in self.currents), jnp.asarray(self.current))
 
 
-class Spikes(NamedTuple):
-    """A step's spikes, and when within the step each happened.
+class Output(NamedTuple):
+    """What a population sends in a step, and when within the step.
 
-    `fired` is 0 or 1. `offset` is the fraction of the step, in [0, 1], at
-    which the membrane crossed threshold, from linear interpolation of the
-    voltage across the step (Hansel et al., Neural Computation 1998); 1
-    where nothing fired. A spike's time is `(step + offset) * dt` from the
-    start of the run. A model that never fires (`sparx.dynamics.ml.LICell`)
-    reports its membrane as `fired`, the output a readout reads and the
-    next model of a `Serial` receives.
+    For a spiking model `value` is 0 or 1, and `offset` is the fraction of
+    the step, in [0, 1], at which the membrane crossed threshold, from
+    linear interpolation of the voltage across the step (Hansel et al.,
+    Neural Computation 1998); 1 where nothing fired. A spike's time is
+    `(step + offset) * dt` from the start of the run. For a graded model
+    `value` is real (a release rate, an activity or a membrane), its value
+    at the end of the step, and `offset` is 1.
     """
 
-    fired: jax.Array
+    value: jax.Array
     offset: jax.Array
 
 
 class Model[State, Inputs](Protocol):
     """Anything `run` steps: a neuron model, or a neuron with the synapses onto it (`PointNeuron`)."""
 
+    @property
+    def graded(self) -> bool:
+        """Whether `Output.value` is real-valued; False for a model whose output is spikes, 0 or 1."""
+        ...
+
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> State:
         """The population at rest, for inputs of per-step shape `shape` and dtype `dtype`."""
         ...
 
-    def step(self, state: State, inputs: Inputs, dt: float) -> tuple[State, Spikes]:
-        """Advance one step of `dt` on `inputs`; return the new state and the step's spikes."""
+    def step(self, state: State, inputs: Inputs, dt: float) -> tuple[State, Output]:
+        """Advance one step of `dt` on `inputs`; return the new state and the step's output."""
         ...
 
 
@@ -172,7 +185,7 @@ class NeuronModel[State](Model[State, SynapticInput], Protocol):
     def after_threshold(self, state: State, jump: jax.Array, fired: jax.Array) -> State:
         """`state` after a voltage jump that lands past the step's threshold test, before its reset.
 
-        `fired` is the step's `Spikes.fired`. A model whose spike resets the
+        `fired` is the step's `Output.value`. A model whose spike resets the
         membrane loses the jump where it fired, since the reset that follows
         overwrites it; one that does not reset keeps it.
         """
@@ -305,21 +318,21 @@ def crossing(before: jax.Array, after: jax.Array, threshold: jax.Array | float) 
 @overload
 def run[State, Inputs](model: Model[State, Inputs], inputs: Inputs | jax.Array | np.ndarray,
                        state: State | None = None, *, dt: float = 1.0, record: None = None,
-                       unroll: int | bool = 1) -> tuple[Spikes, State]: ...
+                       unroll: int | bool = 1) -> tuple[Output, State]: ...
 
 
 @overload
 def run[State, Inputs, Record](model: Model[State, Inputs], inputs: Inputs | jax.Array | np.ndarray,
                                state: State | None = None, *, dt: float = 1.0,
                                record: Callable[[State], Record],
-                               unroll: int | bool = 1) -> tuple[tuple[Spikes, Record], State]: ...
+                               unroll: int | bool = 1) -> tuple[tuple[Output, Record], State]: ...
 
 
 def run[State, Inputs, Record](model: Model[State, Inputs], inputs: Inputs | jax.Array | np.ndarray,
                                state: State | None = None, *, dt: float = 1.0,
                                record: Callable[[State], Record] | None = None,
-                               unroll: int | bool = 1) -> tuple[Spikes | tuple[Spikes, Record], State]:
-    """Scan `model` over time-major `inputs`; return its spikes `[T, ...]` and the final state.
+                               unroll: int | bool = 1) -> tuple[Output | tuple[Output, Record], State]:
+    """Scan `model` over time-major `inputs`; return its output `[T, ...]` and the final state.
 
     `inputs` is what `model.step` takes for one step, with every leaf
     `[T, ...]` or a scalar held over time: a `SynapticInput` for a neuron
@@ -328,7 +341,7 @@ def run[State, Inputs, Record](model: Model[State, Inputs], inputs: Inputs | jax
     population's per-step shape and its dtype are those of the first input
     with a time axis. `state` None starts the population at rest; a run over
     the first `k` steps and one over the rest from its final state equal one
-    run over all. With `record`, each step's spikes are paired with
+    run over all. With `record`, each step's output is paired with
     `record(state)` after the step (the membrane voltage, say). `unroll` is
     `jax.lax.scan`'s: how many steps one loop iteration holds.
     """
@@ -345,12 +358,12 @@ def run[State, Inputs, Record](model: Model[State, Inputs], inputs: Inputs | jax
     # input reads as Python's 0.0 in every step.
     xs = [jnp.broadcast_to(jnp.asarray(leaves[i], dtype), (steps, *shape)) for i in timed]
 
-    def step(state: State, xs_t: list[jax.Array]) -> tuple[State, Spikes | tuple[Spikes, Record]]:
+    def step(state: State, xs_t: list[jax.Array]) -> tuple[State, Output | tuple[Output, Record]]:
         now = list(leaves)
         for i, x in zip(timed, xs_t, strict=True):
             now[i] = x
-        state, spikes = model.step(state, jax.tree.unflatten(tree, now), dt)
-        return state, spikes if record is None else (spikes, record(state))
+        state, out = model.step(state, jax.tree.unflatten(tree, now), dt)
+        return state, out if record is None else (out, record(state))
 
     state, out = jax.lax.scan(step, state, xs, unroll=unroll)
     return out, state

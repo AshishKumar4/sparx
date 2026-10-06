@@ -45,7 +45,7 @@ Loss = Callable[[jax.Array, jax.Array], jax.Array]
 def _step[State](cell: NeuronModel[State], state: State, x: jax.Array, dt: float) -> tuple[State, jax.Array]:
     """One step of `cell` on the jump `x`; the new state and the spikes."""
     state, spikes = cell.step(state, SynapticInput(jump=x), dt)
-    return state, spikes.fired
+    return state, spikes.value
 
 
 def accumulate[P, C, X](step: Callable[[P, C, X], tuple[jax.Array, C]], params: P, carry: C,
@@ -101,8 +101,8 @@ def eprop_forward(cell: NeuronModel, params: EPropParams, inputs: jax.Array, *, 
     def step(carry, u):
         state, y = carry
         state, spikes = layer.step(state, SynapticInput(jump=u @ params.w_in), dt)
-        y, out = readout.step(y, SynapticInput(jump=spikes.fired @ params.w_out + params.b_out), dt)
-        return (state, y), (out.fired, spikes.fired)
+        y, out = readout.step(y, SynapticInput(jump=spikes.value @ params.w_out + params.b_out), dt)
+        return (state, y), (out.value, spikes.value)
 
     batch, size = inputs.shape[1], params.w_rec.shape[0]
     carry = (layer.init_state((batch, size), inputs.dtype),
@@ -302,7 +302,7 @@ def eprop(cell: NeuronModel, params: EPropParams, inputs: jax.Array, targets: ja
         u, target = xs
         state, z, trace, eligibility = _trace_step(cell, structure, dt, params, state, u, z, eligibility)
         y, out = readout.step(y, SynapticInput(jump=z @ params.w_out + params.b_out), dt)
-        value, dy = jax.value_and_grad(loss)(out.fired, target)
+        value, dy = jax.value_and_grad(loss)(out.value, target)
         filtered = kappa * filtered + trace
         z_bar = kappa * z_bar + z
         leak = kappa * leak + 1  # the bias accumulates through the readout's leak too

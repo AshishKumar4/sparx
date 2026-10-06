@@ -47,7 +47,7 @@ def test_one_long_step_equals_many_short_ones_below_threshold():
 
         long, long_state = run(neuron, held(1), dt=5.0)
         short, short_state = run(neuron, held(500), dt=0.01)
-    assert float(long.fired.sum() + short.fired.sum()) == 0
+    assert float(long.value.sum() + short.value.sum()) == 0
     np.testing.assert_allclose(long_state.v, short_state.v, rtol=1e-12)  # observed 1.4e-15 relative
 
 
@@ -71,7 +71,7 @@ def test_firing_period_is_the_analytic_one_within_a_step(current):
     dt = 0.01
     with jax.enable_x64(new_val=True):
         spikes, _ = run(neuron, SynapticInput(jnp.full((40_000, 1), current)), dt=dt)
-    steps = np.flatnonzero(np.asarray(spikes.fired[:, 0]))
+    steps = np.flatnonzero(np.asarray(spikes.value[:, 0]))
     assert len(steps) > 5
     periods = np.diff(steps) * dt
     expected = lif_period(neuron, current)
@@ -87,7 +87,7 @@ def test_in_step_spike_times_are_closer_than_the_grid():
     current = 400.0
     with jax.enable_x64(new_val=True):
         spikes, _ = run(neuron, SynapticInput(jnp.full((200, 1), current)), dt=dt)
-    first = int(np.flatnonzero(np.asarray(spikes.fired[:, 0]))[0])
+    first = int(np.flatnonzero(np.asarray(spikes.value[:, 0]))[0])
     on_grid = (first + 1) * dt
     precise = (first + float(spikes.offset[first, 0])) * dt
     exact = lif_period(neuron, current) - neuron.t_ref  # from rest, no refractory before the first
@@ -98,7 +98,7 @@ def test_refractoriness_holds_for_t_ref_over_dt_steps():
     neuron = LIF(t_ref=2.0)
     dt = 0.1
     spikes, _ = run(neuron, SynapticInput(jnp.full((400, 1), 5000.0)), dt=dt)
-    steps = np.flatnonzero(np.asarray(spikes.fired[:, 0]))
+    steps = np.flatnonzero(np.asarray(spikes.value[:, 0]))
     # The membrane is held at reset for round(t_ref / dt) = 20 steps, then
     # climbs from reset to threshold toward E_L + R I, which takes
     # tau ln((target - v_reset) / (target - v_th)) = 0.40 ms: 5 more steps.
@@ -112,7 +112,7 @@ def test_the_surrogate_passes_gradients_to_the_input_current():
 
     def rate(current):
         spikes, _ = run(neuron, SynapticInput(jnp.full((2000, 1), current)), dt=0.1)
-        return jnp.sum(spikes.fired)
+        return jnp.sum(spikes.value)
 
     assert float(jax.grad(rate)(400.0)) > 0
 
@@ -194,5 +194,5 @@ def test_a_jump_after_the_threshold_is_lost_only_to_a_reset_that_sets_the_membra
     for now, fired, v in [(1.5, 1.0, after_spike), (0.5, 0.0, 0.75)]:
         arrivals = Arrivals(spikes={"now": jnp.array([now]), "late": jnp.array([0.25])})
         state, spikes = neuron.step(neuron.init_state((1,), jnp.float32), arrivals, 1.0)
-        assert float(spikes.fired[0]) == fired
+        assert float(spikes.value[0]) == fired
         assert float(state.neuron.v[0]) == v

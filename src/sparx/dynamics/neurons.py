@@ -17,7 +17,7 @@ import jax.numpy as jnp
 from flax import struct
 
 from sparx.dynamics.core import (
-    Spikes,
+    Output,
     SynapticInput,
     crossing,
     exact_linear,
@@ -121,12 +121,13 @@ class LIF:
     gates: Mapping[str, MgBlock] = struct.field(pytree_node=False,
                                                 default_factory=lambda: {"nmda": MgBlock()})
     surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
+    graded = False
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> LIFState:
         dtype = membrane_dtype(dtype)
         return LIFState(jnp.full(shape, self.e_l, dtype), jnp.zeros(shape, dtype))
 
-    def step(self, state: LIFState, inputs: SynapticInput, dt: float) -> tuple[LIFState, Spikes]:
+    def step(self, state: LIFState, inputs: SynapticInput, dt: float) -> tuple[LIFState, Output]:
         g_l = self.c_m / self.tau_m
         g_syn, syn_drive = _synaptic(self, inputs, state.v)
         g_total = g_l + g_syn
@@ -140,7 +141,7 @@ class LIF:
         offset = jnp.where(fired > 0, crossing(state.v, v, self.v_th), 1.0)
         refractory = jnp.where(fired > 0, self.t_ref, jnp.maximum(state.refractory - dt, 0))
         dtype = state.v.dtype
-        return LIFState(reset.astype(dtype), refractory.astype(dtype)), Spikes(fired, offset)
+        return LIFState(reset.astype(dtype), refractory.astype(dtype)), Output(fired, offset)
 
     def is_refractory(self, state: LIFState, dt: float) -> jax.Array:
         return state.refractory > dt / 2
@@ -198,13 +199,14 @@ class AdEx:
     gates: Mapping[str, MgBlock] = struct.field(pytree_node=False,
                                                 default_factory=lambda: {"nmda": MgBlock()})
     surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
+    graded = False
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> AdExState:
         dtype = membrane_dtype(dtype)
         zeros = jnp.zeros(shape, dtype)
         return AdExState(jnp.full(shape, self.e_l, dtype), zeros, zeros)
 
-    def step(self, state: AdExState, inputs: SynapticInput, dt: float) -> tuple[AdExState, Spikes]:
+    def step(self, state: AdExState, inputs: SynapticInput, dt: float) -> tuple[AdExState, Output]:
         g_syn, syn_drive = _synaptic(self, inputs, state.v)
         count = substeps(dt, self.substep)
         h = dt / count
@@ -244,7 +246,7 @@ class AdEx:
         v = jnp.where(held, self.v_reset, v)
         refractory = jnp.where(fired > 0, self.t_ref, jnp.maximum(state.refractory - dt, 0))
         dtype = state.v.dtype
-        return AdExState(v.astype(dtype), w.astype(dtype), refractory.astype(dtype)), Spikes(fired, offset)
+        return AdExState(v.astype(dtype), w.astype(dtype), refractory.astype(dtype)), Output(fired, offset)
 
     def is_refractory(self, state: AdExState, dt: float) -> jax.Array:
         return state.refractory > dt / 2
@@ -305,6 +307,7 @@ class Izhikevich:
     gates: Mapping[str, MgBlock] = struct.field(pytree_node=False,
                                                 default_factory=lambda: {"nmda": MgBlock()})
     surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
+    graded = False
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> IzhikevichState:
         dtype = membrane_dtype(dtype)
@@ -312,7 +315,7 @@ class Izhikevich:
         return IzhikevichState(v, self.b * v)
 
     def step(self, state: IzhikevichState, inputs: SynapticInput,
-             dt: float) -> tuple[IzhikevichState, Spikes]:
+             dt: float) -> tuple[IzhikevichState, Output]:
         current = inputs.current_at(0.0)
 
         k2, k1, k0 = self.quadratic
@@ -341,7 +344,7 @@ class Izhikevich:
         offset = jnp.where(fired > 0, crossing(state.v, v, self.v_th), 1.0)
         dtype = state.v.dtype
         return (IzhikevichState(reset.astype(dtype), (u + fired * self.d).astype(dtype)),
-                Spikes(fired, offset))
+                Output(fired, offset))
 
     def is_refractory(self, state: IzhikevichState, dt: float) -> jax.Array:
         return jnp.zeros(jnp.shape(state.v), bool)
@@ -471,6 +474,7 @@ class HodgkinHuxley:
     gates: Mapping[str, MgBlock] = struct.field(pytree_node=False,
                                                 default_factory=lambda: {"nmda": MgBlock()})
     surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
+    graded = False
 
     @staticmethod
     def rates(v: jax.Array) -> tuple[tuple[jax.Array, jax.Array], ...]:
@@ -487,7 +491,7 @@ class HodgkinHuxley:
         return HodgkinHuxleyState(v, m, h, n, jnp.zeros(shape, dtype))
 
     def step(self, state: HodgkinHuxleyState, inputs: SynapticInput,
-             dt: float) -> tuple[HodgkinHuxleyState, Spikes]:
+             dt: float) -> tuple[HodgkinHuxleyState, Output]:
         g_syn, syn_drive = _synaptic(self, inputs, state.v)
         count = substeps(dt, self.substep)
         step = dt / count
@@ -536,7 +540,7 @@ class HodgkinHuxley:
         dtype = state.v.dtype
         new = HodgkinHuxleyState(*(x.astype(dtype) for x in (v, m, h, n, refractory)))
         # The peak is found a step late, so the spike is stamped at the step's end.
-        return new, Spikes(fired, jnp.ones_like(fired))
+        return new, Output(fired, jnp.ones_like(fired))
 
     def is_refractory(self, state: HodgkinHuxleyState, dt: float) -> jax.Array:
         return state.refractory > dt / 2

@@ -64,7 +64,7 @@ def nest_run(cell, model, sign=1.0):
         inputs = Arrivals(jnp.full(arrivals["ex"].shape, param(model, "I_e")),
                           {k: jnp.asarray(v) for k, v in arrivals.items()})
         (spikes, v), _ = run(cell, inputs, dt=DT, record=lambda state: state.neuron.v)
-    return np.asarray(spikes.fired), np.asarray(v)
+    return np.asarray(spikes.value), np.asarray(v)
 
 
 @pytest.mark.parametrize(("model", "synapse"), [("iaf_psc_exp", Exponential), ("iaf_psc_alpha", Alpha)])
@@ -178,7 +178,7 @@ def naud_spikes(name, **overrides):
     steps = len(NEST[f"naud/{name}/spikes"])
     with jax.enable_x64(new_val=True):
         spikes, _ = run(neuron, SynapticInput(jnp.full((steps, 1), current)), dt=DT)
-    return np.flatnonzero(np.asarray(spikes.fired[:, 0]))
+    return np.flatnonzero(np.asarray(spikes.value[:, 0]))
 
 
 @pytest.mark.parametrize("name", [name for name in NAUD if name != "irregular"])
@@ -255,7 +255,7 @@ def izhikevich_run(kind, label, exact=False):
         inputs = SynapticInput(jnp.full((steps, 1), 10.0))
         neuron = izhikevich_2003(kind, scheme=scheme, order="nest")
         (spikes, v), _ = run(neuron, inputs, dt=dt, record=lambda state: state.v)
-    return np.asarray(spikes.fired[:, 0]), np.asarray(v[:, 0])
+    return np.asarray(spikes.value[:, 0]), np.asarray(v[:, 0])
 
 
 @pytest.mark.parametrize("kind", ["regular_spiking", "fast_spiking", "resonator"])
@@ -292,7 +292,7 @@ def test_izhikevich_delta_input_matches_nest(scheme):
                   else SynapticInput(4.0 + arrivals))
         (spikes, v), _ = run(izhikevich_2003("regular_spiking", scheme=scheme, order="nest"), inputs, dt=0.1,
                                    record=lambda state: state.v)
-    np.testing.assert_array_equal(np.asarray(spikes.fired), NEST[f"{case}/spikes"])
+    np.testing.assert_array_equal(np.asarray(spikes.value), NEST[f"{case}/spikes"])
     np.testing.assert_allclose(np.asarray(v), NEST[f"{case}/v"], atol=1e-9)  # observed 2.5e-10
 
 
@@ -317,7 +317,7 @@ def test_izhikevich_2004_patterns_are_his_codes_runs(panel, pattern):
         state = IzhikevichState(jnp.asarray([case["V0"]]), jnp.asarray([case["u0"]]))
         (spikes, v), _ = run(neuron, SynapticInput(jnp.asarray(case["II"])[:, None]), dt=float(case["tau"]),
                                    state=state, record=lambda state: state.v)
-    fired, v = np.asarray(spikes.fired[:, 0]) > 0, np.asarray(v[:, 0])
+    fired, v = np.asarray(spikes.value[:, 0]) > 0, np.asarray(v[:, 0])
     theirs = case["VV"] == 30
     assert theirs.any()
     np.testing.assert_array_equal(np.flatnonzero(fired), np.flatnonzero(theirs))
@@ -332,7 +332,7 @@ def hh_under_currents(steps, **fields):
     with jax.enable_x64(new_val=True):
         inputs = SynapticInput(jnp.broadcast_to(jnp.asarray(currents, jnp.float64), (steps, len(currents))))
         (spikes, v), _ = run(HodgkinHuxley(**fields), inputs, dt=DT, record=lambda state: state.v)
-    return np.asarray(spikes.fired), np.asarray(v)
+    return np.asarray(spikes.value), np.asarray(v)
 
 
 def spike_shift(fired, expected):

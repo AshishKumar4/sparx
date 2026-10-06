@@ -56,7 +56,7 @@ import jax.numpy as jnp
 import numpy as np
 from flax import struct
 
-from sparx.dynamics import Reset, Spikes, SynapticInput
+from sparx.dynamics import Output, Reset, SynapticInput
 from sparx.dynamics.core import membrane_dtype
 from sparx.nn import IF, STATE, Flatten, Neuron
 
@@ -87,15 +87,16 @@ class _Gate:
 
     window: Pair = struct.field(pytree_node=False)
     strides: Pair = struct.field(pytree_node=False)
+    graded = False
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> jax.Array:
         return jnp.zeros(shape, membrane_dtype(dtype))
 
-    def step(self, state: jax.Array, inputs: SynapticInput, dt: float) -> tuple[jax.Array, Spikes]:
+    def step(self, state: jax.Array, inputs: SynapticInput, dt: float) -> tuple[jax.Array, Output]:
         spikes = jnp.asarray(inputs.jump)
         winner = jnp.argmax(_windows(state, self.window, self.strides), axis=-1)
         out = jnp.take_along_axis(_windows(spikes, self.window, self.strides), winner[..., None], -1)[..., 0]
-        return state + spikes, Spikes(out, jnp.ones_like(out))
+        return state + spikes, Output(out, jnp.ones_like(out))
 
     def is_refractory(self, state: jax.Array, dt: float) -> jax.Array:
         return jnp.zeros(state.shape, bool)

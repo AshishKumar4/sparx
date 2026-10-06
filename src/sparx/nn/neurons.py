@@ -1,8 +1,9 @@
 """Spiking neuron layers for Flax linen, over time-major inputs `[T, ...]`.
 
-A neuron layer turns its input `[T, ...]` into spikes `[T, ...]`. It has
-no weights of its own beyond optional learnable time constants; the synapses
-are ordinary Flax layers. `nn.Dense`, `nn.Conv`, `nn.BatchNorm` and the
+A neuron layer turns its input `[T, ...]` into spikes `[T, ...]`, or into
+graded values for a graded model (the readout `LI`). It has no weights of
+its own beyond optional learnable time constants; the synapses are
+ordinary Flax layers. `nn.Dense`, `nn.Conv`, `nn.BatchNorm` and the
 pooling functions all treat leading axes as batch axes, so they apply to
 every time step at once, as one large matrix product, and only the neurons'
 elementwise recurrence runs step by step:
@@ -84,19 +85,15 @@ class Neuron(nn.Module):
     A subclass says how to build its model (`sparx.dynamics.NeuronModel`)
     from the input, declaring any parameters there; this base runs it with
     `sparx.dynamics.run`, carries the `"state"` collection and sows
-    `"spike_rates"`. The input reaches the model as `inputs(x)` says, a
-    jump of the membrane unless a subclass says otherwise. `dt` is the step
+    `"spike_rates"` for a spiking model. The input reaches the model as
+    `inputs(x)` says, a jump of the membrane unless a subclass says
+    otherwise. `dt` is the step
     in the unit of the model's time constants. `unroll` is the number of
     time steps one iteration of the compiled loop holds (`jax.lax.scan`).
     """
 
     dt: float = dataclasses.field(default=1.0, kw_only=True)
     unroll: int = dataclasses.field(default=1, kw_only=True)
-
-    @property
-    def spiking(self) -> bool:
-        """Whether the layer emits spikes; a readout that returns its membrane (`LI`) does not."""
-        return True
 
     def build(self, x: jax.Array) -> NeuronModel:
         """The model for inputs like `x`, `[T, ..., features]`."""
@@ -118,14 +115,14 @@ class Neuron(nn.Module):
     def run(self, model: NeuronModel, x: jax.Array) -> jax.Array:
         carrying = self.is_mutable_collection(STATE) and not self.is_initializing()
         state = self.get_variable(STATE, "carry") if carrying else None
-        spikes, final = run(model, self.inputs(x), state, dt=self.dt, unroll=self.unroll)
+        out, final = run(model, self.inputs(x), state, dt=self.dt, unroll=self.unroll)
         if carrying:
             self.put_variable(STATE, "carry", final)
-        if not self.spiking:
-            return spikes.fired
-        outputs = spikes.fired.astype(x.dtype)
-        record_rates(self, outputs)
-        return outputs
+        if model.graded:
+            return out.value
+        spikes = out.value.astype(x.dtype)
+        record_rates(self, spikes)
+        return spikes
 
 
 def record_rates(module: nn.Module, spikes: jax.Array) -> None:
@@ -222,10 +219,6 @@ class LI(Neuron):
 
     tau: float = 2.0
     learn_tau: bool = False
-
-    @property
-    def spiking(self) -> bool:
-        return False
 
     def build(self, x: jax.Array) -> LICell:
         return LICell(_decay(self, "decay", self.tau, self.learn_tau, x.shape[-1]))
@@ -363,10 +356,6 @@ class Recurrent(Neuron):
     neuron: Neuron = LIF()
     kernel_init: nn.initializers.Initializer = nn.initializers.orthogonal()
     precision: PrecisionLike = None
-
-    @property
-    def spiking(self) -> bool:
-        return self.neuron.spiking
 
     def inputs(self, x: jax.Array) -> SynapticInput:
         return self.neuron.inputs(x)

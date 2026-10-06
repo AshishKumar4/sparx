@@ -40,7 +40,7 @@ def test_lif_matches_spikingjelly_lifnode_without_input_decay(name, reset, detac
 
     def weighted(x):
         out, state = run(cell, x)
-        spikes = out.fired
+        spikes = out.value
         return jnp.sum(spikes * c["weights"]), (spikes, state)
 
     grad_x, (spikes, state) = jax.grad(weighted, has_aux=True)(jnp.asarray(c["x"]))
@@ -117,7 +117,7 @@ def test_lif_and_synaptic_match_snntorch_with_an_immediate_reset(name, cell, res
     expected = _snntorch_case(f"neuron_x/{name}_{reset}_immediate")
 
     def weighted(x):
-        spikes = run(cell(reset), x)[0].fired
+        spikes = run(cell(reset), x)[0].value
         return jnp.sum(spikes * SNNTORCH["neuron_weights"]), spikes
 
     grad_x, spikes = jax.grad(weighted, has_aux=True)(jnp.asarray(SNNTORCH["neuron_x"]))

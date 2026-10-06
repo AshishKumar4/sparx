@@ -165,13 +165,13 @@ A call without `mutable=["state"]` starts every neuron at rest. `SlidingPSN` str
 
 ## Pure JAX models
 
-The layers build neuron models from `sparx.dynamics`, which run without Flax modules. Every model, from the dimensionless `LIFCell` to the physical `AdEx`, has `init_state(shape, dtype)` and `step(state, SynapticInput, dt) -> (state, Spikes)`, and `sparx.run` scans one over time. An array input is a jump of the membrane each step, the dimensionless family's input:
+The layers build neuron models from `sparx.dynamics`, which run without Flax modules. Every model, from the dimensionless `LIFCell` to the physical `AdEx`, has `init_state(shape, dtype)` and `step(state, SynapticInput, dt) -> (state, Output)`, and `sparx.run` scans one over time. `Output.value` holds the spikes, or a graded value for a model whose `graded` is True. An array input is a jump of the membrane each step, the dimensionless family's input:
 
 ```python
 from sparx.dynamics import ALIFCell, LICell, LIFCell, RecurrentCell, Serial, decay
 
 cell = LIFCell(decay=decay(tau=10.0), threshold=1.0, reset="subtract")
-spikes, state = sparx.run(cell, currents)          # currents [T, ...]; spikes.fired [T, ...]
+spikes, state = sparx.run(cell, currents)          # currents [T, ...]; spikes.value [T, ...]
 more, state = sparx.run(cell, next_currents, state)  # continues where it stopped
 
 synaptic = Serial(LICell(decay(5.0)), LIFCell(decay(10.0)))  # a synaptic current, then the membrane

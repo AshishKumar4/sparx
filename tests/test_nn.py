@@ -173,7 +173,7 @@ def test_bf16_networks_spike_in_bf16():
     x = inputs(10).astype(jnp.bfloat16)
     out = LIF().apply({}, x)
     assert out.dtype == jnp.bfloat16
-    np.testing.assert_array_equal(out, run(LIFCell(decay(2.0)), x)[0].fired)
+    np.testing.assert_array_equal(out, run(LIFCell(decay(2.0)), x)[0].value)
 
 
 @pytest.mark.parametrize("tau", [0.0, -1.0])
@@ -202,7 +202,7 @@ def test_a_physical_model_runs_as_a_layer_and_streams():
     x = jnp.asarray(np.random.default_rng(11).normal(900.0, 300.0, (1000, 2, 3)), jnp.float32)
     layer = Dynamics(AdEx(), dt=0.1)
     out = layer.apply({}, x)
-    expected = run(AdEx(), SynapticInput(current=x), dt=0.1)[0].fired
+    expected = run(AdEx(), SynapticInput(current=x), dt=0.1)[0].value
     np.testing.assert_array_equal(out, expected)
     assert out.dtype == x.dtype and int(out.sum()) > 20
     head, carried = layer.apply({}, x[:350], mutable=[STATE])
@@ -235,5 +235,5 @@ def test_a_steep_surrogate_keeps_the_gradient_through_adex_bounded():
 
 def test_izhikevich_layer_is_the_dynamics_model_on_currents():
     x = jnp.asarray(np.random.default_rng(12).normal(10.0, 3.0, (300, 2, 3)), jnp.float32)
-    expected = run(IzhikevichModel(c=-55.0, v_init=-55.0), SynapticInput(current=x))[0].fired
+    expected = run(IzhikevichModel(c=-55.0, v_init=-55.0), SynapticInput(current=x))[0].value
     np.testing.assert_array_equal(Izhikevich(c=-55.0).apply({}, x), expected)

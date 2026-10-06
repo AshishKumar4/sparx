@@ -58,7 +58,7 @@ A dynamical model is a struct dataclass of its parameters (leaves, so they can b
 ```python
 class NeuronModel(Protocol[State]):
     def init_state(self, shape, dtype) -> State: ...
-    def step(self, state: State, inputs: SynapticInput, dt: float) -> tuple[State, Spikes]: ...
+    def step(self, state: State, inputs: SynapticInput, dt: float) -> tuple[State, Output]: ...
 
 @struct.dataclass
 class SynapticInput:
@@ -67,6 +67,8 @@ class SynapticInput:
 ```
 
 Neuron models read conductances together with their own reversal potentials, so conductance-based input is computed against the neuron's voltage at the step, not approximated as a current. A deep-learning layer passes only `current`.
+
+Today the output is `Output(value, offset)`, spikes of 0 or 1 for a spiking model and a real value each step for one whose static `graded` is True (a non-spiking neuron's transmitter release, a rate unit's activity), so the network delivers spikes as events and graded values through edge or dense delivery.
 
 Today's cells (`LIFCell`, `ALIFCell`, ...) become these models with `dt` explicit. Their numerics are already the exact exponential solution of the leak for `dt = 1`, so existing behavior is preserved.
 

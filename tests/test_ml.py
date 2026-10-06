@@ -27,7 +27,7 @@ def currents(seed=0, scale=0.8, shape=(T, B, F)):
 def fired(model, xs, state=None, **kwargs):
     """The spikes `[T, ...]` of `model` over `xs`, and its final state."""
     spikes, state = run(model, xs, state, **kwargs)
-    return spikes.fired, state
+    return spikes.value, state
 
 
 # Spikes are compared exactly, so the float32 scan and the float64 loop
@@ -91,6 +91,13 @@ def test_a_dimensionless_model_refuses_currents():
         run(LIFCell(0.8), SynapticInput(current=xs))
     with pytest.raises(ValueError, match="jump"):
         run(LIFCell(0.8), SynapticInput(jump=xs, currents=(Term(xs, xs, 5.0),)))
+
+
+def test_the_graded_models_say_so_and_the_spiking_ones_do_not():
+    assert LICell(0.5).graded
+    assert not LIFCell(0.5).graded and not ALIFCell(0.5, 0.9).graded
+    assert Serial(LIFCell(0.5), LICell(0.5)).graded and not Serial(LICell(0.5), LIFCell(0.5)).graded
+    assert RecurrentCell(LICell(0.5), jnp.eye(2)).graded
 
 
 def test_alif_matches_the_reference_loop():
@@ -213,7 +220,7 @@ def test_recurrent_bf16_carry_keeps_its_dtype():
     model = RecurrentCell(LIFCell(0.8), jnp.eye(F, dtype=jnp.float32) * 0.2)
     spikes, state = fired(model, xs)
     assert spikes.dtype == jnp.bfloat16
-    assert state.spikes.dtype == jnp.bfloat16
+    assert state.output.dtype == jnp.bfloat16
 
 
 def _two_step_gradient(detach_reset):

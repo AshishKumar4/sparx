@@ -344,7 +344,7 @@ def test_a_population_of_a_dimensionless_model_is_that_model_on_its_delta_inputs
     records, _ = network.apply(network.init(jax.random.key(0)), {"drive": drive},
                                monitors={"a": SpikeRaster("a")}, mutable=["state"])
     fired = records["a"]
-    expected = run(alif, jnp.asarray(drive, jnp.float32))[0].fired
+    expected = run(alif, jnp.asarray(drive, jnp.float32))[0].value
     np.testing.assert_array_equal(np.asarray(fired), np.asarray(expected) > 0)
     assert 20 < int(expected.sum()) < steps * size // 2  # it fires, and adaptation holds it back
 

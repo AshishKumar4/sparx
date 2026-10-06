@@ -2,7 +2,8 @@
 
 Every neuron model meets one contract (`sparx.dynamics.core`):
 `init_state(shape, dtype)` and `step(state, SynapticInput, dt) -> (state,
-Spikes)`, and `run(model, inputs)` scans one over time. Two families meet
+Output)`, and `run(model, inputs)` scans one over time. A model's output is
+its spikes, or a graded value each step when the model is `graded`. Two families meet
 it. `sparx.dynamics.ml` holds the dimensionless, one-step-is-one-unit
 models deep spiking networks train with: soft resets, detached resets,
 learnable decays, input as a jump of the membrane. `sparx.dynamics.neurons`
@@ -17,7 +18,7 @@ models share (`fire`, `exact_linear`, `rk4`, `substeps` and the rest), which
 a new model is written with, stays in `sparx.dynamics.core`.
 """
 
-from sparx.dynamics.core import Model, NeuronModel, Reset, Spikes, SynapticInput, Term, decay, run
+from sparx.dynamics.core import Model, NeuronModel, Output, Reset, SynapticInput, Term, decay, run
 from sparx.dynamics.ml import (
     ALIFCell,
     ALIFState,
@@ -92,6 +93,7 @@ __all__ = [
     "MgBlock",
     "Model",
     "NeuronModel",
+    "Output",
     "PairSTDP",
     "Plasticity",
     "PointNeuron",
@@ -102,7 +104,6 @@ __all__ = [
     "Reset",
     "STDPTraces",
     "Serial",
-    "Spikes",
     "SynapseModel",
     "SynapticInput",
     "Term",

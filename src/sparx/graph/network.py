@@ -20,7 +20,7 @@ variables are split by role (design.md section 5.1):
 | --- | --- |
 | `connectome` | each projection's edges, delays, and its weights unless trainable |
 | `params` | the weights of trainable projections |
-| `state` | per population, neuron and synapse states and a ring buffer of recent spikes; per plastic |
+| `state` | per population, neuron and synapse states and a ring buffer of recent outputs; per plastic |
 |         | projection, traces and weights; per depressing projection, release; the step count |
 
 `Network.connections(variables)` reads every projection's edges, weights
@@ -32,16 +32,22 @@ reversal potential in its neuron model, and each neuron model accepts what
 its receptors and inputs deliver, so a dimensionless model given a kinetic
 synapse is refused before any step runs.
 
+A population sends what its neuron model outputs (`sparx.dynamics.Output`):
+spikes, or a graded value every step for a graded model (an `LICell`'s
+membrane). A projection from a graded population delivers the weighted
+values through dense or edge delivery; event delivery, which skips the
+neurons that did not fire, is for spikes only.
+
 One step covers `(t, t + dt]` and runs in NEST's order, which the
 single-neuron tests pin against NEST and Brian2 (`sparx.dynamics.core`):
 
 1. Delta synapses deliver the spikes due at the end of the step as
    voltage jumps.
 2. Each population advances its membranes on its synapses' output and
-   detects spikes.
-3. The spikes enter each population's ring buffer.
-4. Every other synapse receives the spikes due at the end of the step,
-   which shape the membrane from the next step on.
+   emits its output (spikes, or graded values).
+3. The outputs enter each population's ring buffer.
+4. Every other synapse receives what is due at the end of the step, which
+   shapes the membrane from the next step on.
 5. Plasticity updates traces and weights.
 6. Monitors record.
 
@@ -72,9 +78,9 @@ from sparx.dynamics.synapses import PointNeuron, PointNeuronState, Receptor
 from sparx.graph.connectivity import Connectivity, EdgeList
 
 __all__ = ["ArrivalInput", "Connections", "CurrentInput", "Drive", "Monitor", "Network", "NetworkState",
-           "PerEdge", "PerNeuron", "PlasticState", "PoissonInput", "Population", "PopulationRate",
-           "PopulationState", "Projection", "ReleaseState", "Reversing", "SpikeCounts", "SpikeRaster",
-           "SpikeTimes", "StateMonitor", "whole_steps"]
+           "OutputTrace", "PerEdge", "PerNeuron", "PlasticState", "PoissonInput", "Population",
+           "PopulationRate", "PopulationState", "Projection", "ReleaseState", "Reversing", "SpikeCounts",
+           "SpikeRaster", "SpikeTimes", "StateMonitor", "whole_steps"]
 
 DENSE_LIMIT = 2 ** 25
 EVENT_BLOCK = 4096
@@ -155,6 +161,11 @@ class Population:
         return PointNeuron(self.neuron, self.receptors, hold=self.hold, reset_synapses=self.reset_synapses,
                            freeze_synapses=self.freeze_synapses)
 
+    @property
+    def graded(self) -> bool:
+        """Whether the population sends a graded value every step, as its neuron model says."""
+        return self.neuron.graded
+
 
 @dataclass(frozen=True)
 class Projection:
@@ -167,7 +178,9 @@ class Projection:
     (a `Plasticity` rule, pair or triplet STDP) makes the weights state that
     evolves with the spikes; `short_term` scales each spike by its
     presynaptic neuron's release. `trainable` puts fixed weights in
-    `params` for gradient training.
+    `params` for gradient training. A projection from a graded population
+    transmits `weight` times the presynaptic value every step, and takes
+    none of the spike-driven options.
     """
 
     pre: str
@@ -186,7 +199,8 @@ class Projection:
     one delay and fixed weights when it has at most `DENSE_LIMIT` entries and a density of at least
     `DENSE_DENSITY`, where a matrix product costs less than the gather on CPUs and accelerators.
     `"events"` visits only the edges of neurons that spiked, for large graphs with sparse activity
-    (connectomes): its cost per step is the spiking neurons' out-degree, not the edge count."""
+    (connectomes): its cost per step is the spiking neurons' out-degree, not the edge count. A graded
+    population has no silent neurons to skip, so its projections are edges or dense."""
     capacity: int = 4096
     """For `format="events"`: the most presynaptic neurons spiking in one step that a step delivers. A step
     over capacity is counted, and `simulate` raises. Their edges have no limit."""
@@ -233,7 +247,7 @@ class ArrivalInput:
 
 
 class Monitor:
-    """Something recorded every step: `record(spikes, states, dt)` with spikes and states keyed by
+    """Something recorded every step: `record(outputs, states, dt)` with outputs and states keyed by
     population, and `dt` the step in ms.
 
     A record is one array per step, stacked over the run into `[T, ...]`.
@@ -245,7 +259,7 @@ class Monitor:
 
     accumulate: bool = False
 
-    def record(self, spikes: Mapping[str, jax.Array], states: Mapping[str, PointNeuronState],
+    def record(self, outputs: Mapping[str, jax.Array], states: Mapping[str, PointNeuronState],
                dt: float) -> jax.Array:
         raise NotImplementedError
 
@@ -256,8 +270,8 @@ class SpikeRaster(Monitor):
 
     population: str
 
-    def record(self, spikes, states, dt):
-        return spikes[self.population] > 0
+    def record(self, outputs, states, dt):
+        return outputs[self.population] > 0
 
 
 @dataclass(frozen=True)
@@ -267,8 +281,8 @@ class SpikeCounts(Monitor):
     population: str
     accumulate = True
 
-    def record(self, spikes, states, dt):
-        return (spikes[self.population] > 0).astype(jnp.int32)
+    def record(self, outputs, states, dt):
+        return (outputs[self.population] > 0).astype(jnp.int32)
 
 
 @dataclass(frozen=True)
@@ -279,8 +293,8 @@ class SpikeTimes(Monitor):
     population: str
     capacity: int = 64
 
-    def record(self, spikes, states, dt):
-        fired = spikes[self.population] > 0
+    def record(self, outputs, states, dt):
+        fired = outputs[self.population] > 0
         return jnp.nonzero(fired, size=self.capacity, fill_value=-1)[0].astype(jnp.int32)
 
 
@@ -295,8 +309,25 @@ class PopulationRate(Monitor):
 
     population: str
 
-    def record(self, spikes, states, dt):
-        return jnp.mean(spikes[self.population]) * (1000.0 / dt)
+    def record(self, outputs, states, dt):
+        return jnp.mean(outputs[self.population]) * (1000.0 / dt)
+
+
+@dataclass(frozen=True)
+class OutputTrace(Monitor):
+    """What `population` sends each step, for the neurons `neurons` (indices) or all of them: a graded
+    population's values, or a spiking one's spikes as 0 and 1."""
+
+    population: str
+    neurons: tuple[int, ...] | None = None
+
+    def record(self, outputs, states, dt):
+        values = outputs[self.population]
+        return values if self.neurons is None else values[np.asarray(self.neurons)]
+
+
+_SPIKE_MONITORS = (SpikeRaster, SpikeCounts, SpikeTimes, PopulationRate)
+"""The monitors that read a population's output as spikes, and so refuse a graded population."""
 
 
 @runtime_checkable
@@ -355,7 +386,7 @@ class StateMonitor(Monitor):
     read: Callable[[PointNeuronState], jax.Array] = _membrane
     neurons: tuple[int, ...] | None = None
 
-    def record(self, spikes, states, dt):
+    def record(self, outputs, states, dt):
         values = self.read(states[self.population])
         return values if self.neurons is None else values[np.asarray(self.neurons)]
 
@@ -542,6 +573,35 @@ def _check_initial(population: Population, rest: PointNeuronState) -> None:
                              f"receptor; it can set {known}")
 
 
+def _check_graded(p: Projection, pre: Population, post: Population) -> None:
+    """Refuse a projection whose delivery does not fit what its presynaptic population sends.
+
+    A graded population sends a value every step, so the spike-driven
+    options (events, plasticity, short-term release) have no spike to act
+    on.
+    """
+    if not pre.graded:
+        if p.plasticity is not None and post.graded:
+            raise ValueError(f"{p.key}: plasticity pairs spikes, and population {p.post!r} is graded")
+        return
+    if p.format == "events":
+        raise ValueError(f"{p.key}: population {p.pre!r} is graded, and event delivery visits only neurons "
+                         f"that spiked; use format 'edges' or 'dense'")
+    for option in ("plasticity", "short_term"):
+        if getattr(p, option) is not None:
+            raise ValueError(f"{p.key}: {option} acts on spikes, and population {p.pre!r} is graded")
+
+
+def _check_sources(network: Network, populations: Mapping[str, Population]) -> None:
+    """Refuse inputs onto unknown populations or receptors."""
+    for source in network.inputs:
+        if source.target not in populations:
+            raise ValueError(f"input onto unknown population {source.target!r}")
+        if isinstance(source, CurrentInput):
+            continue
+        _check_receptor(populations[source.target], source.receptor, f"a {type(source).__name__}")
+
+
 def _check_population(population: Population, current: bool, dt: float) -> None:
     _check_conductances(population)
     # The checks read the state's structure, which is the same in every dtype; float32 traces whether or
@@ -575,11 +635,8 @@ class Network(nn.Module):
                 if side not in populations:
                     raise ValueError(f"projection {p.key} names unknown population {side!r}")
             _check_receptor(populations[p.post], p.receptor, f"projection {p.key}")
-        for source in self.inputs:
-            if source.target not in populations:
-                raise ValueError(f"input onto unknown population {source.target!r}")
-            if not isinstance(source, CurrentInput):
-                _check_receptor(populations[source.target], source.receptor, f"a {type(source).__name__}")
+            _check_graded(p, populations[p.pre], populations[p.post])
+        _check_sources(self, populations)
         currents = {source.target for source in self.inputs if isinstance(source, CurrentInput)}
         for population in self.populations:
             _check_population(population, population.name in currents, self.dt)
@@ -624,7 +681,7 @@ class Network(nn.Module):
         return built
 
     def _lags(self, edges) -> dict[str, int]:
-        """How many steps of spikes each population's ring buffer keeps."""
+        """How many steps of output each population's ring buffer keeps."""
         lags = {p.name: 1 for p in self.populations}
         for p in self.projections:
             if np.size(edges[p.key]["delay"]):
@@ -729,6 +786,7 @@ class Network(nn.Module):
         if steps is None and not timed:
             raise ValueError("pass `steps` or a time-major `drive`")
         length: int = steps if steps is not None else timed[0]
+        _check_monitors(monitors, populations)
         key = None
         if any(isinstance(s, PoissonInput) for s in self.inputs):
             if not self.has_rng("noise"):
@@ -741,6 +799,14 @@ class Network(nn.Module):
                 for name, value in drive.items()}
         state.value, records = _scan(stepper, state.value, held, length, monitors)
         return records
+
+
+def _check_monitors(monitors: Mapping[str, Monitor], populations: Mapping[str, Population]) -> None:
+    """Refuse a monitor that reads spikes from a graded population."""
+    for name, m in monitors.items():
+        if isinstance(m, _SPIKE_MONITORS) and populations[m.population].graded:
+            raise ValueError(f"monitor {name!r} ({type(m).__name__}) reads spikes, and population "
+                             f"{m.population!r} is graded; record it with OutputTrace")
 
 
 def _scan(stepper: _Stepper, state: NetworkState, held: Mapping[str, jax.Array], steps: int,
@@ -777,7 +843,7 @@ class _Stepper:
         return self.populations[population].receptors[receptor].synapse.lands == "before_threshold"
 
     def deliver(self, t, p: Projection, weight, ring) -> jax.Array:
-        """Weighted spikes of `p` due at the end of step `t`, summed per postsynaptic neuron."""
+        """Weighted outputs of `p` due at the end of step `t`, summed per postsynaptic neuron."""
         e = self.edges[p.key]
         if "by_pre" in e:
             return self.events(p, e, weight, ring[(t - e["delay"]) % ring.shape[0]])
@@ -893,24 +959,24 @@ class _Stepper:
                     for p in projections}
 
         # 1-2. Delta jumps due now, then the membranes.
-        moved, fired = {}, {}
+        moved, outputs = {}, {}
         frozen = {name: pop.point_neuron.frozen(pops[name]["point_neuron"], self.dt)
                   for name, pop in self.populations.items()}
         before = rings({name: pops[name]["buffer"] for name in self.populations})
         for name, pop in self.populations.items():
             jumps = pop.point_neuron.delta(self.gather(name, t, external[name], before, weights, delta=True))
-            moved[name], spikes = pop.point_neuron.advance(
+            moved[name], out = pop.point_neuron.advance(
                 pops[name]["point_neuron"], currents.get(name, 0.0), jumps, self.dt)
-            fired[name] = spikes.fired
+            outputs[name] = out.value
 
-        # 3. Spikes into the ring buffers; short-term release scales them as they are sent.
+        # 3. Outputs into the ring buffers; short-term release scales spikes as they are sent.
         buffers = {}
         for name in self.populations:
             ring = pops[name]["buffer"]
-            buffers[name] = ring.at[t % ring.shape[0]].set(fired[name].astype(ring.dtype))
+            buffers[name] = ring.at[t % ring.shape[0]].set(outputs[name].astype(ring.dtype))
         for p in projections:
             if p.short_term is not None:
-                release, efficacy = p.short_term.step(short_term[p.key]["release"], fired[p.pre], self.dt)
+                release, efficacy = p.short_term.step(short_term[p.key]["release"], outputs[p.pre], self.dt)
                 ring = short_term[p.key]["buffer"]
                 short_term[p.key] = {"release": release,
                                      "buffer": ring.at[t % ring.shape[0]].set(efficacy.astype(ring.dtype))}
@@ -920,13 +986,13 @@ class _Stepper:
         new_pops: dict[str, PopulationState] = {}
         for name, pop in self.populations.items():
             due = self.gather(name, t, external[name], after, weights, delta=False)
-            point_neuron = pop.point_neuron.receive(moved[name], due, self.dt, fired[name], frozen[name])
+            point_neuron = pop.point_neuron.receive(moved[name], due, self.dt, outputs[name], frozen[name])
             new_pops[name] = {"point_neuron": point_neuron, "buffer": buffers[name]}
 
         # 5-6. Plasticity, then monitors.
-        self.plasticity(t, plastic, fired, buffers)
+        self.plasticity(t, plastic, outputs, buffers)
         states = {n: v["point_neuron"] for n, v in new_pops.items()}
-        records = {name: m.record(fired, states, self.dt) for name, m in self.monitors.items()}
+        records = {name: m.record(outputs, states, self.dt) for name, m in self.monitors.items()}
         overflow = {k: v + self.overflowed.get(k, jnp.zeros((), bool)).astype(jnp.int32)
                     for k, v in state["overflow"].items()}
         return {"populations": new_pops, "plastic": plastic, "short_term": short_term, "overflow": overflow,
