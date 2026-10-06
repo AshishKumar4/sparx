@@ -6,7 +6,7 @@ Sparx builds spiking networks out of ordinary Flax linen layers and a small set 
 
 Sparx also simulates circuits as neuroscience states them: neuron models in physical units (LIF, AdEx, Izhikevich, Hodgkin-Huxley), receptor kinetics and plasticity (`sparx.dynamics`), wired into populations and projections with delays (`sparx.graph`). These match NEST and Brian2, spike for spike where the models are deterministic and statistically where they are chaotic.
 
-`import sparx` reaches every part: `sparx.nn`, `sparx.models`, `sparx.dynamics` and the other modules a network is built from load with it, and `sparx.graph`, `sparx.learn`, `sparx.dew`, `sparx.datasets`, `sparx.serve` and `sparx.nir` load the first time they are used.
+`import sparx` reaches every part: `sparx.nn`, `sparx.models`, `sparx.dynamics` and the other modules a network is built from load with it, and `sparx.graph`, `sparx.learn`, `sparx.objectives`, `sparx.metrics`, `sparx.tasks`, `sparx.optim`, `sparx.datasets`, `sparx.serve` and `sparx.nir` load the first time they are used.
 
 APIs can change before 1.0.
 
@@ -62,7 +62,7 @@ def loss(params):
 grads = jax.grad(loss)(params)
 ```
 
-`LIF` turns input currents into spikes, exactly 0 or 1, and `LI` is a leaky integrator whose membrane is the readout. The rest is Flax and optax. [`examples/train_mnist.py`](examples/train_mnist.py) is this network trained to completion with a plain JAX loop.
+`LIF` turns input currents into spikes, exactly 0 or 1, and `LI` is a leaky integrator whose membrane is the readout. The rest is Flax and optax. [`examples/train_mnist.py`](examples/train_mnist.py) trains a network like it, with a second hidden layer, to completion under dew's `Trainer` ([Training with dew](#training-with-dew)).
 
 ## How a network runs over time
 
@@ -182,39 +182,44 @@ A model stores its decay per unit of time and a step of `dt` (`sparx.run(..., dt
 
 ## Training with dew
 
-`sparx.dew.SpikingClassifier` is a dew objective. It encodes a batch field into spikes, runs the network, and scores its outputs against the labels, so a spiking network trains under dew's `Trainer` with its checkpoints, EMA, evaluation and display. The tests run it on one CPU device; multi-device meshes have not been tried yet.
+`sparx.objectives.SpikingClassifierObjective` is a dew objective. It encodes a batch field into spikes, runs the network, and scores its outputs against the labels, so a spiking network trains under dew's `Trainer` with its checkpoints, EMA, evaluation and display. The model takes `train`, as dew's models do. The tests train it on one CPU device and on eight simulated CPU devices; no real multi-device mesh has been tried.
 
 ```python
 import optax
 from dew import Checkpoints, Field, Trainer
 from dew.data import Dataset
 
-from sparx.datasets import shd
-from sparx.dew import RateBand, SpikingClassifier, accuracy
+from sparx.datasets import evaluation_pass, shd
 from sparx.encode import Events
+from sparx.metrics import Accuracy
+from sparx.models import SpikingMLP
+from sparx.nn import ALIF
+from sparx.objectives import RateBand, SpikingClassifierObjective
 
 train, test = shd("train"), shd("test")           # {"spikes": [N, 100, 700], "label": [N]}
-objective = SpikingClassifier(
+net = SpikingMLP(hidden=(256,), classes=20, neuron=ALIF(tau=5.0, tau_adapt=20.0, learn_tau=True))
+objective = SpikingClassifierObjective(
     net, Field("spikes", (100, 700)), Events(),   # the records already hold spikes
     readout="max",                                # each class's peak membrane
     rates=RateBand(lower=0.01, upper=0.3),        # keep neurons in a firing band
 )
 trainer = Trainer(objective, optax.adamw(2e-3), key=0, checkpoints=Checkpoints("runs/shd"))
-state = trainer.fit(Dataset.from_records(train, batch=64, validation=test),
-                    steps=3000, eval_every=500, metrics=[accuracy])
+state = trainer.fit(Dataset.from_records(train, batch=64), steps=3000, eval_every=500,
+                    metrics=[Accuracy()], validation={"test": evaluation_pass(test, 64)})
+classifier = objective.pipeline(state)            # the trained classifier, as dew.pipeline loads it
 ```
 
-The encoder is any of `sparx.encode`'s, the same objects a plain JAX loop calls. The readout is `"mean"`, `"max"`, `"sum"`, `"softmax_sum"` (the softmax of every step summed over time, SNN-delays' loss) or `"per_step"`. `schedules` names model keyword arguments that follow one of dew's schedules over `schedule_steps`, such as `schedules={"sigma": Linear(peak=7.5, end=0.5)}` for a `DelayedDense`; `schedule_every` advances them once every that many steps, as a torch scheduler stepped once an epoch does, and `deployed={"sigma": 0}` evaluates with every delay rounded. `groups` gives parameters their own optimizers by path pattern, each a `GroupAdam` with its own schedules, L2 weight decay and bounds, under `optax.multi_transform`; the trainer's optimizer updates the rest:
+The encoder is any of `sparx.encode`'s, the same objects a plain JAX loop calls. The readout is one of `sparx.losses.Readout`: `"mean"`, `"max"`, `"sum"`, `"softmax_sum"` (the softmax of every step summed over time, SNN-delays' loss) or `"per_step"`. `schedules` names model keyword arguments that follow one of dew's schedules over `schedule_steps`, such as `schedules={"sigma": Linear(peak=7.5, end=0.5)}` for a `DelayedDense`; `schedule_every` advances them once every that many steps, as a torch scheduler stepped once an epoch does, and `deployed={"sigma": 0}` evaluates with every delay rounded. `groups` gives parameters their own optimizers by path pattern, each a `sparx.optim.GroupAdam` with its own schedules, L2 weight decay and bounds, under `optax.multi_transform`; the trainer's optimizer updates the rest. `sparx.optim` holds these until dew's own schedules and parameter groups cover them:
 
 ```python
 from dew.training.optim import Cosine
-from sparx.dew import GroupAdam, OneCycle
+from sparx.optim import GroupAdam, OneCycle
 
 groups = {"delays": GroupAdam(("*/delay",), Cosine(peak=0.1, warmup_steps=0), bounds=(0.0, 24.0)),
           "weights": GroupAdam(("*",), OneCycle(peak=5e-3, start=2e-4, end=2e-8), weight_decay=1e-5)}
 ```
 
-SHD has no validation split. `sparx.dew.holdout(train, 0.1)` holds out part of the training set, and `trainer.fit(..., validation={"val": evaluation_pass(val, 256), "test": evaluation_pass(test, 256)})` scores both after each evaluation, every record of each (`evaluation_pass` fills the last batch with copies that weigh nothing). The objective logs the batch accuracy and every spiking layer's firing rate (`rate/<layer>`), updates BatchNorm statistics, passes `train` and dropout keys to a model that takes them, and evaluates to dew's `TokenScores`, which `sparx.dew.accuracy` reads. [`examples/train_shd.py`](examples/train_shd.py) is the full script; `--recipe snn-delays` runs Hammouamri et al.'s SHD recipe, and its docstring lists what still differs from their code.
+`evaluation_pass` scores every record of a split, filling the last batch with copies that weigh nothing; a split passed as `Dataset.from_records(..., validation=test)` is scored in whole batches only, which leaves out the last partial one. SHD has no validation split, and `sparx.datasets.holdout(train, 0.1)` holds out part of the training set to select on. The objective logs the batch accuracy and every spiking layer's firing rate (`rate/<layer>`), updates BatchNorm statistics, passes dropout keys, and evaluates to dew's `TokenScores`, which `sparx.metrics.Accuracy` reads. `Accuracy` is registered in dew's metrics table as `spike_accuracy`, and it works with dew's `Best` to keep the checkpoint of best validation accuracy. [`examples/train_shd.py`](examples/train_shd.py) is the full script; `--recipe snn-delays` runs Hammouamri et al.'s SHD recipe, and its docstring lists what still differs from their code. `sparx.objectives.EPropObjective` trains a recurrent layer with e-prop's gradients under the same trainer ([`examples/train_shd_eprop.py`](examples/train_shd_eprop.py)). Every example takes `--smoke`, which trains a small network for a few steps on synthetic data and downloads nothing.
 
 Sparx is a dew plugin. Its models, neurons, surrogates, encoders, objective and datasets are registered in dew's registry, so a run's `run.json` records a spiking model the way it records a transformer, and `dew.pipeline(run_dir)` loads a trained classifier back in a fresh process as a `SpikingClassification`. A model of your own trains without registering, but reloads only once its class carries `@dew.registry.models("name")`, as `SpikingMLP` does:
 
@@ -225,13 +230,14 @@ classifier = dew.pipeline("runs/shd")
 predictions = classifier(test_spikes)              # [B]
 ```
 
-[`recipes/snn/train.py`](recipes/snn/train.py) is a dew recipe: every setting is a typed flag, and the model, encoder and schedules are `{"name": ..., "fields": {...}}` records of registered members:
+[`recipes/snn/train.py`](recipes/snn/train.py) is a dew recipe: every setting is a typed flag, the dataset and the encoder are subcommands over their registries (`data:shd`, `encoder:rate`), the model's settings and the schedules are `{"name": ..., "fields": {...}}` records of registered members, and `--model.dtype` reaches the synapses. `--smoke` runs it for a few seconds on synthetic recordings:
 
 ```bash
 python recipes/snn/train.py data:shd --data.channels 140 --trainer.batch-size 64 --trainer.steps 3000 \
     --trainer.checkpoint-dir runs --trainer.name shd \
     --model.config '{"hidden": [128], "classes": 20, "delays": 15, "neuron": {"name": "alif", "fields": {"tau": 5.0}}}' \
     --schedules '{"sigma": {"name": "linear", "fields": {"peak": 7.5, "end": 0.5}}}'
+JAX_PLATFORMS=cpu python recipes/snn/train.py --smoke --trainer.checkpoint-dir /tmp/snn-smoke
 ```
 
 Training on several devices is dew's: `Trainer(..., mesh=MeshSpec(fsdp=2))` places the run, and a test checks that eight simulated CPU devices train the same parameters as one, within 1.8e-7.
@@ -308,7 +314,7 @@ variables = normalize(ann, variables, images)  # threshold balancing on calibrat
 snn, snn_variables = convert(ann, variables)   # Conv, IF, SpikingMaxPool, Flatten, Dense, IF
 rates = run_converted(snn, snn_variables, images, steps=100)  # output firing rates, [16, 10]
 ```
-- `sparx.dew.ActivityFit` fits a network's spikes to recorded ones by van Rossum distance (`sparx.losses.van_rossum`, exact on the grid) or smoothed rates.
+- `sparx.objectives.ActivityFitObjective` fits a network's spikes to recorded ones by van Rossum distance (`sparx.losses.van_rossum`, exact on the grid) or smoothed rates.
 
 ## Connectomes, serving and exchange
 
@@ -319,11 +325,11 @@ rates = run_converted(snn, snn_variables, images, steps=100)  # output firing ra
 
 ## Results
 
-All runs below are the example scripts as committed, on a 4-core x86 CPU with JAX 0.11.2, float32, seed 0. They are short runs that show the library training real data end to end, not tuned results.
+All runs below are the example scripts on a 4-core x86 CPU with JAX 0.11.2, float32, seed 0. They are short runs that show the library training real data end to end, not tuned results. They were measured at commit 6f5ed31, before the MNIST and e-prop examples moved from their own loops to dew's `Trainer`; the networks, losses and optimizers did not change, and the runs have not been repeated since.
 
 | Task | Command | Network | Test accuracy | Time |
 | --- | --- | --- | --- | --- |
-| MNIST, rate-coded, 8 steps | `python examples/train_mnist.py --epochs 2` | 784-512-512 LIF, LI readout, plain JAX loop | 97.46% after 2 epochs | 15 s per epoch |
+| MNIST, rate-coded, 8 steps | `python examples/train_mnist.py --epochs 2` | 784-512-512 LIF, LI readout, measured with a plain JAX loop | 97.46% after 2 epochs | 15 s per epoch |
 | SHD, 100 steps of 14 ms | `python examples/train_shd.py --steps 3000` | 700-256 ALIF, LI readout (max), dew `Trainer` | 53.00% | 4 min 45 s |
 | SHD | `python examples/train_shd.py --steps 3000 --recurrent --surrogate superspike` | 256 recurrent ALIF | 45.23%, still rising at the last evaluation | 8 min |
 | SHD, channels pooled to 140 | `python examples/train_shd.py --steps 3000 --channels 140 --hidden 128` | 140-128 ALIF | 64.53% | 1 min 42 s |
@@ -347,7 +353,7 @@ The design keeps the sequential part of a spiking network small: synapses run ov
 - `latency`, `delta`, `per_step_cross_entropy` and `rate_mse` match snnTorch 1.0.0 (`tools/make_snntorch_fixtures.py`).
 - Each surrogate's gradient and forward-mode tangent match its published formula, and its area matches its stated normalization.
 - Invariants are tested directly: a run in chunks equals one run for every cell and layer, a call without the state collection starts at rest, `init` creates only parameters, bfloat16 inputs keep exact spikes over a float32 membrane.
-- `SpikingClassifier` trains through dew's real `Trainer`, and its loss is checked against a manual computation.
+- `SpikingClassifierObjective` trains through dew's real `Trainer`, and its loss is checked against a manual computation. `EPropObjective`'s gradient through the trainer equals `sparx.learn.eprop`'s.
 - A `SpikingMLP` with every synapse delayed matches Hammouamri et al.'s SNN-delays network run from their code on DCLS: outputs and loss within 1.2e-7 and every gradient within 5.7e-7 in training, outputs within 2.4e-7 in evaluation. Their learning-rate, momentum and width schedules match over all 150 epochs, and `shd(binning="events")` reproduces their binned SHD exactly (`tools/make_snn_delays_fixtures.py`).
 - The physical models match NEST 3.10 and Brian2 2.10 (`tools/make_nest_fixtures.py`, `tools/make_brian2_fixtures.py`, `tests/test_simulators.py`): current-based LIF with exponential, alpha and delta synapses to 1e-11 mV and spike for spike; conductance-based LIF, AdEx, Izhikevich (bit for bit, op by op) and Hodgkin-Huxley spike for spike or within a stated step; Izhikevich's (2004) twenty firing patterns (`izhikevich_2004`) spike for spike against his own `figure1.m` run in Octave; STDP, triplet STDP and Tsodyks-Markram synapses to every transmitted weight.
 - Recurrent networks with per-edge delays fire with NEST spike for spike; Brunel's four regimes and the CUBA and COBA benchmarks match NEST's and Brian2's rates, irregularity and synchrony within their spread over seeds (`tests/test_graph.py`).

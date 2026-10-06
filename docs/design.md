@@ -38,7 +38,7 @@ It adds six of its own:
 ```
 dew (platform)    Trainer . MeshSpec/Layout . Checkpoints . Dataset/Grain . Tracker . Profiler . registry . recipes/CLI/launch . pipeline . Server
                     ^ objectives, datasets, models, tasks register here
-sparx.dew         objectives (classification, sequence, activity fitting, online learning), dataset specs, tasks, recipes
+sparx.objectives  objectives (classification, sequence, activity fitting, online learning), with metrics, tasks, dataset specs, recipes
 sparx.learn       exact event gradients (EventProp) . online rules (e-prop, OTTT) . conversion
 sparx.graph       Population . Projection . Connectivity . Network (a Flax module) . builders (random, spatial, connectome)
                   simulate() . monitors . step order . delay buffers . connectivity kernels . sharding rules
@@ -232,7 +232,7 @@ It compiles one chunk of the time loop, carries state between chunks, streams mo
 | Exact event-based gradients | EventProp (Wunderlich and Pehle 2021): adjoint dynamics over spike times; needs the in-step spike times of 4.2 | `sparx.learn.events` |
 | Forward and online learning | forward-mode gradients through the `custom_jvp`; e-prop (Bellec et al. 2020) and OTTT (Xiao et al. 2022) as eligibility-trace updates every step, memory independent of `T` | `sparx.learn.online`, with a dew objective that updates every chunk |
 | Local plasticity | STDP and three-factor rules as state updates during simulation | `sparx.dynamics.plasticity` |
-| Fitting to recordings | gradient descent on network parameters against recorded spikes, rates or voltages, with spike-train distances (van Rossum 2001, Victor-Purpura 1996) and PSTH losses | `sparx.dew.ActivityFit` |
+| Fitting to recordings | gradient descent on network parameters against recorded spikes, rates or voltages, with spike-train distances (van Rossum 2001, Victor-Purpura 1996) and PSTH losses | `sparx.objectives.ActivityFitObjective` |
 | Conversion | trained ANN weights mapped to an IF network with threshold balancing | `sparx.learn.convert` |
 
 The recurrent gradient explosion measured on SHD (the `Recurrent` docstring) is a property of surrogate BPTT through recurrence. EventProp gives exact gradients and the online rules avoid backpropagation through time, so they are the principled alternatives to tuning the surrogate.
@@ -251,7 +251,7 @@ Models are Flax modules registered in dew's model registry:
 
 | dew piece | Use in sparx |
 | --- | --- |
-| `Trainer`, `Objective`, `Step`, `Aux`, `Ratio` | all gradient training; sparx objectives subclass `Objective` (today: `SpikingClassifier`) |
+| `Trainer`, `Objective`, `Step`, `Aux`, `Ratio` | all gradient training; sparx objectives subclass `Objective` (today: `SpikingClassifierObjective`, `ActivityFitObjective`, `EPropObjective`) |
 | `MeshSpec`, `Layout`, logical axes | data, fsdp and tensor parallel training of layers; neuron-partitioned simulation |
 | `Checkpoints` (Orbax), preemption handling | training and long simulation runs |
 | `Dataset`, Grain sources and transforms | neuromorphic datasets as dew dataset specs, with event-level augmentation as Grain transforms and resumable, sharded reading |
@@ -259,7 +259,7 @@ Models are Flax modules registered in dew's model registry:
 | trackers, `Profiler`, telemetry | firing rates and sparsity as metrics; XProf for kernel work |
 | `dew.pipeline`, `Server` | loading trained spiking models and serving streaming sessions |
 
-Sparx takes dew as a required dependency. The optional `sparx[dew]` extra goes away, and `sparx.dew` becomes the place where objectives, dataset specs, tasks and registrations live.
+Sparx takes dew as a required dependency. Objectives live in `sparx.objectives`, metrics in `sparx.metrics`, tasks in `sparx.tasks` and dataset specs in `sparx.datasets`, each registered in dew's tables.
 
 ### 9.2 Changes dew needs
 
@@ -318,11 +318,11 @@ Sparx's networks are compared with Brian2 or NEST on the Brette et al. (2007) be
 
 | Today | Becomes |
 | --- | --- |
-| `sparx.cells` with `dt = 1` | `sparx.dynamics` with explicit `dt` and units; the `dt = 1` behavior is unchanged and tested equal |
-| `SynapticCell` (synapse and neuron in one) | an exponential synapse model plus an LIF neuron |
-| `sparx.dew` optional, `SpikingClassifier` only | required; registered objectives, dataset specs and tasks |
-| SHD loaded into memory | a Grain dataset spec |
-| layers without logical axes | layers with logical axes for dew's `Layout` |
+| `sparx.objectives`: `SpikingClassifierObjective`, `ActivityFitObjective`, `EPropObjective`, with `sparx.metrics.Accuracy` and `sparx.tasks.SpikingClassification` | sequence and online-learning objectives beside them |
+| `sparx.optim`: the one-cycle and exponential schedules and `GroupAdam` that SNN-delays needs | dew's schedule records and parameter groups (AshishKumar4/dew#37), and the module goes |
+| `sparx.datasets.whole_batches` and `evaluation_pass`, which score a split's last partial batch | dew's validation pass, which scores it (AshishKumar4/dew#40) |
+| `sparx.datasets.SHD`, both splits held in memory | a Grain dataset spec |
+| `sparx.nn` layers and `sparx.graph.Network` without logical axes | layers with logical axes for dew's `Layout` |
 | `docs/performance.md` CPU numbers | extended with accelerator numbers before any accelerator-specific path ships |
 
 ## 13. Phases
