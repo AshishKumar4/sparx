@@ -28,16 +28,16 @@ thresholds, weights) are pytree leaves, so they can be traced,
 differentiated and sharded; its choices (reset rule, surrogate) are static
 fields. The membrane runs in float32 (float64 when the input is float64)
 whatever the input's dtype (`membrane_dtype`); spikes come back in the
-input's dtype, which holds 0 and 1 exactly. The leaky integrator `LICell`
-is graded, its output a real value each step. `sparx.nn` builds these
-models from module attributes and parameters; pure JAX code can use them
-directly.
+input's dtype, which holds 0 and 1 exactly. Two models here are graded,
+their output a real value each step: the leaky integrator `LICell` and the
+rate unit `RateCell`. `sparx.nn` builds these models from module
+attributes and parameters; pure JAX code can use them directly.
 """
 
 from __future__ import annotations
 
 import dataclasses
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -56,11 +56,14 @@ from sparx.dynamics.core import (
 from sparx.surrogate import ATan, Surrogate
 
 __all__ = [
+    "ACTIVATIONS",
     "ALIFCell",
     "ALIFState",
     "LICell",
     "LIFCell",
     "MembraneState",
+    "RateCell",
+    "RateState",
     "RecurrentCell",
     "RecurrentState",
     "Serial",
@@ -146,6 +149,57 @@ class LICell:
     def after_threshold(self, state: MembraneState, jump: jax.Array, fired: jax.Array) -> MembraneState:
         # It never fires, so nothing resets the jump away.
         return MembraneState(jump_after_threshold(state.v, jump, None))
+
+
+class RateState(NamedTuple):
+    h: jax.Array
+    """The activity, the unit's output."""
+
+
+ACTIVATIONS = {"tanh": jnp.tanh, "relu": jax.nn.relu, "sigmoid": jax.nn.sigmoid}
+"""The activations a `RateCell` takes, by name."""
+
+
+@struct.dataclass
+class RateCell:
+    """A leaky rate unit; its output is its activity `h`, a graded value.
+
+        alpha = decay ** dt
+        h[t] = alpha h[t-1] + (1 - alpha) f(x[t] + bias)
+
+    FLYNN's leaky integrator (Wang and Chen, arXiv 2607.00025, eq. 1),
+    `h_{t+1} = alpha h_t + (1 - alpha) tanh(W h_t + x_t + b)`, trained on
+    the whole fly connectome. The recurrent product `W h_t` arrives with
+    the external input in the jump `x`: through a `RecurrentCell`
+    (`sparx.nn.Recurrent(sparx.nn.Rate())`), or through a projection onto a
+    `Delta` receptor of a `sparx.graph.Network` with a delay of one step,
+    which delivers the activity of the step before. `decay` is FLYNN's leak
+    rate `alpha` per unit of time, `exp(-1 / tau)` for a time constant of
+    `tau` (`sparx.dynamics.decay`); they train it directly, one per cell
+    class. `activation` is FLYNN's tanh, or ReLU or the logistic sigmoid
+    (`ACTIVATIONS`). The activity is a convex combination of its last value
+    and the activation, so it stays within the activation's range.
+    """
+
+    decay: jax.Array | float
+    bias: jax.Array | float = 0.0
+    activation: Literal["tanh", "relu", "sigmoid"] = struct.field(pytree_node=False, default="tanh")
+    graded = True
+
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> RateState:
+        return RateState(jnp.zeros(shape, membrane_dtype(dtype)))
+
+    def step(self, state: RateState, inputs: SynapticInput, dt: float) -> tuple[RateState, Output]:
+        alpha = self.decay ** dt
+        drive = ACTIVATIONS[self.activation](_jump(inputs) + self.bias)
+        h = (alpha * state.h + (1 - alpha) * drive).astype(state.h.dtype)
+        return RateState(h), _at_end(h)
+
+    def is_refractory(self, state: RateState, dt: float) -> jax.Array:
+        return _never(state.h)
+
+    def after_threshold(self, state: RateState, jump: jax.Array, fired: jax.Array) -> RateState:
+        return RateState(jump_after_threshold(state.h, jump, None))
 
 
 @struct.dataclass
@@ -271,7 +325,9 @@ class RecurrentCell[State]:
         output[t] = inner.step(x[t] + output[t-1] @ weight)
 
     Wrapping `ALIFCell` gives the recurrent adaptive network (LSNN) of Bellec
-    et al. (2020). The product runs at `precision`, the matrix product
+    et al. (2020); wrapping `RateCell` gives FLYNN's recurrence with a dense
+    `weight`, which multiplies from the right (`weight[i, j]` from unit `i`
+    to unit `j`). The product runs at `precision`, the matrix product
     precision of `jax.lax.dot`. `cut_gradient` stops the gradient at the
     fed-back output (the weight still receives its gradient), which is the
     gradient e-prop computes online (their `stop_z_gradients`).

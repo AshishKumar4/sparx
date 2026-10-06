@@ -13,7 +13,8 @@ nS of peak conductance for a conductance receptor, mV for a delta synapse.
 
 Arrivals land at the end of the step (`sparx.dynamics.core`), so a spike
 shapes the membrane from the next step on, as in NEST and Brian2. Each
-kinetic is integrated exactly.
+kinetic is integrated exactly. A graded population sends a value every
+step, and its synapse (`Graded`) follows that value with its own kinetics.
 """
 
 from __future__ import annotations
@@ -34,6 +35,8 @@ __all__ = [
     "BiExponential",
     "Delta",
     "Exponential",
+    "Graded",
+    "GradedState",
     "Landing",
     "PointNeuron",
     "PointNeuronState",
@@ -185,6 +188,48 @@ class BiExponential:
         added = arriving * self.peak_factor
         return BiExponentialState(state.decay * jnp.exp(-dt / self.tau_decay) + added,
                                   state.rise * jnp.exp(-dt / self.tau_rise) + added)
+
+
+class GradedState(NamedTuple):
+    value: jax.Array
+    """The synapse's output at the start of the step, in the receptor's unit."""
+    target: jax.Array
+    """The weighted presynaptic value, held over the step, that `value` relaxes toward."""
+
+
+@struct.dataclass
+class Graded:
+    """Transmission proportional to a graded presynaptic value, with first-order kinetics.
+
+        tau ds/dt = sum_j w_j r_j - s
+
+    `r_j` is the output of presynaptic neuron `j` (a `GradedPotential`'s
+    release, a rate unit's activity), arriving at the end of each step and
+    held over the next, so `s` relaxes toward the weighted release with time
+    constant `tau` (ms), and at steady state transmits `w` at full release.
+    The waveform over a step, `target + (value - target) exp(-s / tau)`,
+    is two `Term`s, which a linear membrane integrates exactly. Prinz,
+    Bucher and Marder's (2004) graded synapse has the same form with a
+    time constant that depends on the presynaptic voltage; here it is fixed.
+    """
+
+    tau: jax.Array | float = 5.0
+
+    @property
+    def lands(self) -> Landing:
+        return "synapse"
+
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> GradedState:
+        zeros = jnp.zeros(shape, membrane_dtype(dtype))
+        return GradedState(zeros, zeros)
+
+    def output(self, state: GradedState) -> tuple[Term, ...]:
+        zeros = jnp.zeros_like(state.value)
+        return Term(state.target, zeros, jnp.inf), Term(state.value - state.target, zeros, self.tau)
+
+    def step(self, state: GradedState, arriving: jax.Array | float, dt: float) -> GradedState:
+        value = state.target + (state.value - state.target) * jnp.exp(-dt / self.tau)
+        return GradedState(value, jnp.broadcast_to(arriving, value.shape).astype(value.dtype))
 
 
 @struct.dataclass

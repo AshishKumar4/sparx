@@ -8,7 +8,7 @@ import pytest
 import reference
 
 from sparx.dynamics import AdEx, Izhikevich as IzhikevichModel, LIFCell, SynapticInput, decay, run
-from sparx.nn import ALIF, IF, LI, LIF, RATES, STATE, Dynamics, Flatten, Izhikevich, Recurrent, Synaptic
+from sparx.nn import ALIF, IF, LI, LIF, RATES, STATE, Dynamics, Flatten, Izhikevich, Rate, Recurrent, Synaptic
 from sparx.surrogate import ATan, FastSigmoid
 
 T, B, D = 24, 4, 6
@@ -132,6 +132,20 @@ def test_recurrent_layer_is_the_recurrent_cell():
     expected = reference.recurrent_lif(np.asarray(x, np.float64), np.asarray(weight, np.float64),
                                        math.exp(-1 / 4.0))
     np.testing.assert_array_equal(layer.apply(variables, x), expected)
+
+
+def test_a_recurrent_rate_layer_is_flynns_recurrence_and_sows_no_spike_rate():
+    x = inputs(9)
+    layer = Recurrent(Rate(tau=3.0), precision=jax.lax.Precision.HIGHEST)
+    variables = layer.init(jax.random.key(2), x)
+    bias = jnp.linspace(-0.5, 0.5, D)
+    variables = {"params": {**variables["params"], "neuron": {"bias": bias}}}
+    out, sown = layer.apply(variables, x, mutable=[RATES])
+    weight = np.asarray(variables["params"]["recurrent"], np.float64)
+    alpha, b = math.exp(-1 / 3.0), np.asarray(bias, np.float64)
+    expected = reference.flynn(np.asarray(x, np.float64), weight, alpha, b)
+    np.testing.assert_allclose(out, expected, rtol=1e-5, atol=1e-6)  # observed 1.8e-7
+    assert sown == {}  # its output is an activity, which has no spike rate
 
 
 def test_izhikevich_layer_runs_with_its_defaults():

@@ -1,10 +1,12 @@
 """Neuron models in physical units (ms, mV, pA, nS, pF; see `sparx.dynamics.core`).
 
-Every model here has a refractory period after a spike, measured on the step
-grid as NEST's `iaf_*` models count it: a neuron that fires holds its
-reset voltage for `t_ref` ms, `round(t_ref / dt)` steps. Spikes pass
-gradients through a surrogate, as in `sparx.dynamics.ml`, and the reset
-(`fire`) sets the voltage exactly while its gradient follows the spike.
+Every spiking model here has a refractory period after a spike, measured on
+the step grid as NEST's `iaf_*` models count it: a neuron that fires holds
+its reset voltage for `t_ref` ms, `round(t_ref / dt)` steps. One model,
+`GradedPotential`, never spikes, and its output is a release rate graded
+with its voltage. Spikes pass gradients through a surrogate, as in
+`sparx.dynamics.ml`, and the reset (`fire`) sets the voltage exactly while
+its gradient follows the spike.
 """
 
 from __future__ import annotations
@@ -37,6 +39,8 @@ __all__ = [
     "RECEPTORS",
     "AdEx",
     "AdExState",
+    "GradedPotential",
+    "GradedPotentialState",
     "HodgkinHuxley",
     "HodgkinHuxleyState",
     "Izhikevich",
@@ -71,7 +75,7 @@ class MgBlock:
         return 1 / (1 + self.mg / 3.57 * jnp.exp(-0.062 * v))
 
 
-def _synaptic(model: LIF | AdEx | Izhikevich | HodgkinHuxley, inputs: SynapticInput,
+def _synaptic(model: LIF | GradedPotential | AdEx | Izhikevich | HodgkinHuxley, inputs: SynapticInput,
               v: jax.Array) -> tuple[jax.Array, jax.Array]:
     """The total held conductance (nS) and its drive `sum g E` (pA) at voltage `v`, gates applied."""
     conductance = {name: g * model.gates[name](v) if name in model.gates else g
@@ -79,6 +83,23 @@ def _synaptic(model: LIF | AdEx | Izhikevich | HodgkinHuxley, inputs: SynapticIn
     total = sum(conductance.values(), jnp.zeros(()))
     drive = sum((g * model.reversal[name] for name, g in conductance.items()), jnp.zeros(()))
     return total, drive
+
+
+def _leaky(model: LIF | GradedPotential, v: jax.Array, inputs: SynapticInput, dt: float) -> jax.Array:
+    """`v` after a step of the leaky membrane on `inputs`, its jump included: exact.
+
+    With the conductances and the current held, the membrane relaxes toward
+    `(g_L E_L + sum g_k E_k + I) / (g_L + sum g_k)` with time constant
+    `C / (g_L + sum g_k)`, and each synaptic current waveform adds its exact
+    response against that time constant.
+    """
+    g_l = model.c_m / model.tau_m
+    g_syn, syn_drive = _synaptic(model, inputs, v)
+    g_total = g_l + g_syn
+    drive = g_l * model.e_l + inputs.current + syn_drive
+    tau = model.c_m / g_total
+    return exact_linear(v, drive / g_total, tau, dt) + sum(
+        (response(term, tau, dt) for term in inputs.currents), jnp.zeros(())) / model.c_m + inputs.jump
 
 
 class LIFState(NamedTuple):
@@ -128,13 +149,7 @@ class LIF:
         return LIFState(jnp.full(shape, self.e_l, dtype), jnp.zeros(shape, dtype))
 
     def step(self, state: LIFState, inputs: SynapticInput, dt: float) -> tuple[LIFState, Output]:
-        g_l = self.c_m / self.tau_m
-        g_syn, syn_drive = _synaptic(self, inputs, state.v)
-        g_total = g_l + g_syn
-        drive = g_l * self.e_l + inputs.current + syn_drive
-        tau = self.c_m / g_total
-        integrated = exact_linear(state.v, drive / g_total, tau, dt) + sum(
-            (response(term, tau, dt) for term in inputs.currents), jnp.zeros(())) / self.c_m + inputs.jump
+        integrated = _leaky(self, state.v, inputs, dt)
         held = state.refractory > dt / 2
         v = jnp.where(held, self.v_reset, integrated)
         reset, fired = fire(v, jnp.where(held, jnp.inf, self.v_th), self.surrogate, self.v_reset)
@@ -148,6 +163,70 @@ class LIF:
 
     def after_threshold(self, state: LIFState, jump: jax.Array, fired: jax.Array) -> LIFState:
         return state._replace(v=jump_after_threshold(state.v, jump, fired))
+
+
+class GradedPotentialState(NamedTuple):
+    v: jax.Array
+
+
+@struct.dataclass
+class GradedPotential:
+    """A neuron that never spikes and releases transmitter as a sigmoidal function of its voltage.
+
+        C dv/dt = -g_L (v - E_L) + sum_k g_k (E_k - v) + I,    g_L = C / tau_m
+        release(v) = 1 / (1 + exp((v_half - v) / slope))
+
+    The membrane is `LIF`'s without a threshold, solved exactly over each
+    step for held inputs, with conductances, gates, synaptic current
+    waveforms as `LIF` reads them. The output is the
+    release at the end of the step, as a fraction of the maximal rate, in
+    [0, 1]. A `Graded` synapse holds it over the next step and filters it
+    with its own kinetics, so the weight of a projection from a graded
+    population is the current (pA) or conductance (nS) of its synapses at
+    full release.
+
+    The sigmoid is the graded transmission of the stomatogastric network
+    models of Prinz, Bucher and Marder (Nature Neuroscience 2004),
+    `s(V_pre) = 1 / (1 + exp((V_th - V_pre) / delta))`, whose `V_th` of
+    -35 mV and `delta` of 5 mV are the defaults here. Much of the fly's
+    visual system is non-spiking in this sense, and Lappalainen et al.'s
+    connectome-constrained model of it (Nature 2024) also uses passive
+    point neurons that transmit a function of their voltage, there a
+    rectified linear one. The membrane's defaults are `LIF`'s.
+    """
+
+    tau_m: jax.Array | float = 20.0
+    c_m: jax.Array | float = 200.0
+    e_l: jax.Array | float = -60.0
+    v_half: jax.Array | float = -35.0
+    """The voltage of half the maximal release, mV."""
+    slope: jax.Array | float = 5.0
+    """The voltage over which release grows by a factor of e near its foot, mV."""
+    reversal: Mapping[str, float] = struct.field(pytree_node=False, default_factory=lambda: dict(RECEPTORS))
+    gates: Mapping[str, MgBlock] = struct.field(pytree_node=False,
+                                                default_factory=lambda: {"nmda": MgBlock()})
+    graded = True
+
+    def release(self, v: jax.Array) -> jax.Array:
+        """The release at voltage `v`, as a fraction of the maximum."""
+        return jax.nn.sigmoid((v - self.v_half) / self.slope)
+
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> GradedPotentialState:
+        return GradedPotentialState(jnp.full(shape, self.e_l, membrane_dtype(dtype)))
+
+    def step(self, state: GradedPotentialState, inputs: SynapticInput,
+             dt: float) -> tuple[GradedPotentialState, Output]:
+        v = _leaky(self, state.v, inputs, dt).astype(state.v.dtype)
+        rate = self.release(v)
+        return GradedPotentialState(v), Output(rate, jnp.ones_like(rate))
+
+    def is_refractory(self, state: GradedPotentialState, dt: float) -> jax.Array:
+        return jnp.zeros(jnp.shape(state.v), bool)
+
+    def after_threshold(self, state: GradedPotentialState, jump: jax.Array,
+                        fired: jax.Array) -> GradedPotentialState:
+        # It has no threshold and no reset, so the jump always lands.
+        return GradedPotentialState(jump_after_threshold(state.v, jump, None))
 
 
 class AdExState(NamedTuple):

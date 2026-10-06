@@ -20,11 +20,14 @@ a new model is written with, stays in `sparx.dynamics.core`.
 
 from sparx.dynamics.core import Model, NeuronModel, Output, Reset, SynapticInput, Term, decay, run
 from sparx.dynamics.ml import (
+    ACTIVATIONS,
     ALIFCell,
     ALIFState,
     LICell,
     LIFCell,
     MembraneState,
+    RateCell,
+    RateState,
     RecurrentCell,
     RecurrentState,
     Serial,
@@ -36,6 +39,8 @@ from sparx.dynamics.neurons import (
     RECEPTORS,
     AdEx,
     AdExState,
+    GradedPotential,
+    GradedPotentialState,
     HodgkinHuxley,
     HodgkinHuxleyState,
     Izhikevich,
@@ -60,6 +65,8 @@ from sparx.dynamics.synapses import (
     BiExponential,
     Delta,
     Exponential,
+    Graded,
+    GradedState,
     Landing,
     PointNeuron,
     PointNeuronState,
@@ -68,6 +75,7 @@ from sparx.dynamics.synapses import (
 )
 
 __all__ = [
+    "ACTIVATIONS",
     "IZHIKEVICH_2003",
     "IZHIKEVICH_2004",
     "LIF",
@@ -81,6 +89,10 @@ __all__ = [
     "BiExponential",
     "Delta",
     "Exponential",
+    "Graded",
+    "GradedPotential",
+    "GradedPotentialState",
+    "GradedState",
     "HodgkinHuxley",
     "HodgkinHuxleyState",
     "Izhikevich",
@@ -98,6 +110,8 @@ __all__ = [
     "Plasticity",
     "PointNeuron",
     "PointNeuronState",
+    "RateCell",
+    "RateState",
     "Receptor",
     "RecurrentCell",
     "RecurrentState",

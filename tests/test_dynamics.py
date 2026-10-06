@@ -15,6 +15,8 @@ from sparx.dynamics import (
     BiExponential,
     Delta,
     Exponential,
+    Graded,
+    GradedPotential,
     LIFCell,
     MgBlock,
     PointNeuron,
@@ -196,3 +198,48 @@ def test_a_jump_after_the_threshold_is_lost_only_to_a_reset_that_sets_the_membra
         state, spikes = neuron.step(neuron.init_state((1,), jnp.float32), arrivals, 1.0)
         assert float(spikes.value[0]) == fired
         assert float(state.neuron.v[0]) == v
+
+
+def test_a_graded_potential_neuron_is_the_passive_membrane_and_releases_by_its_sigmoid():
+    # C dv/dt = -g_L (v - E_L) + I from rest: v = E_L + I / g_L (1 - exp(-t / tau_m)), exact at any step.
+    neuron = GradedPotential()
+    dt, steps = 0.1, 400
+    current = np.array([300.0, 1000.0, -200.0])  # toward -58.5, -35 and -80 mV
+    with jax.enable_x64(new_val=True):
+        held = SynapticInput(jnp.broadcast_to(jnp.asarray(current), (steps, 3)))
+        (output, voltage), state = run(neuron, held, dt=dt, record=lambda state: state.v)
+        refractory = np.asarray(neuron.is_refractory(state, dt))
+    released, offset, voltage = np.asarray(output.value), np.asarray(output.offset), np.asarray(voltage)
+    t = (np.arange(steps)[:, None] + 1) * dt
+    g_l = neuron.c_m / neuron.tau_m
+    v = neuron.e_l + current / g_l * (1 - np.exp(-t / neuron.tau_m))
+    release = 1 / (1 + np.exp((neuron.v_half - v) / neuron.slope))
+    np.testing.assert_allclose(voltage, v, rtol=0, atol=1e-10)  # observed 6.4e-14
+    np.testing.assert_allclose(released, release, rtol=1e-10, atol=1e-14)  # observed 2.8e-15
+    assert neuron.graded and np.all(offset == 1) and not refractory.any()
+
+
+def test_a_graded_synapse_drives_the_membrane_as_the_analytic_two_stage_filter():
+    # A release r held from t1 to t2 through tau_s ds/dt = w r - s into C du/dt = -g_L u + s. For a step
+    # of s's target A from time 0, u(t) = A / g_L (1 - (tau_m e^{-t/tau_m} - tau_s e^{-t/tau_s}) /
+    # (tau_m - tau_s)); a pulse is the difference of two steps. Exact at the step grid.
+    tau_s, dt, steps, w = 3.0, 0.1, 600, 150.0
+    neuron = PointNeuron(GradedPotential(), {"graded": Receptor(Graded(tau_s))})
+    release = np.zeros((steps, 1))
+    release[:300] = 0.8  # arrives at the end of steps 0 to 299, held over steps 1 to 300
+    with jax.enable_x64(new_val=True):
+        arrivals = Arrivals(spikes={"graded": jnp.asarray(w * release)})
+        (_, v), _ = run(neuron, arrivals, dt=dt, record=lambda state: state.neuron.v)
+        v = np.asarray(v)
+    model = neuron.neuron
+    tau_m, g_l = model.tau_m, model.c_m / model.tau_m
+
+    def stepped(t):
+        t = np.maximum(t, 0.0)
+        both = (tau_m * np.exp(-t / tau_m) - tau_s * np.exp(-t / tau_s)) / (tau_m - tau_s)
+        return w * 0.8 / g_l * (1 - both)
+
+    t = (np.arange(steps)[:, None] + 1) * dt
+    expected = model.e_l + stepped(t - dt) - stepped(t - 301 * dt)
+    np.testing.assert_allclose(v, expected, rtol=0, atol=1e-9)  # observed 4.3e-14
+    assert float(np.max(v)) > model.e_l + 5  # it moved

@@ -33,10 +33,12 @@ its receptors and inputs deliver, so a dimensionless model given a kinetic
 synapse is refused before any step runs.
 
 A population sends what its neuron model outputs (`sparx.dynamics.Output`):
-spikes, or a graded value every step for a graded model (an `LICell`'s
-membrane). A projection from a graded population delivers the weighted
-values through dense or edge delivery; event delivery, which skips the
-neurons that did not fire, is for spikes only.
+spikes, or a graded value every step for a graded model (a
+`GradedPotential`'s release, a `RateCell`'s activity). A projection from a
+graded population delivers the weighted values through dense or edge
+delivery onto a `Graded` synapse, or onto a `Delta` receptor of a
+dimensionless model as its jump; event delivery, which skips the neurons
+that did not fire, is for spikes only.
 
 One step covers `(t, t + dt]` and runs in NEST's order, which the
 single-neuron tests pin against NEST and Brian2 (`sparx.dynamics.core`):
@@ -74,7 +76,7 @@ from dew.objectives.base import Variables
 
 from sparx.dynamics.core import NeuronModel
 from sparx.dynamics.plasticity import Plasticity, TsodyksMarkram, TsodyksMarkramState
-from sparx.dynamics.synapses import PointNeuron, PointNeuronState, Receptor
+from sparx.dynamics.synapses import Graded, PointNeuron, PointNeuronState, Receptor
 from sparx.graph.connectivity import Connectivity, EdgeList
 
 __all__ = ["ArrivalInput", "Connections", "CurrentInput", "Drive", "Monitor", "Network", "NetworkState",
@@ -316,7 +318,7 @@ class PopulationRate(Monitor):
 @dataclass(frozen=True)
 class OutputTrace(Monitor):
     """What `population` sends each step, for the neurons `neurons` (indices) or all of them: a graded
-    population's values, or a spiking one's spikes as 0 and 1."""
+    population's values (a release, an activity), or a spiking one's spikes as 0 and 1."""
 
     population: str
     neurons: tuple[int, ...] | None = None
@@ -576,14 +578,25 @@ def _check_initial(population: Population, rest: PointNeuronState) -> None:
 def _check_graded(p: Projection, pre: Population, post: Population) -> None:
     """Refuse a projection whose delivery does not fit what its presynaptic population sends.
 
-    A graded population sends a value every step, so the spike-driven
-    options (events, plasticity, short-term release) have no spike to act
-    on.
+    A graded population sends a value every step. It reaches a `Graded`
+    synapse, which follows it, or a delta receptor as a jump; a spiking
+    synapse would add the value as if it were a spike, once per step, and
+    the spike-driven options (events, plasticity, short-term release) have
+    no spike to act on. A `Graded` synapse fed spikes would hold each one
+    for a step, so it takes only graded input.
     """
+    synapse = post.receptors[p.receptor].synapse
     if not pre.graded:
+        if isinstance(synapse, Graded):
+            raise ValueError(f"{p.key}: receptor {p.receptor!r} is a Graded synapse, which follows a graded "
+                             f"value, and population {p.pre!r} sends spikes")
         if p.plasticity is not None and post.graded:
             raise ValueError(f"{p.key}: plasticity pairs spikes, and population {p.post!r} is graded")
         return
+    if synapse.lands == "synapse" and not isinstance(synapse, Graded):
+        raise ValueError(f"{p.key}: population {p.pre!r} is graded and sends a value every step, which "
+                         f"receptor {p.receptor!r} ({type(synapse).__name__}) would take as spikes; give "
+                         f"it a Graded synapse, or a Delta receptor for a dimensionless target")
     if p.format == "events":
         raise ValueError(f"{p.key}: population {p.pre!r} is graded, and event delivery visits only neurons "
                          f"that spiked; use format 'edges' or 'dense'")
@@ -593,13 +606,17 @@ def _check_graded(p: Projection, pre: Population, post: Population) -> None:
 
 
 def _check_sources(network: Network, populations: Mapping[str, Population]) -> None:
-    """Refuse inputs onto unknown populations or receptors."""
+    """Refuse inputs onto unknown populations or receptors, and Poisson spikes onto a `Graded` synapse."""
     for source in network.inputs:
         if source.target not in populations:
             raise ValueError(f"input onto unknown population {source.target!r}")
         if isinstance(source, CurrentInput):
             continue
         _check_receptor(populations[source.target], source.receptor, f"a {type(source).__name__}")
+        if (isinstance(source, PoissonInput)
+                and isinstance(populations[source.target].receptors[source.receptor].synapse, Graded)):
+            raise ValueError(f"a PoissonInput sends spikes, and receptor {source.receptor!r} of "
+                             f"{source.target!r} is a Graded synapse")
 
 
 def _check_population(population: Population, current: bool, dt: float) -> None:

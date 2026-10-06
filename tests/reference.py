@@ -87,6 +87,25 @@ def izhikevich(xs, a=0.02, b=0.2, c=-65.0, d=8.0):
     return np.stack(crossed)
 
 
+ACTIVATIONS = {"tanh": np.tanh, "relu": lambda x: np.maximum(x, 0.0),
+               "sigmoid": lambda x: 1 / (1 + np.exp(-x))}
+
+
+def flynn(xs, weight, alpha, bias, activation="tanh"):
+    """FLYNN's recurrence (Wang and Chen, arXiv 2607.00025, eq. 1) as the paper writes it,
+
+        h_{t+1} = alpha h_t + (1 - alpha) f(W h_t + x_t + b),    h_0 = 0,
+
+    with `W h_t` taken as `h_t @ weight`; returns `h_1 ... h_T`.
+    """
+    h = np.zeros(xs.shape[1:])
+    out = []
+    for x in xs:
+        h = alpha * h + (1 - alpha) * ACTIVATIONS[activation](h @ weight + x + bias)
+        out.append(h)
+    return np.stack(out)
+
+
 def recurrent_lif(xs, weight, decay, threshold=1.0, reset="subtract"):
     v = np.zeros(xs.shape[1:])
     s = np.zeros(xs.shape[1:])

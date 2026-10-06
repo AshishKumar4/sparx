@@ -9,6 +9,7 @@ from sparx.dynamics import (
     Izhikevich,
     LICell,
     LIFCell,
+    RateCell,
     RecurrentCell,
     Serial,
     SynapticInput,
@@ -93,11 +94,41 @@ def test_a_dimensionless_model_refuses_currents():
         run(LIFCell(0.8), SynapticInput(jump=xs, currents=(Term(xs, xs, 5.0),)))
 
 
+@pytest.mark.parametrize("activation", ["tanh", "relu", "sigmoid"])
+def test_a_recurrent_rate_cell_is_flynns_recurrence(activation):
+    xs = currents(18, scale=1.0)
+    rng = np.random.default_rng(19)
+    weight = rng.normal(0, 0.6, (F, F)).astype(np.float32)
+    alpha = rng.uniform(0.3, 0.95, F).astype(np.float32)  # one leak per unit, as FLYNN's classes give them
+    bias = rng.normal(0, 0.3, F).astype(np.float32)
+    model = RecurrentCell(RateCell(jnp.asarray(alpha), jnp.asarray(bias), activation), jnp.asarray(weight),
+                          jax.lax.Precision.HIGHEST)
+    out, state = run(model, jnp.asarray(xs))
+    expected = reference.flynn(*(a.astype(np.float64) for a in (xs, weight, alpha, bias)), activation)
+    # Observed 1.2e-7 (tanh), 6.0e-8 (sigmoid), 1.5e-5 (relu, whose activity grows past 300).
+    np.testing.assert_allclose(out.value, expected, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(state.output, expected[-1], rtol=1e-5, atol=1e-5)
+    assert model.graded and np.all(out.offset == 1)
+    # The feedback matters: without it the activity differs.
+    alone = reference.flynn(xs.astype(np.float64), np.zeros((F, F)), alpha, bias, activation)
+    assert np.abs(alone - expected).max() > 0.1
+
+
+def test_a_rate_cells_leak_over_dt_is_exp_of_minus_dt_over_tau():
+    # alpha = exp(-dt / tau): a step of dt leaves decay ** dt of the activity.
+    tau, dt = 7.0, 0.25
+    xs = currents(20)
+    out, _ = run(RateCell(float(np.exp(-1 / tau))), jnp.asarray(xs), dt=dt)
+    alpha = np.exp(-dt / tau)
+    expected = reference.flynn(xs.astype(np.float64), np.zeros((F, F)), alpha, 0.0)
+    np.testing.assert_allclose(out.value, expected, rtol=1e-5, atol=1e-6)  # observed 8.9e-8
+
+
 def test_the_graded_models_say_so_and_the_spiking_ones_do_not():
-    assert LICell(0.5).graded
+    assert LICell(0.5).graded and RateCell(0.5).graded
     assert not LIFCell(0.5).graded and not ALIFCell(0.5, 0.9).graded
     assert Serial(LIFCell(0.5), LICell(0.5)).graded and not Serial(LICell(0.5), LIFCell(0.5)).graded
-    assert RecurrentCell(LICell(0.5), jnp.eye(2)).graded
+    assert RecurrentCell(RateCell(0.5), jnp.eye(2)).graded
 
 
 def test_alif_matches_the_reference_loop():
@@ -180,6 +211,8 @@ MODELS = {
     "recurrent_alif": RecurrentCell(
         ALIFCell(0.9, 0.95, beta=0.3),
         jnp.asarray(np.random.default_rng(9).normal(0, 0.3, (F, F)), jnp.float32)),
+    "recurrent_rate": RecurrentCell(
+        RateCell(0.8, 0.1), jnp.asarray(np.random.default_rng(9).normal(0, 0.5, (F, F)), jnp.float32)),
 }
 
 

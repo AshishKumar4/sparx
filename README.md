@@ -89,6 +89,7 @@ The LIF family (`LIF`, `IF`, `LI`, `Synaptic`, `ALIF`) shares one discrete-time 
 | `LIF(tau, threshold, reset, surrogate, detach_reset)` | leaky integrate-and-fire | `learn_tau=True`: a decay per feature |
 | `IF(threshold, reset, ...)` | integrate-and-fire, no leak | |
 | `LI(tau)` | leaky integrator, never fires, returns its membrane | `learn_tau` |
+| `Rate(tau, activation)` | leaky rate unit, FLYNN's: `h <- alpha h + (1 - alpha) f(x + b)`, returns its activity | `b`; `learn_tau` |
 | `Synaptic(tau, tau_synapse, ...)` | current-based LIF: a decaying synaptic current charges the membrane | `learn_tau` (both) |
 | `ALIF(tau, tau_adapt, beta, ...)` | adaptive threshold that rises by `beta` per spike (Bellec et al. 2020) | `learn_tau` (both) |
 | `Izhikevich(a, b, c, d, dt)` | Izhikevich's two-variable neuron (2003) on input currents, `dt` in ms | |
@@ -103,7 +104,7 @@ The LIF family (`LIF`, `IF`, `LI`, `Synaptic`, `ALIF`) shares one discrete-time 
 
 `DelayedDense` learns each delay by spreading the synapse over a Gaussian centered at it; the width is a call argument that a schedule shrinks during training, and `sigma=0` reads exactly the rounded delay, the network to deploy.
 
-The PSNs have no loop over time at all. Each is one `[T, T] x [T, N]` product followed by a threshold, so no step waits for the one before it; Fang et al. report that this also learns longer dependencies than the LIF. `Recurrent(ALIF())` is the recurrent adaptive network (LSNN) of Bellec et al.
+The PSNs have no loop over time at all. Each is one `[T, T] x [T, N]` product followed by a threshold, so no step waits for the one before it; Fang et al. report that this also learns longer dependencies than the LIF. `Recurrent(ALIF())` is the recurrent adaptive network (LSNN) of Bellec et al. `Recurrent(Rate())` is FLYNN's recurrence with a dense matrix.
 
 ## Surrogate gradients
 

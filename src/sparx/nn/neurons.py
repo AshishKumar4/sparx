@@ -1,12 +1,12 @@
 """Spiking neuron layers for Flax linen, over time-major inputs `[T, ...]`.
 
 A neuron layer turns its input `[T, ...]` into spikes `[T, ...]`, or into
-graded values for a graded model (the readout `LI`). It has no weights of
-its own beyond optional learnable time constants; the synapses are
-ordinary Flax layers. `nn.Dense`, `nn.Conv`, `nn.BatchNorm` and the
-pooling functions all treat leading axes as batch axes, so they apply to
-every time step at once, as one large matrix product, and only the neurons'
-elementwise recurrence runs step by step:
+graded values for a graded model (the readout `LI`, the rate unit `Rate`).
+It has no weights of its own beyond optional learnable time constants and
+biases; the synapses are ordinary Flax layers. `nn.Dense`, `nn.Conv`,
+`nn.BatchNorm` and the pooling functions all treat leading axes as batch
+axes, so they apply to every time step at once, as one large matrix
+product, and only the neurons' elementwise recurrence runs step by step:
 
     x = nn.Dense(128)(spikes)       # [T, B, 128], one matmul over T * B rows
     spikes = sparx.nn.LIF(tau=2.0)(x)
@@ -46,6 +46,7 @@ from sparx.dynamics import (
     LICell,
     LIFCell,
     NeuronModel,
+    RateCell,
     RecurrentCell,
     Reset,
     Serial,
@@ -66,6 +67,7 @@ __all__ = [
     "Dynamics",
     "Izhikevich",
     "Neuron",
+    "Rate",
     "Recurrent",
     "Synaptic",
     "adopt",
@@ -222,6 +224,26 @@ class LI(Neuron):
 
     def build(self, x: jax.Array) -> LICell:
         return LICell(_decay(self, "decay", self.tau, self.learn_tau, x.shape[-1]))
+
+
+@neurons("rate")
+class Rate(Neuron):
+    """A leaky rate unit (`sparx.dynamics.RateCell`), FLYNN's neuron; returns its activity, `[T, ...]`.
+
+    `h <- alpha h + (1 - alpha) f(x + bias)` with `alpha = exp(-dt / tau)`.
+    `bias` is learned per feature, starting at 0, as FLYNN learns theirs;
+    `learn_tau` learns the leak per feature, starting at `tau`.
+    `Recurrent(Rate())` is FLYNN's recurrence with a dense matrix.
+    """
+
+    tau: float = 2.0
+    activation: Literal["tanh", "relu", "sigmoid"] = "tanh"
+    learn_tau: bool = False
+
+    def build(self, x: jax.Array) -> RateCell:
+        features = x.shape[-1]
+        bias = self.param("bias", nn.initializers.zeros_init(), (features,), jnp.float32)
+        return RateCell(_decay(self, "decay", self.tau, self.learn_tau, features), bias, self.activation)
 
 
 @neurons("synaptic")
