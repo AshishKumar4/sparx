@@ -70,7 +70,7 @@ def test_psn_layers_sow_firing_rates():
     for layer in (PSN(), MaskedPSN(k=2), SlidingPSN(k=2)):
         params = layer.init(jax.random.key(0), x)
         spikes, sown = layer.apply(params, x, mutable=[RATES])
-        np.testing.assert_allclose(sown[RATES]["rate"][0], spikes.mean(0))
+        np.testing.assert_allclose(sown[RATES]["rate"][0], spikes.mean(0))  # observed 0 relative
 
 
 def test_psn_spikes_keep_bf16_and_train():

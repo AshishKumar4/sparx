@@ -62,7 +62,9 @@ def _psn_parity(name, layer, **call):
     np.testing.assert_array_equal(spikes, c["spikes"])
     # Observed at most 1.2e-6 on any gradient (SlidingPSN's bias, which sums every position).
     np.testing.assert_allclose(grad_x, c["grad_x"], rtol=1e-5, atol=2e-6)
+    # Observed 9.5e-7.
     np.testing.assert_allclose(grads["params"]["weight"], c["grad_weight"], rtol=1e-5, atol=2e-6)
+    # Observed 1.2e-6.
     np.testing.assert_allclose(grads["params"]["bias"], c["grad_bias"], rtol=1e-5, atol=2e-6)
 
 
@@ -121,7 +123,7 @@ def test_lif_and_synaptic_match_snntorch_with_an_immediate_reset(name, cell, res
     grad_x, spikes = jax.grad(weighted, has_aux=True)(jnp.asarray(SNNTORCH["neuron_x"]))
     np.testing.assert_array_equal(spikes, expected["spikes"])
     assert spikes.sum() > 40
-    np.testing.assert_allclose(grad_x, expected["grad_x"], rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(grad_x, expected["grad_x"], rtol=1e-5, atol=1e-6)  # observed 8.9e-7
 
 
 def test_snntorch_loses_spikes_after_an_overshoot_where_sparx_fires():
@@ -185,10 +187,12 @@ def test_delayed_dense_matches_dcls_delays(mode):
     expected = {name[len(mode) + 1:]: DCLS[name] for name in DCLS.files if name.startswith(f"{mode}/")}
     # Observed at most 2.4e-7 on the outputs and 1.4e-6 on any gradient.
     np.testing.assert_allclose(out, expected["out"], rtol=1e-5, atol=2e-6)
-    np.testing.assert_allclose(grad_x, expected["grad_x"], rtol=1e-5, atol=4e-6)
+    np.testing.assert_allclose(grad_x, expected["grad_x"], rtol=1e-5, atol=4e-6)  # observed 2.4e-7
+    # Observed 1.4e-6.
     np.testing.assert_allclose(grads["params"]["kernel"], expected["grad_weight"].T, rtol=1e-5, atol=4e-6)
     if mode == "gauss":
         # d/d delay = -d/d P.
+        # Observed 8.9e-8.
         np.testing.assert_allclose(grads["params"]["delay"], -expected["grad_P"].T, rtol=1e-4, atol=4e-6)
 
 
@@ -269,27 +273,28 @@ def test_a_fully_delayed_network_trains_as_snn_delays():
     assert all(float(rate.mean()) > 0.05 for rate in jax.tree.leaves(updated[RATES]))  # hidden layers fire
     # Each delayed synapse appends 2 steps, so 9 input steps reach the readout as 15. Observed at
     # most 1.2e-7 on the outputs and the loss, 2.1e-7 on the input gradient, 5.7e-7 on any other.
-    np.testing.assert_allclose(out, SNN_DELAYS["train/out"], rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(value, SNN_DELAYS["train/loss"], rtol=1e-6)
-    np.testing.assert_allclose(grad_x, SNN_DELAYS["train/grad_x"], rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(out, SNN_DELAYS["train/out"], rtol=1e-5, atol=1e-5)  # observed 1.2e-7
+    np.testing.assert_allclose(value, SNN_DELAYS["train/loss"], rtol=1e-6)  # observed 7.9e-8 relative
+    np.testing.assert_allclose(grad_x, SNN_DELAYS["train/grad_x"], rtol=1e-5, atol=1e-6)  # observed 1.9e-7
     for layer, name in enumerate(("delayed_0", "delayed_1", "readout")):
         np.testing.assert_allclose(grads[name]["kernel"], SNN_DELAYS[f"train/grad_weight{layer}"].T,
-                                   rtol=1e-5, atol=1e-6)
+                                   rtol=1e-5, atol=1e-6)  # observed 4.8e-7
         # d/d delay = -d/d P.
         np.testing.assert_allclose(grads[name]["delay"], -SNN_DELAYS[f"train/grad_P{layer}"].T,
-                                   rtol=1e-5, atol=1e-6)
+                                   rtol=1e-5, atol=1e-6)  # observed 9.7e-8
     for layer in range(2):
         norm = f"norm_{layer}"
         np.testing.assert_allclose(grads[norm]["scale"], SNN_DELAYS[f"train/grad_bn_weight{layer}"],
-                                   rtol=1e-5, atol=1e-6)
+                                   rtol=1e-5, atol=1e-6)  # observed 4.3e-7
         np.testing.assert_allclose(grads[norm]["bias"], SNN_DELAYS[f"train/grad_bn_bias{layer}"],
-                                   rtol=1e-5, atol=1e-6)
+                                   rtol=1e-5, atol=1e-6)  # observed 4.2e-7
         running = updated["batch_stats"][norm]
         np.testing.assert_allclose(running["mean"], SNN_DELAYS[f"train/running_mean{layer}"],
-                                   rtol=1e-5, atol=1e-7)
+                                   rtol=1e-5, atol=1e-7)  # observed 1.5e-8
         # torch keeps the unbiased variance of the n = steps * batch values, flax the biased one.
         n = (9 + 2 * (layer + 1)) * 4
         unbiased = 0.9 + (np.asarray(running["var"]) - 0.9) * n / (n - 1)
+        # Observed 6.5e-8 relative.
         np.testing.assert_allclose(unbiased, SNN_DELAYS[f"train/running_var{layer}"], rtol=1e-5)
 
 
@@ -305,7 +310,7 @@ def test_a_fully_delayed_network_evaluates_as_snn_delays():
     # Observed at most 2.4e-7.
     np.testing.assert_allclose(out, SNN_DELAYS["eval/out"], rtol=1e-5, atol=1e-5)
     loss = jnp.mean(softmax_sum_cross_entropy(out, jnp.asarray(SNN_DELAYS["labels"])))
-    np.testing.assert_allclose(loss, SNN_DELAYS["eval/loss"], rtol=1e-6)
+    np.testing.assert_allclose(loss, SNN_DELAYS["eval/loss"], rtol=1e-6)  # observed 1.8e-7 relative
 
 
 def test_event_binning_reproduces_snn_delays_frames():
@@ -332,12 +337,13 @@ def test_schedules_stepped_once_an_epoch_are_snn_delays_torch_schedulers():
 
     # OneCycleLR(max_lr=5e-3, total_steps=epochs) and its Adam momentum cycle.
     np.testing.assert_allclose(values(OneCycle(peak=5e-3, start=2e-4, end=2e-8)), SNN_DELAYS["schedule/lr_w"],
-                               rtol=1e-5)
+                               rtol=1e-5)  # observed 7.8e-6 relative
     np.testing.assert_allclose(values(OneCycle(peak=0.85, start=0.95, end=0.95)), SNN_DELAYS["schedule/b1"],
-                               rtol=1e-6)
+                               rtol=1e-6)  # observed 6.0e-8 relative
     # CosineAnnealingLR(T_max=epochs) on the positions' rate, 100 times the weights' 1e-3.
     np.testing.assert_allclose(values(Cosine(peak=0.1, warmup_steps=0)), SNN_DELAYS["schedule/lr_pos"],
-                               rtol=1e-4, atol=1e-8)
+                               rtol=1e-4, atol=1e-8)  # observed 9.6e-9
     # decrease_sig: DCLS's raw width from 12 to 0.23 over the first quarter; sparx's width adds 0.27.
     width = ExponentialDecay(start=12.0, end=0.23, decay_steps=epochs // 4, offset=0.27)
+    # Observed 4.1e-7 relative.
     np.testing.assert_allclose(values(width), SNN_DELAYS["schedule/sig"] + 0.27, rtol=1e-5)

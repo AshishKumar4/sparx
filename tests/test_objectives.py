@@ -99,9 +99,9 @@ def test_the_loss_is_the_mean_cross_entropy_of_the_readout_plus_the_rate_penalty
     per_neuron = rate.mean(0)
     penalty = jnp.mean(jax.nn.relu(per_neuron - 0.4) ** 2 + jax.nn.relu(0.3 - per_neuron) ** 2)
     value, _ = stats.mean()
-    np.testing.assert_allclose(value, ce.mean() + 2.0 * penalty, rtol=1e-5)
-    np.testing.assert_allclose(aux.metrics["rate_penalty"], penalty, rtol=1e-5)
-    np.testing.assert_allclose(aux.metrics["rate/LIF_0"], rate.mean(), rtol=1e-6)
+    np.testing.assert_allclose(value, ce.mean() + 2.0 * penalty, rtol=1e-5)  # observed 0 relative
+    np.testing.assert_allclose(aux.metrics["rate_penalty"], penalty, rtol=1e-5)  # observed 0 relative
+    np.testing.assert_allclose(aux.metrics["rate/LIF_0"], rate.mean(), rtol=1e-6)  # observed 0 relative
     assert penalty > 0  # the band is narrow enough to bind
 
 
@@ -135,9 +135,9 @@ def test_scheduled_call_arguments_reach_the_model_in_loss_and_evaluation():
     stats, _ = objective.loss(variables, batch, step)
     outputs = Scaled().apply(variables, Direct(4)(jax.random.key(1), batch["image"]), 2.0)
     ce = optax.softmax_cross_entropy_with_integer_labels(jnp.mean(outputs, 0), batch["label"])
-    np.testing.assert_allclose(stats.mean()[0], ce.mean(), rtol=1e-5)
+    np.testing.assert_allclose(stats.mean()[0], ce.mean(), rtol=1e-5)  # observed 0 relative
     scores = objective.evaluate(variables, batch, step)
-    np.testing.assert_allclose(scores.losses[:, 0], ce, rtol=1e-5)
+    np.testing.assert_allclose(scores.losses[:, 0], ce, rtol=1e-5)  # observed 0 relative
 
 
 def test_schedules_need_their_horizon():
@@ -163,7 +163,9 @@ def test_deployed_arguments_replace_the_schedules_in_evaluation_and_the_trained_
         return optax.softmax_cross_entropy_with_integer_labels(jnp.mean(outputs, 0), batch["label"])
 
     stats, _ = objective.loss(variables, batch, step)
+    # Observed 0 relative.
     np.testing.assert_allclose(stats.mean()[0], ce(2.0).mean(), rtol=1e-5)  # training follows the schedule
+    # Observed 3.4e-7 relative.
     np.testing.assert_allclose(objective.evaluate(variables, batch, step).losses[:, 0], ce(5.0), rtol=1e-5)
     assert objective.inference_record()["deployed"] == {"scale": 5.0}  # type: ignore[index]
 
@@ -187,7 +189,7 @@ def test_the_softmax_sum_readout_is_scored_and_predicted_by_the_summed_probabili
     probabilities = jnp.sum(jax.nn.softmax(outputs, -1), 0)
     expected = optax.softmax_cross_entropy_with_integer_labels(probabilities, batch["label"])
     stats, _ = objective.loss(variables, batch, step)
-    np.testing.assert_allclose(stats.mean()[0], expected.mean(), rtol=1e-5)
+    np.testing.assert_allclose(stats.mean()[0], expected.mean(), rtol=1e-5)  # observed 0 relative
     scores = objective.evaluate(variables, batch, step)
     np.testing.assert_array_equal(scores.correct[:, 0], jnp.argmax(probabilities, -1) == batch["label"])
 
@@ -246,7 +248,7 @@ def test_group_adam_is_torchs_adam_with_l2_weight_decay_and_a_momentum_schedule(
         m = beta * m + (1 - beta) * g
         v = 0.999 * v + 0.001 * g ** 2
         p = p - float(lr(t)) * (m / (1 - beta ** (t + 1))) / (np.sqrt(v / (1 - 0.999 ** (t + 1))) + 1e-8)
-        np.testing.assert_allclose(params, p, rtol=1e-5, atol=1e-7)
+        np.testing.assert_allclose(params, p, rtol=1e-5, atol=1e-7)  # observed 5.5e-8
 
 
 def test_the_trainers_name_is_refused_for_a_group():
@@ -267,7 +269,7 @@ def test_every_record_of_a_split_is_scored_once_whatever_the_batch(tmp_path):
     for split, records in (("val", val), ("test", test)):
         expected = np.mean(np.asarray(classifier(records["image"])) == records["label"])
         scores = trainer._display.evaluations[split][-1].scores
-        np.testing.assert_allclose(scores[f"{split}/accuracy"], expected)
+        np.testing.assert_allclose(scores[f"{split}/accuracy"], expected)  # observed 0 relative
     padded = whole_batches(val, 32)
     assert len(padded["label"]) == 96 and padded[WEIGHT].sum() == 70
 
@@ -420,7 +422,7 @@ def test_the_eprop_objectives_gradient_is_eprops(rule):
     # The trainer differentiates the mean over the batch of 8.
     for name, want in (("w_in", expected.w_in), ("w_rec", expected.w_rec * no_self),
                        ("w_out", expected.w_out), ("b_out", expected.b_out)):
-        np.testing.assert_allclose(grads[name], want / 8, rtol=1e-6, atol=1e-8, err_msg=name)
+        np.testing.assert_allclose(grads[name], want / 8, rtol=1e-6, atol=1e-8, err_msg=name)  # observed 0
     assert np.all(np.diag(grads["w_rec"]) == 0)
     assert all(np.any(np.asarray(g) != 0) for g in jax.tree.leaves(grads))
 

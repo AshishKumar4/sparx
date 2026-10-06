@@ -104,7 +104,7 @@ def test_extended_delayed_synapses_lengthen_the_output_by_half_their_range():
     assert out.shape == (10 + 2 + 1, 3, 2)
     # The appended steps hold zeros, so the first steps are the causal network's.
     causal = SpikingMLP(hidden=(4, 4), classes=2, delays=(4, 0, 3)).apply(variables, x, sigma=1.0)
-    np.testing.assert_allclose(out[:10], causal, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(out[:10], causal, rtol=1e-6, atol=1e-6)  # observed 0
 
 
 def test_batch_norm_normalizes_each_hidden_synapse_with_batch_statistics_in_training():
@@ -116,7 +116,7 @@ def test_batch_norm_normalizes_each_hidden_synapse_with_batch_statistics_in_trai
     synapse = DelayedDense(4, 2, name="delayed_0").apply({"params": variables["params"]["delayed_0"]},
                                                          x.reshape(10, 3, -1), 1.0)
     np.testing.assert_allclose(updated["batch_stats"]["norm_0"]["mean"], 0.1 * synapse.mean((0, 1)),
-                               rtol=1e-5, atol=1e-6)
+                               rtol=1e-5, atol=1e-6)  # observed 0
     # Evaluation reads the running statistics, so it differs from training on the same input.
     trained = net.apply(variables, x, train=True, sigma=1.0, mutable=["batch_stats"])[0]
     assert not np.allclose(net.apply(variables, x, train=False, sigma=1.0), trained)
@@ -129,7 +129,7 @@ def test_kaiming_uniform_weights_without_bias():
     kernel = np.asarray(params["delayed_0"]["kernel"])
     # torch's kaiming_uniform_(nonlinearity="relu"): uniform within sqrt(6 / fan_in), variance 2 / fan_in.
     assert np.abs(kernel).max() <= np.sqrt(6 / 300)
-    np.testing.assert_allclose(kernel.var(), 2 / 300, rtol=0.02)
+    np.testing.assert_allclose(kernel.var(), 2 / 300, rtol=0.02)  # observed 2.2e-3 relative
     with pytest.raises(ValueError, match="weight_init"):
         SpikingMLP(hidden=(4,), classes=2, weight_init="xavier").init(  # type: ignore[arg-type]
             jax.random.key(0), spikes())

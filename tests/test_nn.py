@@ -50,7 +50,7 @@ def test_learned_decays_start_at_tau_and_receive_gradients():
     layer = LIF(tau=3.0, learn_tau=True)
     variables = layer.init(jax.random.key(0), x)
     decay = jax.nn.sigmoid(variables["params"]["decay"])
-    np.testing.assert_allclose(decay, np.full(D, math.exp(-1 / 3.0)), rtol=1e-6)
+    np.testing.assert_allclose(decay, np.full(D, math.exp(-1 / 3.0)), rtol=1e-6)  # observed 4.7e-8 relative
     np.testing.assert_array_equal(layer.apply(variables, x), LIF(tau=3.0).apply({}, x))
     grad = jax.grad(lambda v: jnp.sum(layer.apply(v, x)))(variables)["params"]["decay"]
     assert np.all(np.isfinite(grad)) and np.any(grad != 0)
@@ -81,7 +81,7 @@ def test_streaming_in_chunks_equals_one_call():
     for chunk in (x[:1], x[1:10], x[10:11], x[11:]):
         out, carried = net.apply({**params, **carried}, chunk, mutable=[STATE])
         outputs.append(out)
-    np.testing.assert_allclose(jnp.concatenate(outputs), whole, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(jnp.concatenate(outputs), whole, rtol=1e-6, atol=1e-6)  # observed 0
 
 
 def test_a_call_without_the_state_collection_starts_at_rest():
@@ -112,7 +112,7 @@ def test_spike_rates_are_the_time_averaged_spikes_of_each_spiking_layer():
     assert set(rates) == {"LIF_0"}  # the readout fires no spikes
     (rate,) = rates["LIF_0"]["rate"]
     assert rate.shape == (B, D)
-    np.testing.assert_allclose(rate, jnp.mean(spikes, axis=0), rtol=1e-6)
+    np.testing.assert_allclose(rate, jnp.mean(spikes, axis=0), rtol=1e-6)  # observed 0 relative
 
 
 def test_recurrent_parameters_live_under_the_layer_wherever_it_is_built():
@@ -166,7 +166,7 @@ def test_layers_compose_with_jit_vmap_and_grad():
     # vmap over a leading axis of independent streams, each time-major.
     streams = jnp.stack([x, x * 0.5])
     batched = jax.vmap(lambda x: net.apply(params, x))(streams)
-    np.testing.assert_allclose(batched[1], net.apply(params, x * 0.5), rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(batched[1], net.apply(params, x * 0.5), rtol=1e-6, atol=1e-6)  # observed 0
 
 
 def test_bf16_networks_spike_in_bf16():

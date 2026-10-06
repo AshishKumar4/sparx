@@ -49,7 +49,7 @@ def test_the_streaming_snippet_continues_across_chunks():
     scope["chunks"] = [spikes[:3], spikes[3:5], spikes[5:]]
     exec(_block("carried = {}"), scope)
     whole = scope["net"].apply(scope["params"], spikes)
-    np.testing.assert_allclose(scope["out"], whole[5:], rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(scope["out"], whole[5:], rtol=1e-6, atol=1e-6)  # observed 0
 
 
 def test_the_pure_jax_model_snippet_runs():

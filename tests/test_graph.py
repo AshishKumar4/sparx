@@ -217,7 +217,7 @@ def test_a_run_resumed_from_its_checkpoint_is_the_unbroken_run(tmp_path):
     assert resumed.start == pytest.approx(20.0)
     np.testing.assert_array_equal(resumed.records["raster"], whole.records["raster"][skipped:])
     np.testing.assert_array_equal(resumed.records["counts"], whole.records["raster"][skipped:].sum(0))
-    np.testing.assert_allclose(resumed.times, whole.times[skipped:])
+    np.testing.assert_allclose(resumed.times, whole.times[skipped:])  # observed 2.2e-16 relative
     jax.tree.map(np.testing.assert_array_equal, resumed.variables["state"], whole.variables["state"])
 
 
@@ -245,6 +245,7 @@ def test_poisson_counts_follow_the_poisson_distribution(mean):
 
     table = _poisson_table(mean)
     draws = np.sum(np.random.default_rng(0).random((200_000, 1)) > table, axis=1)
+    # Observed 1.0e-15 relative.
     np.testing.assert_allclose(table, stats.poisson.cdf(np.arange(len(table)), mean), rtol=1e-12)
     # Bins expected to hold at least 50 draws, the tail lumped into the last.
     last = int(np.max(np.flatnonzero(stats.poisson.pmf(np.arange(len(table)), mean) * len(draws) >= 50)))

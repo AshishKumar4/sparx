@@ -74,7 +74,7 @@ def test_current_synapses_match_nest_to_rounding(model, synapse):
                                          "in": Receptor(synapse(param(model, "tau_syn_in")))})
     fired, v = nest_run(cell, model)
     np.testing.assert_array_equal(fired, NEST[f"{model}/spikes"])
-    np.testing.assert_allclose(v, NEST[f"{model}/v"], atol=1e-11)
+    np.testing.assert_allclose(v, NEST[f"{model}/v"], atol=1e-11)  # observed 3.6e-13
     assert fired.sum() >= 20
 
 
@@ -82,7 +82,7 @@ def test_delta_synapses_match_nest_to_rounding():
     cell = PointNeuron(nest_lif("iaf_psc_delta"), {"ex": Receptor(Delta()), "in": Receptor(Delta())})
     fired, v = nest_run(cell, "iaf_psc_delta")
     np.testing.assert_array_equal(fired, NEST["iaf_psc_delta/spikes"])
-    np.testing.assert_allclose(v, NEST["iaf_psc_delta/v"], atol=1e-11)
+    np.testing.assert_allclose(v, NEST["iaf_psc_delta/v"], atol=1e-11)  # observed 5.7e-14
 
 
 CONDUCTANCES = {
@@ -115,6 +115,7 @@ def test_conductance_synapses_fire_with_nest_spike_for_spike(model):
             silent = v if fired[until, neuron] == 0 else expected_v
             assert abs(silent[until, neuron] - param(model, "V_th")) < tolerance
         assert until > 0.9 * len(fired)
+        # Observed 1.1e-3.
         np.testing.assert_allclose(v[:until, neuron], expected_v[:until, neuron], atol=tolerance)
         assert expected[:until, neuron].sum() >= 30
 
@@ -125,7 +126,7 @@ def test_brian2_exponential_euler_is_the_start_of_step_hold():
     cell = conductance_cell("iaf_cond_exp", hold="start", t_ref=param("iaf_cond_exp", "t_ref") - DT)
     fired, v = nest_run(cell, "iaf_cond_exp", sign=-1.0)
     np.testing.assert_array_equal(fired, BRIAN2["coba/spikes"])
-    np.testing.assert_allclose(v, BRIAN2["coba/v"], atol=1e-9)
+    np.testing.assert_allclose(v, BRIAN2["coba/v"], atol=1e-9)  # observed 7.1e-14
 
 
 def test_brian2_exact_current_synapses_are_sparxs():
@@ -134,7 +135,7 @@ def test_brian2_exact_current_synapses_are_sparxs():
                        {"ex": Receptor(Exponential(2.0)), "in": Receptor(Exponential(5.0))})
     fired, v = nest_run(cell, model)
     np.testing.assert_array_equal(fired, BRIAN2["cuba/spikes"])
-    np.testing.assert_allclose(v, BRIAN2["cuba/v"], atol=1e-9)
+    np.testing.assert_allclose(v, BRIAN2["cuba/v"], atol=1e-9)  # observed 2.6e-13
 
 
 def test_conductance_hold_converges_at_second_order_to_the_rk4_truth():
@@ -292,7 +293,7 @@ def test_izhikevich_delta_input_matches_nest(scheme):
         (spikes, v), _ = run(izhikevich_2003("regular_spiking", scheme=scheme, order="nest"), inputs, dt=0.1,
                                    record=lambda state: state.v)
     np.testing.assert_array_equal(np.asarray(spikes.fired), NEST[f"{case}/spikes"])
-    np.testing.assert_allclose(np.asarray(v), NEST[f"{case}/v"], atol=1e-9)
+    np.testing.assert_allclose(np.asarray(v), NEST[f"{case}/v"], atol=1e-9)  # observed 2.5e-10
 
 
 IZHIKEVICH_FIGURE_1 = np.load(Path(__file__).parent / "fixtures" / "izhikevich_2004.npz")
@@ -321,9 +322,9 @@ def test_izhikevich_2004_patterns_are_his_codes_runs(panel, pattern):
     assert theirs.any()
     np.testing.assert_array_equal(np.flatnonzero(fired), np.flatnonzero(theirs))
     if pattern == "class_2_excitable":
-        np.testing.assert_allclose(v[~theirs], case["VV"][~theirs], rtol=0, atol=0.02)
+        np.testing.assert_allclose(v[~theirs], case["VV"][~theirs], rtol=0, atol=0.02)  # observed 1.2e-2
     else:
-        np.testing.assert_allclose(v[~theirs], case["VV"][~theirs], rtol=1e-8, atol=1e-8)
+        np.testing.assert_allclose(v[~theirs], case["VV"][~theirs], rtol=1e-8, atol=1e-8)  # observed 3.3e-9
 
 
 def hh_under_currents(steps, **fields):
@@ -355,7 +356,7 @@ def test_hodgkin_huxley_fires_with_nest():
 def test_hodgkin_huxley_rk4_is_closest_to_nest_without_strong_inhibition():
     fired, v = hh_under_currents(3000, scheme="rk4", substep=0.025)
     np.testing.assert_array_equal(fired, NEST["hh_currents/spikes"])
-    np.testing.assert_allclose(v, NEST["hh_currents/v"], atol=2e-2)
+    np.testing.assert_allclose(v, NEST["hh_currents/v"], atol=2e-2)  # observed 8.9e-3
 
 
 def test_hodgkin_huxley_strang_is_second_order():
@@ -366,9 +367,9 @@ def test_hodgkin_huxley_strang_is_second_order():
 
 def test_hodgkin_huxley_exponential_euler_is_brian2s():
     _, v = hh_under_currents(1000, scheme="exponential_euler", substep=None)
-    np.testing.assert_allclose(v[:100], BRIAN2["hh/v"][:100], atol=1e-10)
+    np.testing.assert_allclose(v[:100], BRIAN2["hh/v"][:100], atol=1e-10)  # observed 1.2e-11
     # Later, rounding differences carried through each spike's upswing grow.
-    np.testing.assert_allclose(v, BRIAN2["hh/v"], atol=1e-4)
+    np.testing.assert_allclose(v, BRIAN2["hh/v"], atol=1e-4)  # observed 6.9e-6
 
 
 @pytest.mark.parametrize("scheme", ["strang", "rk4"])

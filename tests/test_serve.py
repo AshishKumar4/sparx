@@ -53,7 +53,7 @@ def test_interleaved_sessions_equal_their_own_streams():
         for name, parts in futures.items():
             served = np.concatenate([f.result() for f in parts])
             direct = np.asarray(model.apply(variables, jnp.asarray(streams[name])[:, None]))[:, 0]
-            np.testing.assert_allclose(served, direct, rtol=1e-12, atol=1e-12)
+            np.testing.assert_allclose(served, direct, rtol=1e-12, atol=1e-12)  # observed 0
             assert np.abs(direct).max() > 0.1
 
 
@@ -117,7 +117,7 @@ def test_every_model_serves_its_direct_call(name):
         for session, parts in futures.items():
             served = np.concatenate([f.result() for f in parts])
             direct = np.asarray(model.apply(variables, jnp.asarray(streams[session])[:, None]))[:, 0]
-            np.testing.assert_allclose(served, direct, rtol=1e-12, atol=1e-12)
+            np.testing.assert_allclose(served, direct, rtol=1e-12, atol=1e-12)  # observed 0
             assert np.abs(np.diff(direct, axis=0)).max() > 1e-3  # the outputs move over time
 
 

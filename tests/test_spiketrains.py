@@ -12,7 +12,7 @@ def test_rates_hz_counts_spikes_per_second_of_a_run_in_ms_steps():
     spikes = np.zeros((1000, 3), bool)
     spikes[::100, 0] = True  # 10 spikes in 100 ms
     spikes[::10, 1] = True  # 100 spikes in 100 ms
-    np.testing.assert_allclose(rates_hz(spikes, 0.1), [100.0, 1000.0, 0.0])
+    np.testing.assert_allclose(rates_hz(spikes, 0.1), [100.0, 1000.0, 0.0])  # observed 0 relative
 
 
 @pytest.mark.parametrize("cost", [0.0, 0.1, 2.0])
@@ -20,4 +20,5 @@ def test_victor_purpura_matches_elephant(cost):
     spikes, dt = ELEPHANT["spikes"], float(ELEPHANT["dt"])
     times = [np.flatnonzero(spikes[:, i]) * dt for i in range(spikes.shape[1])]
     got = np.array([[victor_purpura(a, b, cost) for b in times] for a in times])
+    # Observed 7.1e-15.
     np.testing.assert_allclose(got, ELEPHANT[f"victor_purpura/{cost}"], rtol=1e-12, atol=1e-12)

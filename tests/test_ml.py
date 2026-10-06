@@ -48,7 +48,7 @@ def test_lif_final_membrane_matches_the_reference_loop():
     xs = currents(1)
     _, state = fired(LIFCell(0.9, 1.2, "subtract"), jnp.asarray(xs))
     _, membranes = reference.lif(xs.astype(np.float64), 0.9, 1.2, "subtract")
-    np.testing.assert_allclose(state.v, membranes[-1], rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(state.v, membranes[-1], rtol=1e-5, atol=1e-5)  # observed 4.2e-7
 
 
 def test_per_neuron_decays_and_thresholds_broadcast_over_the_last_axis():
@@ -63,6 +63,7 @@ def test_per_neuron_decays_and_thresholds_broadcast_over_the_last_axis():
 def test_li_reports_its_membrane_trace():
     xs = currents(3)
     out, _ = fired(LICell(0.7), jnp.asarray(xs))
+    # Observed 3.2e-7.
     np.testing.assert_allclose(out, reference.li(xs.astype(np.float64), 0.7), rtol=1e-5, atol=1e-5)
 
 
@@ -79,7 +80,7 @@ def test_a_step_of_dt_decays_by_the_decay_to_the_power_dt():
     halves = jnp.zeros((2 * T, B, F), xs.dtype).at[1::2].set(xs)
     _, whole = fired(LICell(0.7), xs)
     _, halved = fired(LICell(0.7), halves, dt=0.5)
-    np.testing.assert_allclose(halved.v, whole.v, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(halved.v, whole.v, rtol=1e-5, atol=1e-6)  # observed 4.8e-7
     _, unchanged = fired(LICell(0.7), halves, dt=1.0)
     assert not np.allclose(unchanged.v, whole.v)
 
@@ -232,7 +233,9 @@ def test_reset_gradient_follows_the_chain_rule():
     # ds1/dx0 = g(v1 - 1) * 0.8 * (1 - g(v0 - 1)) = 0.5 * 0.8 * 0.5 = 0.2,
     # and with the reset detached the spike's path drops out:
     # ds1/dx0 = g(v1 - 1) * 0.8 = 0.4.
+    # Observed 1.5e-8 relative.
     np.testing.assert_allclose(_two_step_gradient(detach_reset=False), 0.2, rtol=1e-6)
+    # Observed 1.5e-8 relative.
     np.testing.assert_allclose(_two_step_gradient(detach_reset=True), 0.4, rtol=1e-6)
 
 

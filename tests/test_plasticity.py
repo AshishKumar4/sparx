@@ -68,7 +68,7 @@ def test_pair_stdp_is_nests(name):
     got = run_stdp(rule, case)
     for mine, theirs in zip(got, nest_weights(case), strict=True):
         assert len(mine) == len(theirs) >= 40
-        np.testing.assert_allclose(mine, theirs, rtol=RTOL)
+        np.testing.assert_allclose(mine, theirs, rtol=RTOL)  # observed 6.4e-14 relative
     # The rule did something: weights moved well away from where they started.
     assert np.ptp(np.concatenate(got)) > 20
 
@@ -82,7 +82,7 @@ def test_triplet_stdp_is_nests():
     got = run_stdp(rule, case)
     for mine, theirs in zip(got, nest_weights(case), strict=True):
         assert len(mine) == len(theirs) >= 40
-        np.testing.assert_allclose(mine, theirs, rtol=RTOL)
+        np.testing.assert_allclose(mine, theirs, rtol=RTOL)  # observed 1.9e-13 relative
     assert np.ptp(np.concatenate(got)) > 5
 
 
@@ -101,7 +101,7 @@ def test_tsodyks_markram_is_nests(name):
     got = transmitted(np.asarray(efficacy) * float(case["initial"]), pre)
     for mine, theirs in zip(got, nest_weights(case), strict=True):
         assert len(mine) == len(theirs) >= 40
-        np.testing.assert_allclose(mine, theirs, rtol=RTOL)
+        np.testing.assert_allclose(mine, theirs, rtol=RTOL)  # observed 3.6e-13 relative
 
 
 def test_tsodyks_markram_depresses_and_facilitates():

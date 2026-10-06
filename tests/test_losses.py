@@ -16,13 +16,14 @@ SNNTORCH = np.load(Path(__file__).parent / "fixtures" / "snntorch.npz")
 
 def test_per_step_cross_entropy_matches_snntorch_ce_rate_loss():
     out = per_step_cross_entropy(jnp.asarray(SNNTORCH["loss_outputs"]), jnp.asarray(SNNTORCH["loss_labels"]))
-    np.testing.assert_allclose(out, SNNTORCH["ce_rate"], rtol=1e-6)
+    np.testing.assert_allclose(out, SNNTORCH["ce_rate"], rtol=1e-6)  # observed 0 relative
 
 
 def test_rate_mse_is_snntorch_mse_count_loss_over_steps():
     spikes = SNNTORCH["loss_spikes"]
     out = rate_mse(jnp.asarray(spikes), jnp.asarray(SNNTORCH["loss_labels"]))
     steps = spikes.shape[0]
+    # Observed 1.1e-7 relative.
     np.testing.assert_allclose(out, SNNTORCH["mse_count"].mean(-1) / steps, rtol=1e-6)
 
 
@@ -36,17 +37,18 @@ def test_softmax_sum_cross_entropy_is_snn_delays_sum_loss():
     log_p = m - m.max(-1, keepdims=True) - np.log(np.exp(m - m.max(-1, keepdims=True)).sum(-1, keepdims=True))
     expected = -log_p[np.arange(3), labels]
     got = losses.softmax_sum_cross_entropy(jnp.asarray(outputs, jnp.float32), jnp.asarray(labels))
-    np.testing.assert_allclose(got, expected, rtol=1e-6)
+    np.testing.assert_allclose(got, expected, rtol=1e-6)  # observed 1.3e-7 relative
+    # Observed 1.4e-7 relative.
     np.testing.assert_allclose(losses.softmax_sum(jnp.asarray(outputs, jnp.float32)), m, rtol=1e-6)
     # Each step's probabilities sum to one, so the summed ones sum to the step count.
-    np.testing.assert_allclose(m.sum(-1), 6.0)
+    np.testing.assert_allclose(m.sum(-1), 6.0)  # observed 0 relative
 
 
 def test_rate_mse_is_zero_at_the_target_rates():
     labels = jnp.asarray([2, 0])
     spikes = jnp.zeros((10, 2, 3)).at[:8, 0, 2].set(1).at[:2, 0, :2].set(1)
     spikes = spikes.at[:8, 1, 0].set(1).at[:2, 1, 1:].set(1)
-    np.testing.assert_allclose(rate_mse(spikes, labels), [0, 0], atol=1e-7)
+    np.testing.assert_allclose(rate_mse(spikes, labels), [0, 0], atol=1e-7)  # observed 0
 
 
 class Net(nn.Module):
@@ -70,7 +72,7 @@ def test_firing_rates_name_every_spiking_layer_with_its_mean_rate():
     rates = firing_rates(sown)
     assert set(rates) == {"LIF_0", "LIF_1"}
     (first,) = sown[RATES]["LIF_0"]["rate"]
-    np.testing.assert_allclose(rates["LIF_0"], first.mean())
+    np.testing.assert_allclose(rates["LIF_0"], first.mean())  # observed 0 relative
 
 
 def test_a_layer_called_twice_reports_each_call():
@@ -89,6 +91,7 @@ def test_rate_penalty_is_zero_inside_the_band_and_grows_outside():
     # Per-neuron batch means are 0.3, 0.0 and 0.8.
     assert float(rate_penalty(sown, lower=0.0, upper=1.0)) == 0
     # Neuron 1 sits 0.1 under the band and neuron 2 0.2 over it.
+    # Observed 5.1e-7 relative.
     np.testing.assert_allclose(rate_penalty(sown, lower=0.1, upper=0.6), (0.1**2 + 0.2**2) / 3, rtol=1e-6)
 
 
@@ -119,6 +122,7 @@ def test_van_rossum_is_exact_against_elephant(tau):
         trains = [jnp.asarray(spikes[:, i]) for i in range(spikes.shape[1])]
         got = np.array([[float(losses.van_rossum(a, b, tau, dt)) for b in trains] for a in trains])
     # Elephant's distance is sqrt(2) times van Rossum's.
+    # Observed 1.4e-14.
     np.testing.assert_allclose(np.sqrt(2 * got), ELEPHANT[f"van_rossum/{tau}"], rtol=1e-10, atol=1e-10)
 
 

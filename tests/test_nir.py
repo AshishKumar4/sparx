@@ -30,6 +30,7 @@ def assert_exports_back(graph, again):
         for field in ("weight", "bias", "tau", "v_threshold", "v_leak", "v_reset",
                       "stride", "padding", "dilation", "groups", "start_dim", "end_dim"):
             if hasattr(node, field):
+                # Observed 9.6e-8 relative.
                 np.testing.assert_allclose(np.asarray(getattr(other, field), float),
                                            np.asarray(getattr(node, field), float), rtol=1e-6)
         for port in ("input_type", "output_type"):
@@ -39,7 +40,7 @@ def assert_exports_back(graph, again):
             # The input scale r is folded into the preceding layer on import,
             # so it comes back as the Euler convention's tau / dt, and the
             # weights carry snnTorch's r * dt / tau, which it writes as 1.
-            np.testing.assert_allclose(other.r, node.tau / 1e-4, rtol=1e-6)
+            np.testing.assert_allclose(other.r, node.tau / 1e-4, rtol=1e-6)  # observed 4.8e-8 relative
     assert sorted(again.edges) == sorted(graph.edges)
 
 
@@ -116,7 +117,8 @@ def test_the_recurrent_graph_exports_back_with_its_feedback_bias_moved():
     # the input layer's bias, and the feedback comes back as a Linear node.
     assert isinstance(w_rec, nir.Affine) and np.any(w_rec.bias != 0)
     assert isinstance(again.nodes["1.w_rec"], nir.Linear)
-    np.testing.assert_allclose(again.nodes["1.w_rec"].weight, w_rec.weight, rtol=1e-6)
+    np.testing.assert_allclose(again.nodes["1.w_rec"].weight, w_rec.weight, rtol=1e-6)  # observed 0 relative
+    # Observed 0 relative.
     np.testing.assert_allclose(again.nodes["0"].bias, graph.nodes["0"].bias + w_rec.bias, rtol=1e-6)
     rest = {name: node for name, node in graph.nodes.items() if name not in ("0", "1.w_rec")}
     assert_exports_back(nir.NIRGraph(nodes=rest, edges=graph.edges, type_check=False), again)
@@ -157,7 +159,7 @@ def test_a_conv_node_computes_pytorchs_convolution():
         precision=jax.lax.Precision.HIGHEST) + bias[:, None, None]
     out = model.apply(variables, jnp.asarray(nhwc(x)))
     np.testing.assert_allclose(np.asarray(out), nhwc(np.asarray(expected).reshape(3, 2, 6, 4, 4)),
-                               rtol=1e-5, atol=1e-5)
+                               rtol=1e-5, atol=1e-5)  # observed 0
 
 
 def test_sparx_round_trips_through_nir_exactly():

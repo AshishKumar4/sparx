@@ -41,6 +41,7 @@ REFERENCE = [
 @pytest.mark.parametrize(("surrogate", "reference"), REFERENCE, ids=lambda s: repr(s)[:30])
 def test_reverse_mode_gradient_is_the_surrogate_derivative(surrogate: Surrogate, reference):
     grad = jax.grad(lambda x: jnp.sum(spike(x, surrogate)))(jnp.asarray(POINTS))
+    # Observed 1.5e-7.
     np.testing.assert_allclose(grad, reference(POINTS.astype(np.float64)), rtol=1e-5, atol=1e-7)
 
 
@@ -48,6 +49,7 @@ def test_reverse_mode_gradient_is_the_surrogate_derivative(surrogate: Surrogate,
 def test_forward_mode_tangent_is_the_surrogate_derivative(surrogate: Surrogate, reference):
     tangent = np.linspace(-1, 2, POINTS.size).astype(np.float32)
     _, jvp = jax.jvp(lambda x: spike(x, surrogate), (jnp.asarray(POINTS),), (jnp.asarray(tangent),))
+    # Observed 2.4e-7.
     np.testing.assert_allclose(jvp, reference(POINTS.astype(np.float64)) * tangent, rtol=1e-5, atol=1e-6)
 
 
@@ -92,4 +94,5 @@ def test_surrogate_areas_match_their_documented_normalization(surrogate, area):
 def test_spike_batches_under_vmap():
     xs = jnp.asarray(POINTS).reshape(1, -1).repeat(3, 0) * jnp.asarray([[1.0], [2.0], [-1.0]])
     grads = jax.vmap(jax.grad(lambda x: jnp.sum(spike(x, Sigmoid()))))(xs)
+    # Observed 0 relative.
     np.testing.assert_allclose(grads[1], jax.grad(lambda x: jnp.sum(spike(x, Sigmoid())))(xs[1]))

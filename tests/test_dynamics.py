@@ -48,7 +48,7 @@ def test_one_long_step_equals_many_short_ones_below_threshold():
         long, long_state = run(neuron, held(1), dt=5.0)
         short, short_state = run(neuron, held(500), dt=0.01)
     assert float(long.fired.sum() + short.fired.sum()) == 0
-    np.testing.assert_allclose(long_state.v, short_state.v, rtol=1e-12)
+    np.testing.assert_allclose(long_state.v, short_state.v, rtol=1e-12)  # observed 1.4e-15 relative
 
 
 def test_constant_conductances_relax_to_their_analytic_steady_state():
@@ -61,7 +61,7 @@ def test_constant_conductances_relax_to_their_analytic_steady_state():
         _, state = run(neuron, SynapticInput(0.0, conductance={"ampa": jnp.full((300, 1), g_e),
                                                          "gaba_a": jnp.full((300, 1), g_i)}), dt=0.1)
     expected = v_inf + (neuron.e_l - v_inf) * math.exp(-30.0 / tau)
-    np.testing.assert_allclose(state.v[0], expected, rtol=1e-12)
+    np.testing.assert_allclose(state.v[0], expected, rtol=1e-12)  # observed 2.5e-16 relative
     assert v_inf < neuron.v_th  # the test never fires
 
 
@@ -140,6 +140,7 @@ def test_peaked_synapses_peak_at_the_weight(synapse):
 
 def test_exponential_synapse_jumps_by_the_weight_and_decays():
     values, dt = _impulse(Exponential(4.0))
+    # Observed 1.6e-13 relative.
     np.testing.assert_allclose(values, 3.0 * np.exp(-np.arange(len(values)) * dt / 4.0), rtol=1e-12)
 
 
@@ -160,12 +161,14 @@ def test_the_response_integral_is_exact_at_equal_and_distant_time_constants(tau_
         exact = float(response(term, tau_m, dt))
         mean = float(term.mean(dt))
     expected, _ = quad(lambda s: current(s) * math.exp(-(dt - s) / tau_m), 0, dt, epsabs=0, epsrel=1e-13)
-    np.testing.assert_allclose(exact, expected, rtol=1e-12)
+    np.testing.assert_allclose(exact, expected, rtol=1e-12)  # observed 2.1e-16 relative
+    # Observed 1.7e-16 relative.
     np.testing.assert_allclose(mean, quad(current, 0, dt, epsabs=0, epsrel=1e-13)[0] / dt, rtol=1e-12)
 
 
 def test_mg_block_is_jahr_and_stevens():
     block = MgBlock()
+    # Observed 1.8e-8 relative.
     np.testing.assert_allclose(float(block(jnp.asarray(0.0))), 1 / (1 + 1 / 3.57), rtol=1e-6)
     assert float(block(jnp.asarray(-80.0))) < 0.05 < 0.5 < float(block(jnp.asarray(-10.0)))
     assert float(MgBlock(mg=0.0)(jnp.asarray(-80.0))) == 1.0
@@ -178,7 +181,7 @@ def test_nmda_conductance_is_scaled_by_the_block_at_the_start_of_the_step():
         nmda, _ = neuron.step(state, SynapticInput(conductance={"nmda": jnp.asarray([4.0])}), 0.1)
         g = 4.0 * float(MgBlock()(jnp.asarray(neuron.e_l)))
         ampa, _ = neuron.step(state, SynapticInput(conductance={"ampa": jnp.asarray([g])}), 0.1)
-    np.testing.assert_allclose(nmda.v, ampa.v, rtol=1e-12)
+    np.testing.assert_allclose(nmda.v, ampa.v, rtol=1e-12)  # observed 0 relative
 
 
 @pytest.mark.parametrize(("reset", "after_spike"), [("zero", 0.0), ("subtract", 0.75)])

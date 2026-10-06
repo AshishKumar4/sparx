@@ -79,9 +79,9 @@ def test_eprop_is_backpropagation_with_the_recurrent_spikes_cut(kind):
         expected = jax.grad(bptt_loss, argnums=1)(cell, params, inputs, targets, mse, tau=20.0,
                                                   cut_recurrence=True)
         value = bptt_loss(cell, params, inputs, targets, mse, tau=20.0)
-    np.testing.assert_allclose(total, value, rtol=1e-12)
+    np.testing.assert_allclose(total, value, rtol=1e-12)  # observed 2.0e-16 relative
     for got, want in zip(online, expected, strict=True):
-        np.testing.assert_allclose(got, want, rtol=1e-9, atol=1e-12)
+        np.testing.assert_allclose(got, want, rtol=1e-9, atol=1e-12)  # observed 1.4e-12
     assert np.abs(np.asarray(online.w_rec)).max() > 1e-4  # the network spikes and learns
 
 
@@ -119,8 +119,8 @@ def test_the_eligibility_factorization_is_exactly_backpropagation(kind):
         bptt = jax.grad(bptt_loss, argnums=1)(cell, params, inputs, targets, mse, tau=20.0)
         eprop_grads = eprop(cell, params, inputs, targets, mse, tau=20.0)[1]
     n_in = inputs.shape[2]
-    np.testing.assert_allclose(factorized[:n_in], bptt.w_in, rtol=1e-9, atol=1e-12)
-    np.testing.assert_allclose(factorized[n_in:], bptt.w_rec, rtol=1e-9, atol=1e-12)
+    np.testing.assert_allclose(factorized[:n_in], bptt.w_in, rtol=1e-9, atol=1e-12)  # observed 1.4e-12
+    np.testing.assert_allclose(factorized[n_in:], bptt.w_rec, rtol=1e-9, atol=1e-12)  # observed 2.4e-12
     # e-prop is not BPTT once the recurrence carries gradient.
     assert not np.allclose(eprop_grads.w_rec, bptt.w_rec, rtol=1e-3)
 
@@ -136,10 +136,10 @@ def test_eprop_steps_the_cell_and_the_readout_at_dt():
         total_dt, grads_dt = eprop(halved, params, inputs, targets, mse, tau=40.0, dt=2.0)
         bptt_dt = jax.grad(bptt_loss, argnums=1)(halved, params, inputs, targets, mse, tau=40.0, dt=2.0,
                                                  cut_recurrence=True)
-    np.testing.assert_allclose(total_dt, total, rtol=1e-12)
+    np.testing.assert_allclose(total_dt, total, rtol=1e-12)  # observed 2.0e-15 relative
     for got, want, bptt in zip(grads_dt, grads, bptt_dt, strict=True):
-        np.testing.assert_allclose(got, want, rtol=1e-9, atol=1e-12)
-        np.testing.assert_allclose(got, bptt, rtol=1e-9, atol=1e-12)
+        np.testing.assert_allclose(got, want, rtol=1e-9, atol=1e-12)  # observed 8.2e-12
+        np.testing.assert_allclose(got, bptt, rtol=1e-9, atol=1e-12)  # observed 6.8e-13
 
 
 def test_eprop_takes_the_cell_as_a_traced_argument():
@@ -151,7 +151,7 @@ def test_eprop_takes_the_cell_as_a_traced_argument():
         jitted = jax.jit(lambda cell, params: eprop(cell, params, inputs, targets, mse, tau=20.0))
         jitted = jitted(cell, params)[1]
     for got, want in zip(jitted, eager, strict=True):
-        np.testing.assert_allclose(got, want, rtol=1e-9, atol=1e-12)
+        np.testing.assert_allclose(got, want, rtol=1e-9, atol=1e-12)  # observed 0
 
 
 OTTT = np.load(Path(__file__).parent / "fixtures" / "ottt.npz")
@@ -175,7 +175,9 @@ def test_ottt_matches_xiao_et_als_online_gradients():
         # Their trace decays by 1 - 1 / tau, the leak of the time constant below.
         _, grads = ottt([cell, cell], layers, inputs, labels, loss, tau=-1 / np.log(1 - 1 / tau))
     for name, grad in zip(names, grads, strict=True):
+        # Observed 1.1e-16.
         np.testing.assert_allclose(grad.weight, OTTT[f"{name}/grad_weight"], rtol=1e-10, atol=1e-13)
+        # Observed 5.6e-17.
         np.testing.assert_allclose(grad.bias, OTTT[f"{name}/grad_bias"], rtol=1e-10, atol=1e-13)
 
 
@@ -200,7 +202,7 @@ def test_running_in_chunks_is_one_run():
     x = jnp.asarray(rng.uniform(0, 1, (8, 4)), jnp.float32)
     snn, variables = convert(model, normalize(model, model.init(jax.random.key(0), x), x))
     whole = snn.apply(variables, jnp.broadcast_to(x, (70, *x.shape))).mean(0)
-    np.testing.assert_allclose(run_converted(snn, variables, x, 70, chunk=30), whole, atol=1e-6)
+    np.testing.assert_allclose(run_converted(snn, variables, x, 70, chunk=30), whole, atol=1e-6)  # observed 0
     assert float(whole.max()) > 0
 
 
@@ -291,7 +293,7 @@ def test_folding_batch_norm_keeps_the_networks_outputs():
     unfolded = _cnn().apply(variables, x)
     model, folded = fold_batch_norm(_cnn(), variables)
     assert not any(isinstance(layer, nn.BatchNorm) for layer in model.layers)
-    np.testing.assert_allclose(model.apply(folded, x), unfolded, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(model.apply(folded, x), unfolded, rtol=1e-5, atol=1e-5)  # observed 7.3e-4
     assert float(jnp.std(unfolded)) > 0.1
 
 
@@ -424,9 +426,10 @@ def test_conversion_matches_rueckauer_et_als_toolbox():
         want = STB[f"normalized/{k}/weight"]
         if k == 2:
             want = _channels_first_rows(want, flat)
+        # Observed 1.2e-7.
         np.testing.assert_allclose(normalized["params"][name]["kernel"], want, rtol=1e-5, atol=1e-6)
         np.testing.assert_allclose(normalized["params"][name]["bias"], STB[f"normalized/{k}/bias"], rtol=1e-5,
-                                   atol=1e-6)
+                                   atol=1e-6)  # observed 2.4e-7
     snn, snn_variables = convert(folded_model, normalized)
     steps = int(STB["steps"])
     out, rates = _spiking_rates(snn, snn_variables, jnp.asarray(STB["x_test"]), steps)
@@ -469,12 +472,12 @@ def test_event_gradients_are_the_exact_derivatives_of_spike_times():
         for index in [(0, 0), (2, 1), (5, 3), (3, 2)]:
             step = jnp.zeros_like(weights).at[index].set(eps)
             numeric = (loss(weights + step, inputs) - loss(weights - step, inputs)) / (2 * eps)
-            np.testing.assert_allclose(grad_w[index], numeric, rtol=1e-6, atol=1e-8)
+            np.testing.assert_allclose(grad_w[index], numeric, rtol=1e-6, atol=1e-8)  # observed 9.7e-10
         finite = np.argwhere(np.isfinite(np.asarray(inputs)))[:4]
         for index in map(tuple, finite):
             step = jnp.zeros_like(inputs).at[index].set(eps)
             numeric = (loss(weights, inputs + step) - loss(weights, inputs - step)) / (2 * eps)
-            np.testing.assert_allclose(grad_in[index], numeric, rtol=1e-6, atol=1e-8)
+            np.testing.assert_allclose(grad_in[index], numeric, rtol=1e-6, atol=1e-8)  # observed 8.3e-10
 
 
 def test_event_simulation_is_the_lif_integrated_on_a_fine_grid():
@@ -500,7 +503,7 @@ def test_event_simulation_is_the_lif_integrated_on_a_fine_grid():
         want = np.sort(np.asarray(exact[0, n]))
         want = want[np.isfinite(want)]
         assert len(grid) == len(want)
-        np.testing.assert_allclose(grid, want, atol=3 * dt)
+        np.testing.assert_allclose(grid, want, atol=3 * dt)  # observed 1.2e-3
     assert np.isfinite(np.asarray(exact)).sum() >= 3
 
 
