@@ -33,9 +33,11 @@ A step covers `(t, t + dt]`. Synaptic currents are waveforms over it, sums
 of `(a + b s) exp(-s / tau)` for `s` in `[0, dt]` (`Term`), which cover the
 exponential, alpha and bi-exponential synapses; a model whose membrane is
 linear integrates them exactly. Conductances are held at their value at the
-start of the step. Spikes that arrive at the end of the step, at `t + dt`,
-are added to the synapses after the membrane has moved, so they shape the
-next step; a voltage jump (a delta synapse) lands before the threshold test.
+start of the step. Gap junctions (`Gap`) couple the membrane to the
+voltages of other neurons held at the start of the step. Spikes that
+arrive at the end of the step, at `t + dt`, are added to the synapses after
+the membrane has moved, so they shape the next step; a voltage jump (a
+delta synapse) lands before the threshold test.
 This is NEST's order, and Brian2's for a spike sent with no delay.
 
 Where the subthreshold dynamics are linear in the voltage for the step's
@@ -59,6 +61,7 @@ from flax import struct
 from sparx.surrogate import Surrogate, spike
 
 __all__ = [
+    "Gap",
     "Model",
     "NeuronModel",
     "Output",
@@ -112,6 +115,22 @@ class Term(NamedTuple):
         return self.amplitude * _phi1(x) + self.slope * dt * _psi(x)
 
 
+class Gap(NamedTuple):
+    """Gap-junction coupling onto each neuron over a step: the current `drive(s) - conductance * v(s)` (pA).
+
+    `conductance` (nS) is the sum of the neuron's junction conductances,
+    `sum_j g_ij`, and `drive` is `sum_j g_ij v_j(s)` over the step, its
+    partners' voltages as a waveform (`Term`, linear in `s`). The current
+    is linear in the neuron's own voltage, so a model integrates the
+    conductance with its synaptic conductances and the drive with its
+    synaptic currents; a linear membrane solves both exactly, and stays
+    stable however strong the coupling.
+    """
+
+    conductance: jax.Array
+    drive: Term
+
+
 @struct.dataclass
 class SynapticInput:
     """What a population receives in one step.
@@ -122,17 +141,24 @@ class SynapticInput:
     the receptor's name, which the neuron model pairs with its reversal
     potential, so an excitatory and an inhibitory conductance pull the
     voltage toward different targets. `jump` (mV) is added to the voltage at
-    the end of the step, before the threshold test.
+    the end of the step, before the threshold test. `gap` is the step's
+    gap-junction coupling, None for a neuron without junctions.
     """
 
     current: jax.Array | float = 0.0
     currents: tuple[Term, ...] = ()
     conductance: Mapping[str, jax.Array] = struct.field(default_factory=dict)
     jump: jax.Array | float = 0.0
+    gap: Gap | None = None
 
     def current_at(self, s: jax.Array | float) -> jax.Array:
-        """The total current (pA) `s` ms into the step."""
-        return sum((term.at(s) for term in self.currents), jnp.asarray(self.current))
+        """The total current (pA) `s` ms into the step, the drive of gap junctions included."""
+        return sum((term.at(s) for term in self.waveforms), jnp.asarray(self.current))
+
+    @property
+    def waveforms(self) -> tuple[Term, ...]:
+        """Every current waveform over the step: the synaptic currents, and the drive of gap junctions."""
+        return self.currents if self.gap is None else (*self.currents, self.gap.drive)
 
 
 class Output(NamedTuple):

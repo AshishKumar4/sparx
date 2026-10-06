@@ -18,7 +18,7 @@ models share (`fire`, `exact_linear`, `rk4`, `substeps` and the rest), which
 a new model is written with, stays in `sparx.dynamics.core`.
 """
 
-from sparx.dynamics.core import Model, NeuronModel, Output, Reset, SynapticInput, Term, decay, run
+from sparx.dynamics.core import Gap, Model, NeuronModel, Output, Reset, SynapticInput, Term, decay, run
 from sparx.dynamics.ml import (
     ACTIVATIONS,
     ALIFCell,
@@ -90,6 +90,7 @@ __all__ = [
     "BiExponential",
     "Delta",
     "Exponential",
+    "Gap",
     "Graded",
     "GradedPotential",
     "GradedPotentialState",

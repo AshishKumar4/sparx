@@ -73,9 +73,10 @@ __all__ = [
 def _jump(inputs: SynapticInput) -> jax.Array:
     """The step's input to a dimensionless membrane, its jump; anything else is refused."""
     held = inputs.current
-    if inputs.currents or inputs.conductance or not (isinstance(held, float | int) and held == 0):
+    if (inputs.currents or inputs.conductance or inputs.gap is not None
+            or not (isinstance(held, float | int) and held == 0)):
         raise ValueError("a dimensionless model takes its input as a jump (SynapticInput.jump), "
-                         "not as currents or conductances")
+                         "not as currents, conductances or gap junctions")
     return jnp.asarray(inputs.jump)
 
 

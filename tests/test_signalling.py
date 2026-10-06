@@ -1,5 +1,6 @@
-"""Signalling beyond spikes in networks: graded transmission and stochastic release."""
+"""Signalling beyond spikes in networks: graded transmission, stochastic release and gap junctions."""
 
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -30,13 +31,17 @@ from sparx.graph import (
     ArrivalInput,
     CurrentInput,
     FromEdges,
+    GapJunction,
     Network,
+    OneToOne,
     OutputTrace,
     Population,
     Projection,
     SpikeRaster,
     StateMonitor,
 )
+
+GAP = np.load(Path(__file__).parent / "fixtures" / "nest_gap.npz")
 
 
 def forced(size: int, receptor: str = "x") -> Population:
@@ -198,5 +203,78 @@ def test_with_short_term_plasticity_a_synapse_releases_with_p_times_the_efficacy
     z = (received - k * q) / np.sqrt(k * q * (1 - q))
     assert abs(z.mean()) < 4 / np.sqrt(z.size) and abs(z.std() - 1) < 0.05
     assert efficacy[0] > 2 * efficacy[-1]  # the synapses depressed
+
+
+# Gap junctions.
+
+
+def two_coupled_cells(g: float, dt: float, steps: int, *, separate: bool = False) -> np.ndarray:
+    """NEST's fixture's two passive cells joined by one junction of `g` nS, their voltage after each step."""
+    c, g_l, e_l = (float(GAP[f"param/{k}"]) for k in ("C_m", "g_L", "E_L"))
+    cell = GradedPotential(tau_m=c / g_l, c_m=c, e_l=e_l)
+    current, start = GAP["currents"], GAP["start"]
+    if separate:
+        populations = (Population("a", 1, cell, initial={"v": start[:1]}),
+                       Population("b", 1, cell, initial={"v": start[1:]}))
+        junction = GapJunction("a", "b", OneToOne(), weight=g)
+        inputs = (CurrentInput("a", "ia"), CurrentInput("b", "ib"))
+        drive = {"ia": np.full((steps, 1), current[0]), "ib": np.full((steps, 1), current[1])}
+        monitors = {"a": StateMonitor("a"), "b": StateMonitor("b")}
+    else:
+        populations = (Population("a", 2, cell, initial={"v": start}),)
+        junction = GapJunction("a", "a", FromEdges([0], [1]), weight=g)
+        inputs, drive = (CurrentInput("a", "i"),), {"i": np.broadcast_to(current, (steps, 2))}
+        monitors = {"a": StateMonitor("a")}
+    network = Network(populations, inputs=inputs, junctions=(junction,), dt=dt, dtype=jnp.float64)
+    with jax.enable_x64(new_val=True):
+        records, _ = network.apply(network.init(jax.random.key(0)), drive, monitors=monitors,
+                                   mutable=["state"])
+        return np.concatenate([np.asarray(records[name]) for name in monitors], axis=1)
+
+
+def coupled_exactly(g: float, t: np.ndarray) -> np.ndarray:
+    """The two cells' voltages at `t`: their mean relaxes with g_L, their difference with g_L + 2 g."""
+    c, g_l, e_l = (float(GAP[f"param/{k}"]) for k in ("C_m", "g_L", "E_L"))
+    current, u = GAP["currents"], GAP["start"] - e_l
+    total, gap = current.sum() / g_l, (current[0] - current[1]) / (g_l + 2 * g)
+    s = total + (u.sum() - total) * np.exp(-t * g_l / c)
+    d = gap + (u[0] - u[1] - gap) * np.exp(-t * (g_l + 2 * g) / c)
+    return e_l + np.stack([s + d, s - d], axis=-1) / 2
+
+
+@pytest.mark.parametrize(("g", "tolerance"), [(5.0, 5e-4), (50.0, 1e-2)])
+def test_gap_junctions_converge_at_second_order_to_two_coupled_cells(g, tolerance):
+    steps = 200  # 20 ms, five membrane time constants
+    t = (np.arange(steps) + 1) * 0.1
+    errors = []
+    for k in (1, 2, 4):
+        v = two_coupled_cells(g, 0.1 / k, steps * k)[k - 1::k]
+        errors.append(np.abs(v - coupled_exactly(g, t)).max())
+    # Observed 1.9e-4, 4.8e-5, 1.2e-5 mV at 5 nS; 7.1e-3, 1.8e-3, 4.7e-4 at 50 nS.
+    assert errors[0] < tolerance
+    assert errors[0] / errors[1] > 3.5 and errors[1] / errors[2] > 3.5  # second order
+    coupled = coupled_exactly(g, t)
+    assert np.abs(coupled[-1, 0] - coupled[-1, 1]) < 0.9 * np.abs(coupled_exactly(0.0, t)[-1] @ [1, -1])
+
+
+@pytest.mark.parametrize(("g", "tolerance"), [(5.0, 5e-4), (50.0, 1e-2)])
+def test_gap_junctions_agree_with_nests_waveform_relaxation(g, tolerance):
+    # NEST iterates the coupled cells to 1e-4 and lands within 1.5e-5 mV of the exact solution, so the
+    # difference is sparx's second-order error. Observed 1.9e-4 mV at 5 nS and 7.1e-3 at 50 nS. Without
+    # waveform relaxation NEST holds the partner a step behind and is 0.24 and 2.1 mV off.
+    nest = GAP[f"g{g:g}/wfr"]
+    np.testing.assert_allclose(two_coupled_cells(g, 0.1, len(nest)), nest, rtol=0, atol=tolerance)
+
+
+def test_a_junction_between_two_populations_is_the_junction_within_one():
+    apart = two_coupled_cells(5.0, 0.1, 50, separate=True)
+    np.testing.assert_array_equal(apart, two_coupled_cells(5.0, 0.1, 50))
+
+
+def test_a_gap_junction_refuses_a_model_without_a_physical_membrane():
+    with pytest.raises(ValueError, match="cannot take a gap junction"):
+        Network((Population("a", 2, LIFCell(0.9)),), junctions=(GapJunction("a", "a", AllToAll()),))
+    with pytest.raises(ValueError, match="no membrane voltage"):
+        Network((Population("a", 2, RateCell(0.9)),), junctions=(GapJunction("a", "a", AllToAll()),))
 
 

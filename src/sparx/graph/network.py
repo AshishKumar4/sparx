@@ -38,15 +38,17 @@ spikes, or a graded value every step for a graded model (a
 graded population delivers the weighted values through dense or edge
 delivery onto a `Graded` synapse, or onto a `Delta` receptor of a
 dimensionless model as its jump; event delivery, which skips the neurons
-that did not fire, is for spikes only.
+that did not fire, is for spikes only. Gap junctions (`GapJunction`) couple
+the membranes of two populations.
 
 One step covers `(t, t + dt]` and runs in NEST's order, which the
 single-neuron tests pin against NEST and Brian2 (`sparx.dynamics.core`):
 
 1. Delta synapses deliver the spikes due at the end of the step as
    voltage jumps.
-2. Each population advances its membranes on its synapses' output and
-   emits its output (spikes, or graded values).
+2. Each population advances its membranes on its synapses' output and its
+   gap junctions (`GapJunction`), and emits its output (spikes, or graded
+   values).
 3. The outputs enter each population's ring buffer.
 4. Every other synapse receives what is due at the end of the step, which
    shapes the membrane from the next step on.
@@ -74,15 +76,15 @@ import jax.numpy as jnp
 import numpy as np
 from dew.objectives.base import Variables
 
-from sparx.dynamics.core import NeuronModel
+from sparx.dynamics.core import Gap, NeuronModel, Output, Term
 from sparx.dynamics.plasticity import Plasticity, TsodyksMarkram, TsodyksMarkramState
 from sparx.dynamics.synapses import Graded, PointNeuron, PointNeuronState, Receptor, StochasticRelease
 from sparx.graph.connectivity import Connectivity, EdgeList
 
-__all__ = ["ArrivalInput", "Connections", "CurrentInput", "Drive", "Monitor", "Network", "NetworkState",
-           "OutputTrace", "PerEdge", "PerNeuron", "PlasticState", "PoissonInput", "Population",
-           "PopulationRate", "PopulationState", "Projection", "ReleaseState", "Reversing", "SpikeCounts",
-           "SpikeRaster", "SpikeTimes", "StateMonitor", "whole_steps"]
+__all__ = ["ArrivalInput", "Connections", "CurrentInput", "Drive", "GapJunction", "Monitor", "Network",
+           "NetworkState", "OutputTrace", "PerEdge", "PerNeuron", "PlasticState", "PoissonInput",
+           "Population", "PopulationRate", "PopulationState", "Projection", "ReleaseState", "Reversing",
+           "SpikeCounts", "SpikeRaster", "SpikeTimes", "StateMonitor", "whole_steps"]
 
 DENSE_LIMIT = 2 ** 25
 EVENT_BLOCK = 4096
@@ -250,6 +252,44 @@ class ArrivalInput:
     target: str
     name: str
     receptor: str
+
+
+@dataclass(frozen=True)
+class GapJunction:
+    """Electrical synapses between populations `a` and `b`, each passing `I = g (v_partner - v)`.
+
+    Each edge of `connectivity` (from a neuron of `a` to one of `b`) is one
+    junction of conductance `weight` (nS), symmetric: the current into the
+    neuron of `a` is `g (v_b - v_a)`, and the current into the neuron of `b`
+    is its negative. `a` and `b` may be one population. Both need a membrane
+    voltage `v` in mV, as the physical models have.
+
+    The coupling has no delay, and each step solves it in two passes. Every
+    coupled population first advances with its partners' voltages held at
+    their values at the start of the step, which predicts their voltages
+    at its end. It then advances again from the start, with each partner's
+    voltage moving linearly from its start to its predicted end. A neuron
+    integrates the coupling against its own voltage as a conductance, and
+    its partners' side as a current waveform (`sparx.dynamics.Gap`), which
+    a linear membrane solves exactly and stably. The result is second order
+    in `dt`. This is one iteration of the waveform relaxation NEST uses
+    (Hahne et al., Frontiers in Neuroinformatics 2015), which iterates
+    until the interpolated voltages agree to a tolerance and so converges
+    to the coupled solution; without it NEST holds each partner at its
+    voltage of the step before. `tests/test_signalling.py` compares sparx
+    with the analytic solution of two coupled passive cells and with NEST.
+    Coupled populations advance twice per step; the others once.
+    """
+
+    a: str
+    b: str
+    connectivity: Connectivity
+    weight: PerEdge = 1.0
+    name: str | None = None
+
+    @property
+    def key(self) -> str:
+        return self.name or f"{self.a}<->{self.b}"
 
 
 class Monitor:
@@ -612,6 +652,27 @@ def _check_graded(p: Projection, pre: Population, post: Population) -> None:
             raise ValueError(f"{p.key}: {option} acts on spikes, and population {p.pre!r} is graded")
 
 
+def _check_coupled(population: Population, junction: str, dt: float) -> None:
+    """Refuse a gap junction onto a population that has no membrane voltage or whose model cannot take
+    the coupling, by tracing one coupled step."""
+    model, where = type(population.neuron).__name__, f"gap junction {junction}"
+    shape, dtype = (population.size,), jnp.dtype(jnp.float32)
+    rest = jax.eval_shape(lambda: population.point_neuron.init_state(shape, dtype))
+    try:
+        jax.eval_shape(_membrane, rest)
+    except TypeError as error:
+        raise ValueError(f"{where}: {model} of population {population.name!r} has no membrane voltage to "
+                         f"couple") from error
+    zeros = jnp.zeros(shape, jnp.float32)
+    try:
+        gap = Gap(zeros, Term(zeros, zeros, jnp.inf))
+        jax.eval_shape(lambda state: population.point_neuron.advance(state, 0.0, jnp.zeros(()), dt, gap),
+                       rest)
+    except ValueError as error:
+        raise ValueError(f"{where}: {model} of population {population.name!r} cannot take a gap junction: "
+                         f"{error}") from error
+
+
 def _check_sources(network: Network, populations: Mapping[str, Population]) -> None:
     """Refuse inputs onto unknown populations or receptors, and Poisson spikes onto a `Graded` synapse."""
     for source in network.inputs:
@@ -624,6 +685,15 @@ def _check_sources(network: Network, populations: Mapping[str, Population]) -> N
                 and isinstance(populations[source.target].receptors[source.receptor].synapse, Graded)):
             raise ValueError(f"a PoissonInput sends spikes, and receptor {source.receptor!r} of "
                              f"{source.target!r} is a Graded synapse")
+
+
+def _check_couplings(network: Network, populations: Mapping[str, Population]) -> None:
+    """Refuse gap junctions that name what the network lacks or whose populations cannot take them."""
+    for junction in network.junctions:
+        for side in (junction.a, junction.b):
+            if side not in populations:
+                raise ValueError(f"gap junction {junction.key} names unknown population {side!r}")
+            _check_coupled(populations[side], junction.key, network.dt)
 
 
 def _check_population(population: Population, current: bool, dt: float) -> None:
@@ -645,15 +715,18 @@ class Network(nn.Module):
     dt: float = 0.1
     dtype: jax.typing.DTypeLike = jnp.float32
     """The dtype of the state: membranes, synapses, traces and spike buffers."""
+    junctions: Sequence[GapJunction] = ()
+    """Gap junctions, electrical coupling between the membranes of populations."""
 
     def __post_init__(self) -> None:
         super().__post_init__()
         populations = {p.name: p for p in self.populations}
         if len(populations) != len(self.populations):
             raise ValueError("population names must be unique")
-        keys = [p.key for p in self.projections]
+        keys = [p.key for p in self.projections] + [j.key for j in self.junctions]
         if len(set(keys)) != len(keys):
-            raise ValueError(f"projection names must be unique, got {keys}; name repeated ones")
+            raise ValueError(f"projection and gap junction names must be unique, got {keys}; name repeated "
+                             f"ones")
         for p in self.projections:
             for side in (p.pre, p.post):
                 if side not in populations:
@@ -661,6 +734,7 @@ class Network(nn.Module):
             _check_receptor(populations[p.post], p.receptor, f"projection {p.key}")
             _check_graded(p, populations[p.pre], populations[p.post])
         _check_sources(self, populations)
+        _check_couplings(self, populations)
         currents = {source.target for source in self.inputs if isinstance(source, CurrentInput)}
         for population in self.populations:
             _check_population(population, population.name in currents, self.dt)
@@ -702,6 +776,12 @@ class Network(nn.Module):
                                 "weight": matrix}
             else:
                 built[p.key] = {"pre": edges.pre, "post": edges.post, "delay": delays, "weight": weight}
+        # After the projections, so adding junctions leaves the projections' draws as they were.
+        for j in self.junctions:
+            a, b = populations[j.a], populations[j.b]
+            edges = j.connectivity.edges(rng, a.size, b.size, j.a == j.b)
+            weight = _per_edge(j.weight, rng, edges, f"{j.key} weight").astype(np.dtype(self.dtype))
+            built[j.key] = {"a": edges.pre, "b": edges.post, "weight": weight}
         return built
 
     def _lags(self, edges) -> dict[str, int]:
@@ -813,6 +893,9 @@ class Network(nn.Module):
             else:
                 weights[p.key] = self.variable("connectome", f"weight:{p.key}",
                                                lambda k=p.key: jnp.asarray(build()[k]["weight"])).value
+        for j in self.junctions:
+            weights[j.key] = self.variable("connectome", f"weight:{j.key}",
+                                           lambda k=j.key: jnp.asarray(build()[k]["weight"])).value
         state = self.variable("state", "network", lambda: self._rest(populations, weights, self._lags(edges)))
         if self.is_initializing():
             return {}
@@ -867,6 +950,7 @@ class _Stepper:
         self.into: dict[str, list[Projection]] = {name: [] for name in populations}
         for p in network.projections:
             self.into[p.post].append(p)
+        self.coupled = sorted({side for j in network.junctions for side in (j.a, j.b)})
         # Each stochastic projection draws from its own stream, numbered after the Poisson inputs' streams.
         self.streams = {p.key: len(network.inputs) + i for i, p in enumerate(network.projections)
                         if p.release is not None}
@@ -983,6 +1067,23 @@ class _Stepper:
                 arrivals[p.receptor] = arrivals.get(p.receptor, 0.0) + due
         return arrivals
 
+    def gaps(self, start: Mapping[str, jax.Array], end: Mapping[str, jax.Array]) -> dict[str, Gap]:
+        """Each coupled population's gap-junction conductance, and the drive of its partners' voltages
+        moving linearly from `start` to `end` over the step, by population."""
+        conductance: dict[str, jax.Array] = {}
+        drive: dict[str, jax.Array] = {}
+        slope: dict[str, jax.Array] = {}
+        for j in self.network.junctions:
+            e, g = self.edges[j.key], self.weights[j.key]
+            for here, there, mine, theirs in ((j.a, j.b, e["a"], e["b"]), (j.b, j.a, e["b"], e["a"])):
+                size = self.populations[here].size
+                conductance[here] = conductance.get(here, 0.0) + jax.ops.segment_sum(g, mine, size)
+                before, after = start[there][theirs].astype(g.dtype), end[there][theirs].astype(g.dtype)
+                drive[here] = drive.get(here, 0.0) + jax.ops.segment_sum(g * before, mine, size)
+                rise = g * (after - before) / self.dt
+                slope[here] = slope.get(here, 0.0) + jax.ops.segment_sum(rise, mine, size)
+        return {name: Gap(conductance[name], Term(drive[name], slope[name], jnp.inf)) for name in conductance}
+
     def plasticity(self, t: jax.Array, plastic: dict[str, PlasticState], fired: Mapping[str, jax.Array],
                    buffers: Mapping[str, jax.Array]) -> None:
         """STDP: presynaptic spikes as sent, postsynaptic ones after the projection's (dendritic) delay."""
@@ -1011,15 +1112,29 @@ class _Stepper:
             return {p.key: short_term[p.key]["buffer"] if p.short_term is not None else buffers[p.pre]
                     for p in projections}
 
-        # 1-2. Delta jumps due now, then the membranes.
+        # 1-2. Delta jumps due now, then the membranes, coupled by gap junctions.
         moved, outputs = {}, {}
         frozen = {name: pop.point_neuron.frozen(pops[name]["point_neuron"], self.dt)
                   for name, pop in self.populations.items()}
         before = rings({name: pops[name]["buffer"] for name in self.populations})
-        for name, pop in self.populations.items():
-            jumps = pop.point_neuron.delta(self.gather(name, t, external[name], before, weights, delta=True))
-            moved[name], out = pop.point_neuron.advance(
-                pops[name]["point_neuron"], currents.get(name, 0.0), jumps, self.dt)
+        jumps = {name: pop.point_neuron.delta(self.gather(name, t, external[name], before, weights,
+                                                          delta=True))
+                 for name, pop in self.populations.items()}
+
+        def advance(name: str, gap: Gap | None) -> tuple[PointNeuronState, Output]:
+            return self.populations[name].point_neuron.advance(
+                pops[name]["point_neuron"], currents.get(name, 0.0), jumps[name], self.dt, gap)
+
+        gaps: dict[str, Gap] = {}
+        if self.network.junctions:
+            # Predict each coupled membrane's end voltage with its partners held, then advance it with
+            # them moving linearly to theirs: one iteration of waveform relaxation, second order in dt.
+            start = {name: _membrane(pops[name]["point_neuron"]) for name in self.coupled}
+            held = self.gaps(start, start)
+            end = {name: _membrane(advance(name, held[name])[0]) for name in self.coupled}
+            gaps = self.gaps(start, end)
+        for name in self.populations:
+            moved[name], out = advance(name, gaps.get(name))
             outputs[name] = out.value
 
         # 3. Outputs into the ring buffers; short-term release scales spikes as they are sent.

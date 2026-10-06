@@ -29,7 +29,7 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 
-from sparx.dynamics.core import NeuronModel, Output, SynapticInput, Term, membrane_dtype
+from sparx.dynamics.core import Gap, NeuronModel, Output, SynapticInput, Term, membrane_dtype
 
 __all__ = [
     "Alpha",
@@ -347,8 +347,9 @@ class PointNeuron[State]:
         return [name for name, r in self.receptors.items() if r.synapse.lands == where]
 
     def advance(self, state: PointNeuronState[State], current: jax.Array | float, jump: jax.Array | float,
-                dt: float) -> tuple[PointNeuronState[State], Output]:
-        """Move the membrane over a step on the synapses' output, with `jump` (mV) landing at its end."""
+                dt: float, gap: Gap | None = None) -> tuple[PointNeuronState[State], Output]:
+        """Move the membrane over a step on the synapses' output and `gap`, with `jump` (mV) landing at its
+        end."""
         currents: list[Term] = []
         conductance: dict[str, jax.Array] = {}
         for name in self.landing("synapse"):
@@ -359,7 +360,7 @@ class PointNeuron[State]:
             else:
                 held = (term.amplitude if self.hold == "start" else term.mean(dt) for term in terms)
                 conductance[name] = sum(held, jnp.zeros(()))
-        received = SynapticInput(current, tuple(currents), conductance, jump)
+        received = SynapticInput(current, tuple(currents), conductance, jump, gap)
         cell, out = self.neuron.step(state.neuron, received, dt)
         return PointNeuronState(cell, state.synapses), out
 

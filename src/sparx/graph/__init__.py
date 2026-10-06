@@ -24,6 +24,7 @@ from sparx.graph.models import brunel, coba, cuba, from_record
 from sparx.graph.network import (
     ArrivalInput,
     CurrentInput,
+    GapJunction,
     Monitor,
     Network,
     OutputTrace,
@@ -47,6 +48,7 @@ __all__ = [
     "FixedOutDegree",
     "FixedProbability",
     "FromEdges",
+    "GapJunction",
     "Monitor",
     "Network",
     "OneToOne",

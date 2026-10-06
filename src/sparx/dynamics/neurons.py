@@ -77,11 +77,14 @@ class MgBlock:
 
 def _synaptic(model: LIF | GradedPotential | AdEx | Izhikevich | HodgkinHuxley, inputs: SynapticInput,
               v: jax.Array) -> tuple[jax.Array, jax.Array]:
-    """The total held conductance (nS) and its drive `sum g E` (pA) at voltage `v`, gates applied."""
+    """The total held conductance (nS) and its drive `sum g E` (pA) at voltage `v`, gates applied; the
+    conductance includes gap junctions', whose drive is a current waveform (`SynapticInput.waveforms`)."""
     conductance = {name: g * model.gates[name](v) if name in model.gates else g
                    for name, g in inputs.conductance.items()}
     total = sum(conductance.values(), jnp.zeros(()))
     drive = sum((g * model.reversal[name] for name, g in conductance.items()), jnp.zeros(()))
+    if inputs.gap is not None:
+        total = total + inputs.gap.conductance
     return total, drive
 
 
@@ -91,7 +94,7 @@ def _leaky(model: LIF | GradedPotential, v: jax.Array, inputs: SynapticInput, dt
     With the conductances and the current held, the membrane relaxes toward
     `(g_L E_L + sum g_k E_k + I) / (g_L + sum g_k)` with time constant
     `C / (g_L + sum g_k)`, and each synaptic current waveform adds its exact
-    response against that time constant.
+    response against that time constant, the drive of gap junctions included.
     """
     g_l = model.c_m / model.tau_m
     g_syn, syn_drive = _synaptic(model, inputs, v)
@@ -99,7 +102,7 @@ def _leaky(model: LIF | GradedPotential, v: jax.Array, inputs: SynapticInput, dt
     drive = g_l * model.e_l + inputs.current + syn_drive
     tau = model.c_m / g_total
     return exact_linear(v, drive / g_total, tau, dt) + sum(
-        (response(term, tau, dt) for term in inputs.currents), jnp.zeros(())) / model.c_m + inputs.jump
+        (response(term, tau, dt) for term in inputs.waveforms), jnp.zeros(())) / model.c_m + inputs.jump
 
 
 class LIFState(NamedTuple):
@@ -178,7 +181,7 @@ class GradedPotential:
 
     The membrane is `LIF`'s without a threshold, solved exactly over each
     step for held inputs, with conductances, gates, synaptic current
-    waveforms as `LIF` reads them. The output is the
+    waveforms and gap junctions as `LIF` reads them. The output is the
     release at the end of the step, as a fraction of the maximal rate, in
     [0, 1]. A `Graded` synapse holds it over the next step and filters it
     with its own kinetics, so the weight of a projection from a graded
