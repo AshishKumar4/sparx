@@ -2,7 +2,7 @@
 
 An encoder is a frozen dataclass called as `encoder(key, x)` on a batch
 field `[B, ...]`. The same object encodes in a plain JAX loop and inside
-`sparx.dew.SpikingClassifier`, and it is registered
+`sparx.objectives.SpikingClassifierObjective`, and it is registered
 (`sparx.registry.spike_encoders`), so a run's record holds it as
 `{"name": "rate", "fields": {"steps": 8}}` and rebuilds it in another
 process.
@@ -61,7 +61,7 @@ class SpikeEncoder(ABC):
     def encode(self, key: jax.Array, x: ArrayLike) -> jax.Array: ...
 
 
-def _is_key(key: object) -> bool:
+def _is_key(key: ArrayLike) -> bool:
     """A typed key (`jax.random.key`) or a raw one (`jax.random.PRNGKey`, uint32 `[..., 2]`)."""
     if not isinstance(key, jax.Array | np.ndarray):
         return False

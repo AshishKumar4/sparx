@@ -49,14 +49,27 @@ sparx = ["py.typed"]
 
 [tool.ruff]
 target-version = "py312"
+# dew's width (dew's pyproject.toml says why).
 line-length = 110
 
 [tool.ruff.lint]
+# dew's rules. Scripts use stdout as their interface; src/sparx/ruff.toml adds
+# T20 for the library, as dew's src/dew/ruff.toml does.
 select = [
     "E", "F", "W", "I", "UP", "B", "C4", "PERF", "PIE", "RET", "SIM", "PGH",
-    "ERA", "ANN401", "FBT003", "PLW0120", "RUF", "C901",
+    "ERA", "ANN401", "FBT003", "PLW0120", "RUF", "C901", "PLR0912", "PLR0915",
 ]
 allowed-confusables = ["×", "γ", "σ", "τ", "θ", "β", "α", "ρ"]
+
+[tool.ruff.lint.per-file-ignores]
+# dew's checker, copied with only its package root and name changed; its two
+# rule walkers are as complex as dew's own limit of 25 allows.
+"tools/lint_slop.py" = ["C901"]
+
+[tool.ruff.lint.pylint]
+# dew's limits. Sparx keeps the stricter mccabe default of 10.
+max-branches = 25
+max-statements = 75
 
 [tool.ruff.lint.isort]
 known-first-party = ["sparx"]
@@ -64,14 +77,19 @@ combine-as-imports = true
 split-on-trailing-comma = false
 
 [tool.pyright]
-include = ["src/sparx"]
+# As dew's: sparx's own source and its checker, against the project venv. A
+# worktree has no .venv of its own, so the gate passes --pythonpath instead.
+include = ["src/sparx", "tools/lint_slop.py"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "tests"]
 filterwarnings = [
     'error::DeprecationWarning:sparx($|\.)',
+    'error::PendingDeprecationWarning:sparx($|\.)',
     'error::FutureWarning:sparx($|\.)',
 ]

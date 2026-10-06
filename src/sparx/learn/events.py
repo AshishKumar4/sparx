@@ -138,7 +138,6 @@ def spike_times(inputs: jax.Array, weights: jax.Array, neuron: EventLIF, horizon
                 i = jnp.where(fires, i * jnp.exp(-jnp.where(fires, at, 0.0) / neuron.tau_syn), i)
                 v = jnp.where(fires, 0.0, v)
                 t = jnp.where(fires, t + jnp.where(fires, at, 0.0), t)
-            # Then decay to `end`.
             v_end, _ = _trajectory(neuron, v, i, end - t)
             i_end = i * jnp.exp(-(end - t) / neuron.tau_syn)
             return jnp.full_like(v, end), v_end, i_end, out, count, lost

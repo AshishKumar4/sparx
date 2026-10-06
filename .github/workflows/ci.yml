@@ -1,5 +1,6 @@
-# Installs sparx with dew and the dataset reader, lints and type checks
-# src/sparx, and runs the CPU test suite, dew's Trainer tests included.
+# Installs sparx with dew and the dataset reader on dew's jax (constraints.txt),
+# runs dew's three lint gates (ruff, tools/lint_slop.py, pyright) and the CPU
+# test suite, dew's Trainer tests included.
 
 name: CI
 
@@ -27,13 +28,17 @@ jobs:
       with:
         python-version: "3.12"
         cache: pip
-        cache-dependency-path: pyproject.toml
+        cache-dependency-path: |
+          pyproject.toml
+          constraints.txt
     - name: Install
       run: |
         python -m pip install --upgrade pip uv
-        pip install -e ".[datasets,test]"
+        pip install -e ".[datasets,test]" -c constraints.txt
     - name: Lint
-      run: uvx ruff@0.14.3 check src tests tools benchmarks examples recipes
+      run: |
+        uvx ruff@0.14.3 check src tests tools benchmarks examples recipes
+        python tools/lint_slop.py
     - name: Type check
       run: uvx pyright@1.1.406 --pythonpath "$(which python)" src/sparx
     - name: Test

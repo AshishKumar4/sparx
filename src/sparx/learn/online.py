@@ -30,7 +30,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
-from jax.extend.core import Jaxpr, Var
+from jax.extend.core import Jaxpr, Literal, Var
 
 from sparx.dynamics import LICell, NeuronModel, RecurrentCell, SynapticInput, decay
 from sparx.dynamics.core import membrane_dtype
@@ -127,7 +127,7 @@ def _sources(jaxpr: Jaxpr) -> list[frozenset[int]]:
     """
     sources: dict[Var, frozenset[int]] = {v: frozenset([i]) for i, v in enumerate(jaxpr.invars)}
 
-    def of(v: object) -> frozenset[int]:
+    def of(v: Var | Literal) -> frozenset[int]:
         return sources.get(v, frozenset()) if isinstance(v, Var) else frozenset()
 
     for eqn in jaxpr.eqns:

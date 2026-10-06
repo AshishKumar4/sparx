@@ -6,9 +6,9 @@ Sparx follows the same contract as [dew](https://github.com/AshishKumar4/dew/blo
 
 - Compose before you write. Look for the primitive first: `jax.lax.scan`, `jax.custom_jvp`, `flax.linen` layers (which already treat leading axes as batch axes), `optax` losses. A reimplementation needs a reason a reader can check, written where the code is.
 - One path. A capability has one implementation and one config field. No fallbacks or flags without a demonstrated need.
-- The seams are the contract. Neuron dynamics are pure JAX models (`sparx.dynamics`) with one contract, `init_state` and `step(state, SynapticInput, dt)`, that know nothing about Flax layers. Layers (`sparx.nn`) build models from attributes and parameters and run them over time with `sparx.dynamics.run`. Synapses are ordinary Flax layers. Objectives (`sparx.dew`) own encoding, loss and evaluation; dew's `Trainer` owns everything else.
+- The seams are the contract. Neuron dynamics are pure JAX models (`sparx.dynamics`) with one contract, `init_state` and `step(state, SynapticInput, dt)`, that know nothing about Flax layers. Layers (`sparx.nn`) build models from attributes and parameters and run them over time with `sparx.dynamics.run`. Synapses are ordinary Flax layers. Objectives (`sparx.objectives`) own encoding, loss and evaluation; dew's `Trainer` owns everything else.
 - Time is the leading axis, `[T, ...]`, everywhere inside a network.
-- Frozen at 1.0: parameter names and shapes, the `state` and `spike_rates` collections, cell field order, and the `SpikingClassifier` metric keys. Before 1.0 these change outright, with no compatibility path.
+- Frozen at 1.0: parameter names and shapes, the `state` and `spike_rates` collections, cell field order, and the `SpikingClassifierObjective` metric keys. Before 1.0 these change outright, with no compatibility path.
 
 ## Reference parity
 
@@ -24,7 +24,8 @@ A neuron, surrogate, encoder or loss that a paper or another library defines is 
 - Fix the cause. Do not suppress warnings, special-case inputs or fill in zeros as a fallback.
 - Types are narrow and true. No `Any`, and no casts to quiet a checker. Narrow Flax's union returns with an `isinstance` assertion that says why it holds.
 - Comments say why, never what or what changed. Docstrings describe the code as it is.
-- The gate, from the repository root: `uvx ruff@0.14.3 check src tests tools benchmarks examples && uvx pyright@1.1.406 --pythonpath .venv/bin/python src/sparx`.
+- One lint gate, dew's, run from the repository root: `uvx ruff@0.14.3 check src tests tools benchmarks examples recipes && python tools/lint_slop.py && uvx pyright@1.1.406 --pythonpath .venv/bin/python src/sparx`. `tools/lint_slop.py` is dew's checker for what ruff and a type checker cannot state, with the package changed to sparx; its docstring names every rule and the roots each runs over. A rule that is wrong for a real reason becomes an ignore in `pyproject.toml` with that reason beside it, never a `# noqa` in `src/`. The one exception is an import kept for the registrations it makes, which carries `# noqa: F401  (registers the kind)`.
+- Install with dew's jax: `pip install -e '.[datasets,test]' -c constraints.txt`.
 - Measure performance claims. A change that claims to be faster ships with the number, the command and the hardware. A path that is not faster where it can be measured does not ship; [docs/performance.md](docs/performance.md) records what was tried.
 - Performance never costs anything else. An optimization matches the outputs and gradients it replaces to fp32 tolerance.
 

@@ -84,7 +84,7 @@ __all__ = ["from_nir", "to_nir"]
 Discretization = Literal["exact", "euler"]
 type LayerParams = Mapping[str, jax.Array | np.ndarray]
 """One layer's parameters: name to array."""
-type Variables = Mapping[str, Mapping[str, LayerParams]]
+type StackVariables = Mapping[str, Mapping[str, LayerParams]]
 """A sequential stack's variables, `{"params": {"layers_k": {...}}}`."""
 type Pair = tuple[int, int]
 type Edges = list[tuple[str, str]]
@@ -250,7 +250,8 @@ def _first_shape(model: nn.Sequential, params: Mapping[str, LayerParams],
                      "for a stack that does not start with a Dense layer")
 
 
-def to_nir(model: nn.Sequential, variables: Variables, *, dt: float, discretization: Discretization = "exact",
+def to_nir(model: nn.Sequential, variables: StackVariables, *, dt: float,
+           discretization: Discretization = "exact",
            input_shape: Sequence[int] | None = None) -> nir.NIRGraph:
     """The NIR graph of a sequential stack of the layers above, at step `dt` seconds.
 

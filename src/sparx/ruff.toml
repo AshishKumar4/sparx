@@ -1,0 +1,6 @@
+# Library code returns what it computes and prints nothing, as dew's does.
+# Scripts retain print() under the shared rules in pyproject.toml.
+extend = "../../pyproject.toml"
+
+[lint]
+extend-select = ["T20"]

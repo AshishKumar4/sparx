@@ -4,6 +4,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+
+# Remove when AshishKumar4/dew#34 merges: dew.config.to_json, the same function made public.
 from dew.config import _to_json
 
 from sparx.encode import Delta, Direct, Events, Latency, Rate, SpikeEncoder

@@ -64,7 +64,7 @@ __all__ = ["SpikingMaxPool", "convert", "fold_batch_norm", "normalize", "run_con
 
 type Params = Mapping[str, jax.Array | np.ndarray]
 """One layer's parameters or statistics: name to array."""
-type Variables = Mapping[str, Mapping[str, Params]]
+type StackVariables = Mapping[str, Mapping[str, Params]]
 """A sequential stack's variables, `{"params": {"layers_k": {...}}, ...}`."""
 type Pair = tuple[int, int]
 
@@ -150,7 +150,7 @@ def _call(layer: Callable[..., jax.Array], params: Params | None, x: jax.Array) 
 
 
 def fold_batch_norm(model: nn.Sequential,
-                    variables: Variables) -> tuple[nn.Sequential, dict[str, dict[str, Params]]]:
+                    variables: StackVariables) -> tuple[nn.Sequential, dict[str, dict[str, Params]]]:
     """The stack with each `nn.BatchNorm` folded into the dense or convolutional layer before it.
 
     Inference-mode batch norm computes `scale (z - mean) / sigma + offset`
@@ -184,7 +184,7 @@ def fold_batch_norm(model: nn.Sequential,
     return nn.Sequential(layers), {"params": folded}
 
 
-def normalize(model: nn.Sequential, variables: Variables, inputs: jax.Array,
+def normalize(model: nn.Sequential, variables: StackVariables, inputs: jax.Array,
               percentile: float = 99.9) -> dict[str, dict[str, Params]]:
     """Scale weights and biases so each layer's activations on `inputs` stay at or below the threshold 1.
 
@@ -237,7 +237,7 @@ def _spiking(layers: list[Callable[..., jax.Array]], k: int, last: int,
     raise NotImplementedError(f"cannot convert {layer!r}")
 
 
-def convert(model: nn.Sequential, variables: Variables, *,
+def convert(model: nn.Sequential, variables: StackVariables, *,
             reset: Reset = "subtract") -> tuple[nn.Sequential, dict[str, dict[str, Params]]]:
     """The spiking network of a ReLU stack: the same dense and convolutional layers with `sparx.nn.IF`
     neurons, threshold 1, in place of the ReLUs and after the last layer, and `SpikingMaxPool` for max
@@ -261,7 +261,7 @@ def convert(model: nn.Sequential, variables: Variables, *,
     return nn.Sequential(spiking), {"params": converted}
 
 
-def run_converted(model: nn.Sequential, variables: Variables, inputs: jax.Array, steps: int, *,
+def run_converted(model: nn.Sequential, variables: StackVariables, inputs: jax.Array, steps: int, *,
                   chunk: int = 50) -> jax.Array:
     """The converted network's output firing rates `[B, ...]` over `steps` steps of constant `inputs`.
 
