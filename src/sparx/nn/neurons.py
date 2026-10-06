@@ -32,11 +32,12 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from typing import ClassVar, Literal
+from typing import Literal
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+from flax.typing import PrecisionLike
 
 from sparx import dynamics
 from sparx.dynamics import (
@@ -89,9 +90,13 @@ class Neuron(nn.Module):
     time steps one iteration of the compiled loop holds (`jax.lax.scan`).
     """
 
-    spiking: ClassVar[bool] = True
     dt: float = dataclasses.field(default=1.0, kw_only=True)
     unroll: int = dataclasses.field(default=1, kw_only=True)
+
+    @property
+    def spiking(self) -> bool:
+        """Whether the layer emits spikes; a readout that returns its membrane (`LI`) does not."""
+        return True
 
     def build(self, x: jax.Array) -> NeuronModel:
         """The model for inputs like `x`, `[T, ..., features]`."""
@@ -215,9 +220,12 @@ class IF(Neuron):
 class LI(Neuron):
     """A leaky integrator readout (`sparx.dynamics.LICell`); returns its membrane, `[T, ...]`."""
 
-    spiking: ClassVar[bool] = False
     tau: float = 2.0
     learn_tau: bool = False
+
+    @property
+    def spiking(self) -> bool:
+        return False
 
     def build(self, x: jax.Array) -> LICell:
         return LICell(_decay(self, "decay", self.tau, self.learn_tau, x.shape[-1]))
@@ -354,10 +362,10 @@ class Recurrent(Neuron):
 
     neuron: Neuron = LIF()
     kernel_init: nn.initializers.Initializer = nn.initializers.orthogonal()
-    precision: jax.lax.Precision | None = None
+    precision: PrecisionLike = None
 
     @property
-    def spiking(self) -> bool:  # type: ignore[override]
+    def spiking(self) -> bool:
         return self.neuron.spiking
 
     def inputs(self, x: jax.Array) -> SynapticInput:

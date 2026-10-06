@@ -323,7 +323,7 @@ def test_event_binning_reproduces_snn_delays_frames():
 def test_schedules_stepped_once_an_epoch_are_snn_delays_torch_schedulers():
     from dew.training.optim import Cosine
 
-    from sparx.dew import ExponentialDecay, OneCycle, stepped
+    from sparx.optim import ExponentialDecay, OneCycle, stepped
     epochs, per_epoch = int(SNN_DELAYS["schedule/epochs"]), 3
     steps = np.arange(epochs) * per_epoch + 1  # a step inside each epoch
 

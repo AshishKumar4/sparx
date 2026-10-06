@@ -33,18 +33,21 @@ that never imported sparx.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from dew.registry import Registry
 
 if TYPE_CHECKING:
+    from sparx.encode import SpikeEncoder
     from sparx.graph.connectome import Connectome
     from sparx.graph.network import Network
+    from sparx.nn.neurons import Neuron
+    from sparx.surrogate import Surrogate
 
 __all__ = ["connectomes", "networks", "neurons", "spike_encoders", "surrogates"]
 
-surrogates: Registry[Any, Any] = Registry("surrogate").share()
-neurons: Registry[Any, Any] = Registry("neuron").share()
-spike_encoders: Registry[Any, Any] = Registry("spike_encoder").share()
+surrogates: Registry[type[Surrogate], Surrogate] = Registry("surrogate").share()
+neurons: Registry[type[Neuron], Neuron] = Registry("neuron").share()
+spike_encoders: Registry[type[SpikeEncoder], SpikeEncoder] = Registry("spike_encoder").share()
 networks: Registry[Callable[..., Network], Network] = Registry("network").share()
 connectomes: Registry[Callable[..., Connectome], Connectome] = Registry("connectome").share()

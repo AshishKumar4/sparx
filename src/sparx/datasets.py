@@ -7,7 +7,11 @@ rendered as spikes on 700 cochlear channels. Each record becomes a
 `[steps, channels]` array of spike counts, batch-major as dew's loaders
 expect; `sparx.encode.Events()` moves the time axis to the front. `SHD` is the
 same data as a registered dew dataset spec (`datasets["shd"]`), which a
-recipe names on its command line.
+recipe names on its command line (`data:shd`). `write_synthetic_shd` writes
+small files in SHD's layout, which smoke runs and tests read in its place.
+
+`holdout`, `whole_batches` and `evaluation_pass` split records and score
+every record of a split under dew's `Trainer`.
 
 Reading the files needs h5py (`pip install "sparxml[datasets]"`).
 """
@@ -17,17 +21,21 @@ from __future__ import annotations
 import gzip
 import shutil
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import numpy as np
 from dew.data import Dataset, DatasetSpec
-from dew.data.dataset import Tokenize
+
+# Remove when AshishKumar4/dew#39 merges: `Reader` and `Tokenize` in dew.data.dataset's `__all__`.
+from dew.data.dataset import Reader, Tokenize
 from dew.registry import datasets
 from numpy.typing import ArrayLike
 
-__all__ = ["SHD", "SHD_URL", "Binning", "bin_events", "shd"]
+__all__ = ["SHD", "SHD_URL", "WEIGHT", "Binning", "bin_events", "evaluation_pass", "holdout", "shd",
+           "whole_batches", "write_synthetic_shd"]
 
 SHD_URL = "https://zenkelab.org/datasets/shd/{split}.h5.gz"
 _CHANNELS = 700
@@ -127,8 +135,8 @@ def shd(split: Literal["train", "test"], steps: int = 100, max_time: float = 1.4
 
     if path is None:
         path = _download(f"shd_{split}", Path.home() / ".cache" / "sparx" if cache is None else Path(cache))
-    with h5py.File(path, "r") as data:
-        nodes = [data.get(name) for name in ("spikes/times", "spikes/units", "labels")]
+    with h5py.File(path, "r") as file:
+        nodes = [file.get(name) for name in ("spikes/times", "spikes/units", "labels")]
         times, units, labels = nodes
         if not (isinstance(times, h5py.Dataset) and isinstance(units, h5py.Dataset)
                 and isinstance(labels, h5py.Dataset)):
@@ -160,4 +168,91 @@ class SHD(DatasetSpec):
         self.uncaptioned(tokenize)
         train = shd("train", self.steps, self.max_time, self.channels, self.cache, binning=self.binning)
         test = shd("test", self.steps, self.max_time, self.channels, self.cache, binning=self.binning)
+        # Until AshishKumar4/dew#40 merges, dew scores the test split in whole batches and leaves out
+        # the last partial one; `evaluation_pass` scores every record meanwhile.
         return Dataset.from_records(train, batch=batch, seed=self.seed, validation=test, loading=self.loading)
+
+
+def write_synthetic_shd(directory: str | Path, records: int = 64, seed: int = 0) -> Path:
+    """Write `shd_train.h5` and `shd_test.h5` in SHD's layout into `directory`, and return it.
+
+    Each split holds `records` recordings of 60 spikes over 1.4 s, labelled 0
+    or 1 by which half of the 700 channels fires, so a network learns them in
+    a few steps. `shd(split, cache=directory)` and `SHD(cache=directory)` read
+    them as they read SHD's own files, which lets a smoke run or a test
+    exercise the whole path without the 169 MB download.
+    """
+    import h5py
+
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(seed)
+    half = _CHANNELS // 2
+    for split in ("train", "test"):
+        labels = rng.integers(0, 2, records).astype(np.uint16)
+        with h5py.File(directory / f"shd_{split}.h5", "w") as file:
+            times = file.create_dataset("spikes/times", (records,), dtype=h5py.vlen_dtype(np.float32))
+            units = file.create_dataset("spikes/units", (records,), dtype=h5py.vlen_dtype(np.uint16))
+            for i, label in enumerate(labels):
+                times[i] = np.sort(rng.uniform(0, 1.4, 60)).astype(np.float32)
+                units[i] = (rng.integers(0, half, 60) + half * int(label)).astype(np.uint16)
+            file.create_dataset("labels", data=labels)
+    return directory
+
+
+def holdout(records: Mapping[str, np.ndarray], fraction: float,
+            seed: int = 0) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    """Split `records` (columns of equal length) into a random `1 - fraction` and `fraction`.
+
+    SHD has no validation split, and SNN-delays selects its epochs on the
+    test set; holding out part of the training set gives a validation set
+    to select on, so the test accuracy stays an estimate.
+    """
+    sizes = {len(column) for column in records.values()}
+    if len(sizes) != 1:
+        raise ValueError(f"columns of one length split together, not lengths {sorted(sizes)}")
+    total = sizes.pop()
+    held = round(fraction * total)
+    if not 0 < held < total:
+        raise ValueError(f"holding out {fraction} of {total} records leaves one side empty")
+    order = np.random.default_rng(seed).permutation(total)
+    kept, out = np.sort(order[held:]), np.sort(order[:held])
+    return ({name: column[kept] for name, column in records.items()},
+            {name: column[out] for name, column in records.items()})
+
+
+# Remove when AshishKumar4/dew#40 merges: `validation_pass` fills the last batch itself and marks
+# each row in `dew.data.dataset.COUNTED`, so `WEIGHT`, `whole_batches` and `evaluation_pass` go.
+WEIGHT = "weight"
+"""The batch field evaluation weighs each example by, when a batch holds it.
+
+`whole_batches` writes it: 1 for a record, 0 for the copies that fill the
+last batch, so a split of any size is scored over exactly its records."""
+
+
+def whole_batches(records: Mapping[str, np.ndarray], batch: int) -> dict[str, np.ndarray]:
+    """`records` filled to whole batches with copies of its first record, weighted under `WEIGHT`.
+
+    dew scores a split in whole batches only, so the records past the last
+    whole one would go unscored. Each record has weight 1 and each copy 0,
+    which `SpikingClassifierObjective`'s evaluation and `sparx.metrics.Accuracy`
+    honor.
+    """
+    total = len(next(iter(records.values())))
+    fill = -total % batch
+    padded = {name: np.concatenate([column, np.repeat(column[:1], fill, axis=0)])
+              for name, column in records.items()}
+    padded[WEIGHT] = np.concatenate([np.ones(total, np.float32), np.zeros(fill, np.float32)])
+    return padded
+
+
+def evaluation_pass(records: Mapping[str, np.ndarray], batch: int) -> Reader:
+    """One pass over every record, in order, for `Trainer.fit(validation={...})`.
+
+    The records are filled to whole batches first (`whole_batches`), so a
+    split such as SHD's 2264 test recordings is scored over all of them.
+    """
+    padded = whole_batches(records, batch)
+    reader = Dataset.from_records(padded, batch=batch, validation=padded).val
+    assert reader is not None  # from_records reads a validation split it is given
+    return reader

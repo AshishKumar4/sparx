@@ -13,7 +13,7 @@ SpikingJelly's `integrate_events_by_fixed_duration_shd`, and the learning
 rates, Adam momentum and width their full SHD configuration trains each of
 its 150 epochs with. Saves to `tests/fixtures/snn_delays.npz`, which
 `tests/test_reference.py` compares `sparx.models.SpikingMLP`,
-`sparx.datasets.bin_events` and `sparx.dew`'s schedules against.
+`sparx.datasets.bin_events` and `sparx.optim`'s schedules against.
 
 Their code needs the SpikingJelly of 2023 they ran on (its SHD frames are
 event-anchored, later releases bin on a grid), DCLS and torch:

@@ -11,7 +11,7 @@ reference are the code the tests apply to sparx.
 
 Van Rossum's distance (`sparx.losses.van_rossum`) also compares spike
 trains. It lives in `sparx.losses` because it is written in JAX to train a
-network by its gradient, as `sparx.dew.ActivityFit` does; here it would make
+network by its gradient, as `sparx.objectives.ActivityFitObjective` does; here it would make
 the tools above load JAX. The split is by use: a differentiable training
 target is a loss, a measurement of a finished run is here.
 """

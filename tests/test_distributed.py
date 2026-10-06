@@ -14,7 +14,7 @@ from dew import Checkpoints, Field, Trainer
 from dew.data import Dataset, Loading
 from dew.training import MeshSpec
 import sparx
-from sparx.dew import RateBand, SpikingClassifier
+from sparx.objectives import RateBand, SpikingClassifierObjective
 from sparx.encode import Direct
 from sparx.models import SpikingMLP
 
@@ -24,8 +24,8 @@ images = (rng.uniform(size=(64, 6, 6, 1)) * 255).astype(np.uint8)
 images[labels == 1, :3] = 255
 net = SpikingMLP(hidden=(32, 16), classes=3, neuron=sparx.nn.ALIF(tau=3.0, tau_adapt=10.0, learn_tau=True),
                  recurrent=True)
-objective = SpikingClassifier(net, Field("image", (6, 6, 1)), Direct(steps=5), readout="max",
-                              rates=RateBand(0.02, 0.4))
+objective = SpikingClassifierObjective(net, Field("image", (6, 6, 1)), Direct(steps=5), readout="max",
+                                       rates=RateBand(0.02, 0.4))
 data = Dataset.from_records({"image": images, "label": labels}, batch=32,
                             loading=Loading(workers=0, threads=1, read_buffer=1))
 trainer = Trainer(objective, optax.adam(1e-2), key=jax.random.key(0), mesh=MeshSpec(fsdp=FSDP))

@@ -9,7 +9,7 @@ import pytest
 
 import sparx
 
-LAZY = ("datasets", "dew", "graph", "learn", "nir", "serve")
+LAZY = ("datasets", "graph", "learn", "metrics", "nir", "objectives", "optim", "serve", "tasks")
 
 
 def test_import_sparx_leaves_the_lazy_submodules_unloaded_until_used():

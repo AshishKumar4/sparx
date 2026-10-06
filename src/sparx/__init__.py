@@ -20,13 +20,16 @@ Circuits in physical units:
 
 Around them:
 
-- `sparx.dew`: the objectives that train spiking networks under dew's `Trainer`.
+- `sparx.objectives`: the objectives that train spiking networks under dew's `Trainer`, with
+  `sparx.metrics` (their accuracy), `sparx.tasks` (the trained classifier `dew.pipeline` loads) and
+  `sparx.optim` (the schedules and per-group Adam SNN-delays needs).
 - `sparx.datasets`: spiking datasets as dew datasets (SHD).
 - `sparx.serve`: `StreamServer`, many streaming sessions in one batch.
 - `sparx.nir`: exchange through the Neuromorphic Intermediate Representation.
 
-`sparx.graph`, `sparx.learn`, `sparx.dew`, `sparx.datasets`, `sparx.serve`
-and `sparx.nir` load on first access (`sparx.graph.Network` after `import
+`sparx.graph`, `sparx.learn`, `sparx.objectives`, `sparx.metrics`,
+`sparx.tasks`, `sparx.optim`, `sparx.datasets`, `sparx.serve` and
+`sparx.nir` load on first access (`sparx.graph.Network` after `import
 sparx`). The graph, the objectives and the datasets import dew's trainer
 and data stack, about 0.9 s on a 4-core CPU, which a script that only
 trains a network in its own loop does not need.
@@ -44,15 +47,15 @@ from sparx.rates import firing_rates, rate_penalty
 from sparx.surrogate import spike
 
 if TYPE_CHECKING:
-    from sparx import datasets, dew, graph, learn, nir, serve
+    from sparx import datasets, graph, learn, metrics, nir, objectives, optim, serve, tasks
 
 __version__ = "0.1.0"
 
-_LAZY = ("datasets", "dew", "graph", "learn", "nir", "serve")
+_LAZY = ("datasets", "graph", "learn", "metrics", "nir", "objectives", "optim", "serve", "tasks")
 
-__all__ = ["__version__", "datasets", "dew", "dynamics", "encode", "firing_rates", "graph", "learn",
-           "losses", "models", "nir", "nn", "rate_penalty", "rates", "run", "serve", "spike", "spiketrains",
-           "surrogate"]
+__all__ = ["__version__", "datasets", "dynamics", "encode", "firing_rates", "graph", "learn", "losses",
+           "metrics", "models", "nir", "nn", "objectives", "optim", "rate_penalty", "rates", "run", "serve",
+           "spike", "spiketrains", "surrogate", "tasks"]
 
 
 def __getattr__(name: str) -> ModuleType:

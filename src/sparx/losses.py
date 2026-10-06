@@ -13,15 +13,39 @@ its mean, or the spike count (`jnp.sum(spikes, axis=0)`), each as logits for
 `optax.softmax_cross_entropy_with_integer_labels`. `softmax_sum_cross_entropy`
 is the readout of Hammouamri et al.'s SNN-delays, which takes the softmax
 at every step before summing over time.
+
+`Readout` names those choices, and `readout_logits` and `readout_losses`
+apply one, so a classifier's objective, its trained task and a recipe's
+command line share one list.
 """
 
 from __future__ import annotations
+
+from typing import Literal
 
 import jax
 import jax.numpy as jnp
 import optax
 
-__all__ = ["per_step_cross_entropy", "rate_mse", "softmax_sum", "softmax_sum_cross_entropy", "van_rossum"]
+__all__ = ["READOUTS", "Readout", "per_step_cross_entropy", "rate_mse", "readout_logits", "readout_losses",
+           "softmax_sum", "softmax_sum_cross_entropy", "van_rossum"]
+
+type Readout = Literal["mean", "max", "sum", "softmax_sum", "per_step"]
+"""How the outputs `[T, B, C]` are scored against the labels.
+
+- `mean`: cross entropy of the time-averaged outputs, a firing rate for
+  spikes or the mean membrane of a leaky integrator readout.
+- `max`: cross entropy of each class's largest output over time, the readout
+  Cramer et al. (IEEE TNNLS 2020) use on a leaky integrator for SHD.
+- `sum`: cross entropy of the summed outputs, the spike count.
+- `softmax_sum`: the softmax of every step summed over time, scored as
+  logits (`softmax_sum_cross_entropy`), SNN-delays' `loss='sum'`.
+- `per_step`: cross entropy at every step, averaged (`per_step_cross_entropy`).
+  Predictions use the mean.
+"""
+
+READOUTS: tuple[Readout, ...] = ("mean", "max", "sum", "softmax_sum", "per_step")
+"""Every `Readout`, for a value read from a record or a command line."""
 
 
 def per_step_cross_entropy(outputs: jax.Array, labels: jax.Array) -> jax.Array:
@@ -99,3 +123,24 @@ def van_rossum(spikes: jax.Array, target: jax.Array, tau: float, dt: float = 1.0
     _, h = jax.lax.scan(step, jnp.zeros_like(spikes[0]), spikes - target)
     within = 0.5 * (1 - decay ** 2) * jnp.sum(h[:-1] ** 2)
     return within + 0.5 * jnp.sum(h[-1] ** 2)
+
+
+def readout_logits(readout: Readout, outputs: jax.Array) -> jax.Array:
+    """The class scores `[B, C]` a `readout` predicts from outputs `[T, B, C]`, in float32."""
+    outputs = outputs.astype(jnp.float32)
+    if readout == "max":
+        return jnp.max(outputs, axis=0)
+    if readout == "sum":
+        return jnp.sum(outputs, axis=0)
+    if readout == "softmax_sum":
+        return softmax_sum(outputs)
+    return jnp.mean(outputs, axis=0)
+
+
+def readout_losses(readout: Readout, outputs: jax.Array, labels: jax.Array) -> jax.Array:
+    """Each example's loss `[B]` under `readout`, for outputs `[T, B, C]` and integer `labels`."""
+    if readout == "per_step":
+        return per_step_cross_entropy(outputs, labels)
+    if readout == "softmax_sum":
+        return softmax_sum_cross_entropy(outputs, labels)
+    return optax.softmax_cross_entropy_with_integer_labels(readout_logits(readout, outputs), labels)
