@@ -40,6 +40,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 from flax import struct
+from flax.typing import PrecisionLike
 
 from sparx.dynamics.core import (
     NeuronModel,
@@ -268,7 +269,7 @@ class RecurrentCell[State]:
 
     inner: NeuronModel[State]
     weight: jax.Array
-    precision: jax.lax.Precision | None = struct.field(pytree_node=False, default=None)
+    precision: PrecisionLike = struct.field(pytree_node=False, default=None)
     cut_gradient: bool = struct.field(pytree_node=False, default=False)
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> RecurrentState[State]:

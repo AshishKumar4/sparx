@@ -149,3 +149,32 @@ def test_dropout_masks_a_step_or_holds_one_mask_over_the_sequence(mask):
     assert set(np.unique(kept)) == {0.0, 2.0}
     held = (kept == kept[:1]).all(axis=0)
     assert held.all() if mask == "sequence" else held.mean() < 0.01
+
+
+@pytest.mark.parametrize("architecture", ["spiking_mlp", "sew_resnet"])
+def test_a_runs_precision_settings_reach_the_synapses(architecture):
+    from dew.config import ModelConfig
+
+    fields = ({"hidden": [8], "classes": 3, "delays": [2, 0], "batch_norm": True}
+              if architecture == "spiking_mlp" else {"stages": [1, 1, 1, 1], "classes": 3, "width": 4,
+                                                     "stem": "small"})
+    x = frames(2, (3, 2, 8, 8, 1))
+    first = "delayed_0" if architecture == "spiking_mlp" else "Conv_0"
+    for dtype in ("float32", "bfloat16"):
+        model = ModelConfig(architecture, fields, dtype=dtype, param_dtype="bfloat16",
+                            matmul_precision="highest").build()
+        assert model.dtype == jnp.dtype(dtype) and model.precision == "highest"
+        variables = model.init(jax.random.key(0), x, train=False)
+        _, captured = model.apply(variables, x, train=False, capture_intermediates=True,
+                                  mutable=["intermediates"])
+        # The first synapse computes in the run's dtype, so the setting reached it.
+        assert captured["intermediates"][first]["__call__"][0].dtype == jnp.dtype(dtype)
+        stored = {jax.tree_util.keystr(path).split("'")[-2]: leaf.dtype
+                  for path, leaf in jax.tree_util.tree_leaves_with_path(variables["params"])}
+        assert stored["kernel"] == jnp.bfloat16
+        # The delays stay float32 whatever the synapses store.
+        assert stored.get("delay", jnp.float32) == jnp.float32
+        # The run's record reads the settings back from the built model.
+        recorded = ModelConfig.from_model(model)
+        settings = (recorded.dtype, recorded.param_dtype, recorded.matmul_precision)
+        assert settings == (dtype, "bfloat16", "highest")

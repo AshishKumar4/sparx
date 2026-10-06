@@ -23,6 +23,15 @@ copy (`sparx.nn.adopt`) belongs to the block that uses it, so its parameters
 
 Both models are registered in dew's model registry, `sew_resnet` and
 `spiking_mlp`, and take `train` as dew's objectives pass it.
+
+Their synapses follow dew's precision fields, as dew's models do: `dtype`
+is the dtype the convolutions, dense and delayed synapses and batch norms
+compute in (None infers it from the input and the parameters),
+`param_dtype` the dtype their parameters are stored in, and `precision`
+their matmuls' precision. So a run's `--model.dtype bfloat16` reaches them.
+Neuron membranes and their learned time constants stay float32 whatever
+these are (`sparx.dynamics.core.membrane_dtype`), and spikes come out in
+the synapses' dtype, which holds 0 and 1 exactly.
 """
 
 from __future__ import annotations
@@ -34,6 +43,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from dew.registry import models
+from flax.typing import Dtype, PrecisionLike
 
 from sparx.nn.delays import DelayedDense
 from sparx.nn.neurons import LI, LIF, Neuron, Recurrent, adopt
@@ -74,13 +84,18 @@ class SEWBlock(nn.Module):
     strides: int = 1
     connect: Connect = "add"
     neuron: Neuron = LIF()
+    dtype: Dtype | None = None
+    param_dtype: Dtype = jnp.float32
+    precision: PrecisionLike = None
 
     @nn.compact
     def __call__(self, x: jax.Array, train: bool) -> jax.Array:
-        def conv_bn(x, features, kernel, strides, name):
+        def conv_bn(x: jax.Array, features: int, kernel: int, strides: int, name: str) -> jax.Array:
             x = nn.Conv(features, (kernel, kernel), (strides, strides), padding=kernel // 2, use_bias=False,
-                        kernel_init=_conv_init, name=f"{name}_conv")(x)
-            return nn.BatchNorm(use_running_average=not train, momentum=0.9, name=f"{name}_bn")(x)
+                        kernel_init=_conv_init, dtype=self.dtype, param_dtype=self.param_dtype,
+                        precision=self.precision, name=f"{name}_conv")(x)
+            return nn.BatchNorm(use_running_average=not train, momentum=0.9, dtype=self.dtype,
+                                param_dtype=self.param_dtype, name=f"{name}_bn")(x)
 
         residual = adopt(self.neuron, self, "sn1")(conv_bn(x, self.features, 3, self.strides, "first"))
         residual = adopt(self.neuron, self, "sn2")(conv_bn(residual, self.features, 3, 1, "second"))
@@ -110,14 +125,20 @@ class SEWResNet(nn.Module):
     connect: Connect = "add"
     stem: Literal["imagenet", "small"] = "imagenet"
     neuron: Neuron = LIF()
+    dtype: Dtype | None = None
+    param_dtype: Dtype = jnp.float32
+    precision: PrecisionLike = None
 
     @nn.compact
     def __call__(self, x: jax.Array, train: bool) -> jax.Array:
+        numerics = {"dtype": self.dtype, "param_dtype": self.param_dtype, "precision": self.precision}
         if self.stem == "imagenet":
-            x = nn.Conv(self.width, (7, 7), (2, 2), padding=3, use_bias=False, kernel_init=_conv_init)(x)
+            x = nn.Conv(self.width, (7, 7), (2, 2), padding=3, use_bias=False, kernel_init=_conv_init,
+                        **numerics)(x)
         else:
-            x = nn.Conv(self.width, (3, 3), padding=1, use_bias=False, kernel_init=_conv_init)(x)
-        x = nn.BatchNorm(use_running_average=not train, momentum=0.9)(x)
+            x = nn.Conv(self.width, (3, 3), padding=1, use_bias=False, kernel_init=_conv_init, **numerics)(x)
+        x = nn.BatchNorm(use_running_average=not train, momentum=0.9, dtype=self.dtype,
+                         param_dtype=self.param_dtype)(x)
         x = adopt(self.neuron, self, "stem_sn")(x)
         if self.stem == "imagenet":
             # torch's MaxPool2d(3, 2, padding=1) pads with -inf, which never wins the max.
@@ -126,10 +147,10 @@ class SEWResNet(nn.Module):
         for stage, blocks in enumerate(self.stages):
             for block in range(blocks):
                 strides = 2 if stage > 0 and block == 0 else 1
-                x = SEWBlock(self.width * 2 ** stage, strides, self.connect, self.neuron,
+                x = SEWBlock(self.width * 2 ** stage, strides, self.connect, self.neuron, **numerics,
                              name=f"stage{stage + 1}_block{block + 1}")(x, train)
         x = jnp.mean(x, axis=(-3, -2))
-        return nn.Dense(self.classes)(x)
+        return nn.Dense(self.classes, **numerics)(x)
 
 
 def sew_resnet18(classes: int, **kwargs) -> SEWResNet:
@@ -188,6 +209,9 @@ class SpikingMLP(nn.Module):
     dropout_mask: Literal["step", "sequence"] = "step"
     readout_tau: float = 2.0
     learn_readout_tau: bool = False
+    dtype: Dtype | None = None
+    param_dtype: Dtype = jnp.float32
+    precision: PrecisionLike = None
 
     def max_delays(self) -> tuple[int, ...]:
         """Each synapse's largest delay, hidden layers then the readout; 0 for a dense synapse."""
@@ -218,22 +242,25 @@ class SpikingMLP(nn.Module):
         rounded = isinstance(sigma, (int, float)) and sigma == 0
         delayed = DelayedDense if rounded else nn.remat(DelayedDense)
 
+        numerics = {"dtype": self.dtype, "param_dtype": self.param_dtype, "precision": self.precision}
+
         def synapse(x: jax.Array, features: int, max_delay: int, name: str) -> jax.Array:
             if not max_delay:
-                return nn.Dense(features, use_bias=self.use_bias, kernel_init=kernel_init, name=name)(x)
+                return nn.Dense(features, use_bias=self.use_bias, kernel_init=kernel_init, **numerics,
+                                name=name)(x)
             if self.extend:
                 x = jnp.concatenate([x, jnp.zeros((max_delay // 2, *x.shape[1:]), x.dtype)])
-            return delayed(features, max_delay, use_bias=self.use_bias, kernel_init=kernel_init,
+            return delayed(features, max_delay, use_bias=self.use_bias, kernel_init=kernel_init, **numerics,
                            name=name)(x, sigma)
 
         x = x.reshape(*x.shape[:2], -1)
         for layer, width in enumerate(self.hidden):
             x = synapse(x, width, delays[layer], f"delayed_{layer}" if delays[layer] else f"dense_{layer}")
             if self.batch_norm:
-                x = nn.BatchNorm(use_running_average=not train, momentum=0.9, epsilon=1e-5,
-                                 name=f"norm_{layer}")(x)
+                x = nn.BatchNorm(use_running_average=not train, momentum=0.9, epsilon=1e-5, dtype=self.dtype,
+                                 param_dtype=self.param_dtype, name=f"norm_{layer}")(x)
             if self.recurrent:
-                x = Recurrent(neuron=self.neuron, name=f"recurrent_{layer}")(x)
+                x = Recurrent(neuron=self.neuron, precision=self.precision, name=f"recurrent_{layer}")(x)
             else:
                 x = adopt(self.neuron, self, f"neuron_{layer}")(x)
             x = nn.Dropout(self.dropout, broadcast_dims=broadcast, deterministic=not train)(x)

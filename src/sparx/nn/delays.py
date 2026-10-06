@@ -24,6 +24,7 @@ from __future__ import annotations
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+from flax.typing import Dtype, PrecisionLike
 
 from sparx.dynamics.core import membrane_dtype
 from sparx.nn.neurons import history_window
@@ -66,22 +67,31 @@ class DelayedDense(nn.Module):
     schedule's value, as long as it stays positive; pass the Python number 0
     for the deployed network. The cost is that of a dense layer applied
     `max_delay + 1` times.
+
+    `dtype` is the dtype the lags' products run in; None keeps float32, or
+    the input's dtype when it is wider. `param_dtype` stores the weights and
+    the bias. The delays stay float32 whatever it is, because a bfloat16
+    delay moves in steps of 1/16 near 24 and the Gaussian kernel is built
+    from it in float32. `precision` is the matmuls' precision.
     """
 
     features: int
     max_delay: int
     use_bias: bool = True
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
-    precision: jax.lax.Precision | None = None
+    dtype: Dtype | None = None
+    param_dtype: Dtype = jnp.float32
+    precision: PrecisionLike = None
 
     @nn.compact
     def __call__(self, x: jax.Array, sigma: float | jax.Array) -> jax.Array:
         if self.max_delay < 0:
             raise ValueError(f"max_delay must be at least 0, not {self.max_delay}")
         inputs = x.shape[-1]
-        weight = self.param("kernel", self.kernel_init, (inputs, self.features), jnp.float32)
+        weight = self.param("kernel", self.kernel_init, (inputs, self.features), self.param_dtype)
         delay = self.param("delay", _uniform(float(self.max_delay)), (inputs, self.features), jnp.float32)
-        dtype = membrane_dtype(x.dtype)
+        dtype = membrane_dtype(x.dtype) if self.dtype is None else self.dtype
+        weight = weight.astype(jnp.float32)
         kernel = (delay_kernel(delay, self.max_delay, sigma) * weight).astype(dtype)  # [K, in, out]
 
         held = self.max_delay
@@ -93,5 +103,6 @@ class DelayedDense(nn.Module):
         for k in range(1, held + 1):
             y = y + jnp.matmul(window[held - k:held - k + steps], kernel[k], precision=self.precision)
         if self.use_bias:
-            y = y + self.param("bias", nn.initializers.zeros, (self.features,), jnp.float32).astype(dtype)
+            bias = self.param("bias", nn.initializers.zeros, (self.features,), self.param_dtype)
+            y = y + bias.astype(dtype)
         return y
