@@ -3,23 +3,28 @@
     pip install -e ".[datasets]"
     python examples/train_shd.py --steps 3000
     python examples/train_shd.py --recipe snn-delays --epochs 150
+    JAX_PLATFORMS=cpu python examples/train_shd.py --smoke --out /tmp/shd-smoke
+    JAX_PLATFORMS=cpu python examples/train_shd.py --recipe snn-delays --smoke --out /tmp/shd-smoke
 
-Downloads SHD (169 MB) into ~/.cache/sparx on first use.
+Downloads SHD (169 MB) into ~/.cache/sparx on first use. `--smoke` trains a
+small network for a few steps on synthetic recordings in SHD's layout
+(`sparx.datasets.write_synthetic_shd`) instead, and downloads nothing.
 
 The default recipe, `alif`, bins SHD into 100 steps of 14 ms over 700
 channels and trains a layer of adaptive LIF neurons with a leaky integrator
 readout scored by its maximum over time. The test split serves as the
-validation set (SHD has no separate one) and the script prints the accuracy
-over all 2264 test recordings at the end. `--recurrent` feeds the hidden
-layer's spikes back to itself. Backpropagation through that loop explodes
-with the heavy-tailed ATan surrogate once the recurrent weights grow
-(gradient norms past 1e8 within 300 steps), so pair it with
-`--surrogate superspike`, whose derivative falls off steeply. `--delays K`
-replaces the input layer with `sparx.nn.DelayedDense`, which learns a delay
-of 0 to K steps for every synapse. Its Gaussian width falls from K / 2 to 0.5
-over training, and the final test accuracy is measured with every delay
-rounded to a whole step (`sigma=0`), the network as deployed. `--channels`
-pools adjacent input channels (700 must be a multiple).
+validation set (SHD has no separate one), and at the end the script loads
+the trained classifier (`objective.pipeline(state)`) and prints its accuracy
+over all 2264 test recordings. `--recurrent` feeds the hidden layer's spikes
+back to itself. Backpropagation through that loop explodes with the
+heavy-tailed ATan surrogate once the recurrent weights grow (gradient norms
+past 1e8 within 300 steps), so pair it with `--surrogate superspike`, whose
+derivative falls off steeply. `--delays K` replaces the input layer with
+`sparx.nn.DelayedDense`, which learns a delay of 0 to K steps for every
+synapse. Its Gaussian width falls from K / 2 to 0.5 over training, and
+evaluation and the trained classifier round every delay to a whole step
+(`sigma=0`), the network as deployed. `--channels` pools adjacent input
+channels (700 must be a multiple).
 
 `--recipe snn-delays` is Hammouamri et al.'s SHD recipe ("Learning Delays in
 Spiking Neural Networks using Dilated Convolutions with Learnable Spacings",
@@ -47,9 +52,11 @@ ICLR 2024; their `best_config_SHD.py`), which reaches about 95%:
 
 Their script validates on the test set and reports the best test accuracy
 over epochs. This one holds out `--validation` of the training set (10% by
-default, 0 to train on all of it as they do), scores the validation and test
-sets after every epoch, and reports the test accuracy at the epoch of best
-validation accuracy beside their number, each labelled.
+default, 0 to train on all of it as they do) and scores the validation and
+test sets after every epoch. dew's `Best` keeps the checkpoint of best
+validation accuracy, whose recorded test accuracy the script reports beside
+their number, each labelled. The per-epoch table is read back from the run's
+tracking journal (dew's `LocalTracker`).
 
 What still differs from their code:
 
@@ -71,33 +78,27 @@ What still differs from their code:
 - Random streams differ: initialization, shuffling and dropout masks.
 """
 
-import argparse
+import json
 import math
-import time
-from collections.abc import Mapping
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Literal
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 import optax
-from dew import Checkpoints, Field, Trainer
-from dew.data import Dataset
+import tyro
+from dew import Best, Checkpoints, Field, LocalTracker, Trainer
+from dew.data import Dataset, Loading
 from dew.training.optim import Cosine, Linear
 
 import sparx
-from sparx.datasets import shd
-from sparx.dew import (
-    ExponentialDecay,
-    GroupAdam,
-    OneCycle,
-    RateBand,
-    SpikingClassifier,
-    accuracy,
-    evaluation_pass,
-    holdout,
-)
+from sparx.datasets import evaluation_pass, holdout, shd, write_synthetic_shd
 from sparx.encode import Events
+from sparx.metrics import Accuracy
 from sparx.models import SpikingMLP
+from sparx.objectives import RateBand, SpikingClassifierObjective
+from sparx.optim import ExponentialDecay, GroupAdam, OneCycle
 
 STEPS_MS = 10
 STEPS = 124  # the longest recording of either split at 10 ms steps opened at events
@@ -105,108 +106,115 @@ MAX_DELAY = 24  # 250 ms // 10 ms = 25 taps, odd already, so delays of 0 to 24 s
 TAU_SPIKINGJELLY = (10.05 + 1e-9) / STEPS_MS  # their init_tau, in steps
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--recipe", choices=["alif", "snn-delays"], default="alif")
-    parser.add_argument("--steps", type=int, default=3000, help="alif: training steps")
-    parser.add_argument("--epochs", type=int, default=150, help="snn-delays: epochs the schedules run over")
-    parser.add_argument("--stop-after", type=int, default=None,
-                        help="snn-delays: stop after this many epochs of the schedules, a short check")
-    parser.add_argument("--validation", type=float, default=0.1,
-                        help="snn-delays: fraction of the training set held out to select epochs on")
-    parser.add_argument("--batch", type=int, default=None, help="64 for alif, 256 for snn-delays")
-    parser.add_argument("--hidden", type=int, default=256)
-    parser.add_argument("--tau", type=float, default=5.0, help="alif: membrane time constant, in 14 ms steps")
-    parser.add_argument("--tau-adapt", type=float, default=20.0, help="alif: adaptation time constant")
-    parser.add_argument("--dropout", type=float, default=0.1, help="alif: dropout on hidden spikes")
-    parser.add_argument("--learning-rate", type=float, default=2e-3, help="alif: peak learning rate")
-    parser.add_argument("--clip", type=float, default=1.0, help="alif: global gradient norm limit")
-    parser.add_argument("--recurrent", action="store_true")
-    parser.add_argument("--surrogate", choices=["atan", "superspike"], default="atan")
-    parser.add_argument("--delays", type=int, default=0, help="alif: largest learnable delay, in steps")
-    parser.add_argument("--channels", type=int, default=700, help="alif: input channels")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--run", default=None, help="the run's directory; it resumes from a checkpoint there")
-    args = parser.parse_args()
-    if args.recipe == "snn-delays":
-        if args.epochs < 4:
-            parser.error("the one-cycle schedule and the width decay need at least 4 epochs")
-        snn_delays(args)
+@dataclass
+class Config:
+    recipe: Literal["alif", "snn-delays"] = "alif"
+    steps: int = 3000
+    """alif: training steps."""
+    epochs: int = 150
+    """snn-delays: epochs the schedules run over."""
+    stop_after: int | None = None
+    """snn-delays: stop after this many epochs of the schedules, a short check."""
+    validation: float = 0.1
+    """snn-delays: fraction of the training set held out to select epochs on."""
+    batch: int | None = None
+    """64 for alif, 256 for snn-delays."""
+    hidden: int = 256
+    """Neurons in each hidden layer."""
+    tau: float = 5.0
+    """alif: membrane time constant, in 14 ms steps."""
+    tau_adapt: float = 20.0
+    """alif: adaptation time constant."""
+    dropout: float = 0.1
+    """alif: dropout on hidden spikes."""
+    learning_rate: float = 2e-3
+    """alif: peak learning rate."""
+    clip: float = 1.0
+    """alif: global gradient norm limit."""
+    recurrent: bool = False
+    surrogate: Literal["atan", "superspike"] = "atan"
+    delays: int = 0
+    """alif: largest learnable delay, in steps."""
+    channels: int = 700
+    """alif: input channels."""
+    seed: int = 0
+    out: Path | None = None
+    """The run's directory, runs/shd or runs/shd-snn-delays by default; a run there resumes."""
+    cache: Path | None = None
+    """Where SHD is read from and downloaded to, ~/.cache/sparx by default."""
+    smoke: bool = False
+    """Train a small network for a few steps on synthetic recordings; nothing is downloaded."""
+
+
+def main(config: Config) -> None:
+    if config.recipe == "snn-delays" and config.epochs < 4:
+        raise ValueError("the one-cycle schedule and the width decay need at least 4 epochs")
+    if config.smoke:
+        out = config.out or Path("runs/shd-smoke")
+        config = replace(config, out=out, cache=write_synthetic_shd(out / "synthetic-shd"), steps=8,
+                         epochs=4, batch=16, hidden=16, channels=70)
+    if config.recipe == "snn-delays":
+        snn_delays(config)
     else:
-        alif(args)
+        alif(config)
 
 
-def alif(args: argparse.Namespace) -> None:
-    batch = args.batch or 64
-    train, test = shd("train", channels=args.channels), shd("test", channels=args.channels)
-    data = Dataset.from_records(train, batch=batch, validation=test)
-    surrogate = sparx.surrogate.ATan() if args.surrogate == "atan" else sparx.surrogate.FastSigmoid(100.0)
-    neuron = sparx.nn.ALIF(tau=args.tau, tau_adapt=args.tau_adapt, beta=0.2, learn_tau=True,
+def loading(config: Config) -> Loading:
+    """Few workers for a smoke run, which reads a few records; dew's default otherwise."""
+    return Loading(workers=0, threads=1, read_buffer=1) if config.smoke else Loading()
+
+
+def alif(config: Config) -> None:
+    batch = config.batch or 64
+    train = shd("train", channels=config.channels, cache=config.cache)
+    test = shd("test", channels=config.channels, cache=config.cache)
+    data = Dataset.from_records(train, batch=batch, seed=config.seed, loading=loading(config))
+    surrogate = sparx.surrogate.ATan() if config.surrogate == "atan" else sparx.surrogate.FastSigmoid(100.0)
+    neuron = sparx.nn.ALIF(tau=config.tau, tau_adapt=config.tau_adapt, beta=0.2, learn_tau=True,
                            detach_reset=True, surrogate=surrogate)
-    net = SpikingMLP(hidden=(args.hidden,), classes=20, neuron=neuron, recurrent=args.recurrent,
-                     delays=args.delays, dropout=args.dropout, readout_tau=args.tau, learn_readout_tau=True)
-    width = {"sigma": Linear(peak=args.delays / 2, end=0.5)} if args.delays else None
-    objective = SpikingClassifier(net, Field("spikes", train["spikes"].shape[1:]), Events(), readout="max",
-                                  rates=RateBand(lower=0.01, upper=0.3, weight=1.0),
-                                  schedules=width, schedule_steps=args.steps)
-    schedule = optax.cosine_decay_schedule(args.learning_rate, args.steps)
-    optimizer = optax.chain(optax.clip_by_global_norm(args.clip), optax.adamw(schedule, weight_decay=1e-4))
-    trainer = Trainer(objective, optimizer, key=jax.random.key(args.seed),
-                      checkpoints=Checkpoints(args.run or "runs/shd"))
-    start = time.perf_counter()
-    state = trainer.fit(data, steps=args.steps, log_every=100, eval_every=500, metrics=[accuracy])
-    trained = time.perf_counter() - start
-
-    @jax.jit
-    def predict(variables, spikes):
-        outputs = net.apply(variables, jnp.moveaxis(spikes, 1, 0).astype(jnp.float32))
-        return jnp.argmax(jnp.max(outputs, axis=0), -1)
-
-    predictions = np.concatenate([predict(state.variables, test["spikes"][i:i + 256])
+    net = SpikingMLP(hidden=(config.hidden,), classes=20, neuron=neuron, recurrent=config.recurrent,
+                     delays=config.delays, dropout=config.dropout, readout_tau=config.tau,
+                     learn_readout_tau=True)
+    width = {"sigma": Linear(peak=config.delays / 2, end=0.5)} if config.delays else None
+    objective = SpikingClassifierObjective(
+        net, Field("spikes", train["spikes"].shape[1:]), Events(), readout="max",
+        rates=RateBand(lower=0.01, upper=0.3, weight=1.0), schedules=width, schedule_steps=config.steps,
+        deployed={"sigma": 0} if config.delays else None)
+    schedule = optax.cosine_decay_schedule(config.learning_rate, config.steps)
+    optimizer = optax.chain(optax.clip_by_global_norm(config.clip), optax.adamw(schedule, weight_decay=1e-4))
+    trainer = Trainer(objective, optimizer, key=jax.random.key(config.seed),
+                      checkpoints=Checkpoints(str(config.out or "runs/shd")))
+    evaluations = config.steps // 2 if config.smoke else 500
+    state = trainer.fit(data, steps=config.steps, log_every=min(100, config.steps), eval_every=evaluations,
+                        metrics=[Accuracy()], validation={"test": evaluation_pass(test, batch)})
+    classifier = objective.pipeline(state)
+    predictions = np.concatenate([np.asarray(classifier(test["spikes"][i:i + 256]))
                                   for i in range(0, len(test["label"]), 256)])
     print(f"test accuracy {np.mean(predictions == test['label']):.4f} over {len(predictions)} recordings "
-          f"after {args.steps} steps ({trained:.0f} s on {jax.devices()[0].device_kind})")
+          f"after {config.steps} steps on {jax.devices()[0].device_kind}")
 
 
-class History:
-    """A dew tracker that keeps every logged scalar by step, and when it arrived."""
-
-    def __init__(self):
-        self.scalars: dict[int, dict[str, float]] = {}
-        self.arrived: dict[int, float] = {}
-
-    def log(self, scalars: Mapping[str, float], step: int) -> None:
-        self.scalars.setdefault(step, {}).update({name: float(value) for name, value in scalars.items()})
-        self.arrived[step] = time.perf_counter()
-
-    def artifact(self, value: object, step: int) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
-
-
-def snn_delays(args: argparse.Namespace) -> None:
-    batch = args.batch or 256
+def snn_delays(config: Config) -> None:
+    batch = config.batch or 256
     binned = {"steps": STEPS, "max_time": STEPS * STEPS_MS / 1000, "channels": 140, "binning": "events"}
-    train, test = shd("train", **binned), shd("test", **binned)
+    train, test = shd("train", cache=config.cache, **binned), shd("test", cache=config.cache, **binned)
     splits = {}
-    if args.validation:
-        train, val = holdout(train, args.validation, seed=args.seed)
+    if config.validation:
+        train, val = holdout(train, config.validation, seed=config.seed)
         splits["val"] = evaluation_pass(val, batch)
     splits["test"] = evaluation_pass(test, batch)
-    data = Dataset.from_records(train, batch=batch, seed=args.seed)
+    data = Dataset.from_records(train, batch=batch, seed=config.seed, loading=loading(config))
     per_epoch = data.steps_per_epoch
     assert per_epoch is not None  # records held in memory have a count
-    steps = args.epochs * per_epoch
+    steps = config.epochs * per_epoch
 
     # SpikingJelly's decay_input=False LIF keeps 1 - 1 / tau of its membrane a step, sparx exp(-1 / tau).
     tau = -1 / math.log(1 - 1 / TAU_SPIKINGJELLY)
     neuron = sparx.nn.LIF(tau=tau, threshold=1.0, reset="zero", surrogate=sparx.surrogate.ATan(5.0),
                           detach_reset=True)
-    net = SpikingMLP(hidden=(256, 256), classes=20, neuron=neuron, delays=(MAX_DELAY,) * 3, extend=True,
-                     batch_norm=True, use_bias=False, weight_init="kaiming_uniform", dropout=0.4,
-                     dropout_mask="sequence", readout_tau=tau)
+    net = SpikingMLP(hidden=(config.hidden, config.hidden), classes=20, neuron=neuron,
+                     delays=(MAX_DELAY,) * 3, extend=True, batch_norm=True, use_bias=False,
+                     weight_init="kaiming_uniform", dropout=0.4, dropout_mask="sequence", readout_tau=tau)
     # torch's OneCycleLR(max_lr=5e-3) starts at max_lr / 25 and ends 1e4 times lower, cycling Adam's
     # beta1 between 0.95 and 0.85.
     rate = OneCycle(peak=5e-3, start=5e-3 / 25, end=5e-3 / 25 / 1e4)
@@ -217,49 +225,56 @@ def snn_delays(args: argparse.Namespace) -> None:
         "norms": GroupAdam(("*",), rate, b1=momentum),
     }
     # DCLS's raw width falls from 25 // 2 to 0.23 over the first quarter; its effective width adds 0.27.
-    width = ExponentialDecay(start=float((MAX_DELAY + 1) // 2), end=0.23, decay_steps=args.epochs // 4,
-                        offset=0.27)
-    objective = SpikingClassifier(net, Field("spikes", (STEPS, 140)), Events(), readout="softmax_sum",
-                                  schedules={"sigma": width}, schedule_steps=steps, schedule_every=per_epoch,
-                                  deployed={"sigma": 0}, groups=groups)
-    history = History()
+    width = ExponentialDecay(start=float((MAX_DELAY + 1) // 2), end=0.23, decay_steps=config.epochs // 4,
+                             offset=0.27)
+    objective = SpikingClassifierObjective(
+        net, Field("spikes", (STEPS, 140)), Events(), readout="softmax_sum", schedules={"sigma": width},
+        schedule_steps=steps, schedule_every=per_epoch, deployed={"sigma": 0}, groups=groups)
+    run = config.out or Path("runs/shd-snn-delays")
+    journal = LocalTracker(run / "tracking")
+    checkpoints = Checkpoints(str(run))
     # Every parameter belongs to a group, so the trainer's own optimizer updates nothing.
-    trainer = Trainer(objective, optax.set_to_zero(), key=jax.random.key(args.seed),
-                      checkpoints=Checkpoints(args.run or "runs/shd-snn-delays"), tracker=history)
+    trainer = Trainer(objective, optax.set_to_zero(), key=jax.random.key(config.seed),
+                      checkpoints=checkpoints, tracker=journal)
     print(f"snn-delays: {len(train['label'])} training recordings in {per_epoch} steps of {batch} an epoch, "
-          f"{args.epochs} epochs; scoring {', '.join(splits)} after each")
-    started = time.perf_counter()
-    trained = (args.stop_after or args.epochs) * per_epoch
+          f"{config.epochs} epochs; scoring {', '.join(splits)} after each")
+    trained = (config.stop_after or config.epochs) * per_epoch
+    accuracy = Accuracy()
     trainer.fit(data, steps=trained, log_every=per_epoch, eval_every=per_epoch,
-                checkpoint_every=5 * per_epoch, metrics=[accuracy], validation=splits)
-    report(history, per_epoch, started)
+                checkpoint_every=5 * per_epoch, metrics=[accuracy], validation=splits,
+                best=Best(accuracy, split="val") if "val" in splits else None)
+    checkpoints.wait()
+    report(journal.directory / "scalars.jsonl", checkpoints, per_epoch)
 
 
-def report(history: History, per_epoch: int, started: float) -> None:
-    """Each epoch's scores, the test accuracy at the best validation epoch, and SNN-delays' number."""
-    evaluated = sorted(step for step, scalars in history.scalars.items() if "test/accuracy" in scalars)
-    rows, previous = [], started
-    print(f"{'epoch':>5} {'val acc':>8} {'test acc':>8} {'seconds':>8}")
-    for step in evaluated:
-        scalars = history.scalars[step]
-        seconds = history.arrived[step] - previous
-        previous = history.arrived[step]
-        rows.append((step // per_epoch, scalars.get("val/accuracy", math.nan), scalars["test/accuracy"],
-                     seconds))
-        print(f"{rows[-1][0]:>5} {rows[-1][1]:>8.4f} {rows[-1][2]:>8.4f} {seconds:>8.1f}")
-    if not rows:
+def report(journal: Path, checkpoints: Checkpoints, per_epoch: int) -> None:
+    """Each epoch's scores, the test accuracy of the best validation checkpoint, and SNN-delays' number."""
+    # Each split's scores arrive as a row of their own; an epoch is every row of its step.
+    epochs: dict[int, dict[str, float]] = {}
+    arrived: dict[int, float] = {}
+    rows = [json.loads(line) for line in journal.read_text().splitlines()]
+    for row in rows:
+        epochs.setdefault(row["step"], {}).update(row["scalars"])
+        arrived[row["step"]] = row["time"]
+    evaluated = sorted(step for step, scalars in epochs.items() if "test/accuracy" in scalars)
+    if not evaluated:
         return
-    epochs, val, test, seconds = (np.asarray(column) for column in zip(*rows, strict=True))
-    if not np.isnan(val).all():
-        chosen = int(np.nanargmax(val))
-        print(f"selected on validation: epoch {epochs[chosen]}, validation accuracy {val[chosen]:.4f}, "
-              f"test accuracy {test[chosen]:.4f}")
-    best = int(np.argmax(test))
+    print(f"{'epoch':>5} {'val acc':>8} {'test acc':>8} {'seconds':>8}")
+    previous = rows[0]["time"]
+    for step in evaluated:
+        scalars = epochs[step]
+        print(f"{step // per_epoch:>5} {scalars.get('val/accuracy', math.nan):>8.4f} "
+              f"{scalars['test/accuracy']:>8.4f} {arrived[step] - previous:>8.1f}")
+        previous = arrived[step]
+    best = checkpoints.best
+    if best is not None:
+        kept = {checkpoint.step: checkpoint.metrics for checkpoint in checkpoints.kept()}
+        print(f"selected on validation: epoch {best // per_epoch}, validation accuracy "
+              f"{kept[best]['val/accuracy']:.4f}, test accuracy {kept[best]['test/accuracy']:.4f}")
+    top = max(evaluated, key=lambda step: epochs[step]["test/accuracy"])
     print(f"best test accuracy over epochs (SNN-delays' reported number, chosen on the test set): "
-          f"{test[best]:.4f} at epoch {epochs[best]}")
-    device = jax.devices()[0].device_kind
-    print(f"{np.median(seconds):.1f} s an epoch (median, training and evaluation) on {device}")
+          f"{epochs[top]['test/accuracy']:.4f} at epoch {top // per_epoch}")
 
 
 if __name__ == "__main__":
-    main()
+    main(tyro.cli(Config))

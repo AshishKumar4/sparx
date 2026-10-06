@@ -1,31 +1,56 @@
-"""Train a spiking MNIST classifier with a plain JAX and optax loop, no trainer.
+"""Train a spiking MNIST classifier with dew's Trainer.
 
     python examples/train_mnist.py --epochs 2
+    JAX_PLATFORMS=cpu python examples/train_mnist.py --smoke --out /tmp/mnist-smoke
 
 Downloads MNIST (11 MB) into ~/.cache/sparx on first use. The images are
-encoded as Bernoulli spike trains, a fresh draw every step, and a two-layer
-LIF network with a leaky integrator readout is trained on the cross entropy
-of its time-averaged membrane. Prints the test accuracy after each epoch.
+encoded as Bernoulli spike trains, a fresh draw every step, and two dense
+layers of LIF neurons with a leaky integrator readout (`SpikingMLP`) are
+trained on the cross entropy of its time-averaged membrane
+(`SpikingClassifierObjective`, readout `mean`). The test set is scored
+after every epoch, every one of its 10,000 images, and at the end the
+trained classifier (`objective.pipeline(state)`) predicts a few test
+images. The model is registered, so `dew.pipeline("runs/mnist")` loads the
+same classifier in another process. `--smoke` trains on 256 random images
+for a few steps instead, and downloads nothing.
 """
 
-import argparse
 import gzip
-import time
 import urllib.request
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-import flax.linen as nn
 import jax
-import jax.numpy as jnp
 import numpy as np
 import optax
+import tyro
+from dew import Checkpoints, Field, Trainer
+from dew.data import Dataset, Loading
 
 import sparx
+from sparx.datasets import evaluation_pass
+from sparx.metrics import Accuracy
+from sparx.models import SpikingMLP
+from sparx.objectives import SpikingClassifierObjective
 
 MNIST = "https://storage.googleapis.com/cvdf-datasets/mnist/{name}.gz"
 
 
-def load(split):
+@dataclass
+class Config:
+    epochs: int = 2
+    steps: int = 8
+    """Time steps per image."""
+    batch: int = 128
+    learning_rate: float = 1e-3
+    hidden: int = 512
+    out: Path = Path("runs/mnist")
+    """The run's directory; a run there resumes."""
+    smoke: bool = False
+    """Train on 256 random images for a few steps; nothing is downloaded."""
+
+
+def load(split: str) -> dict[str, np.ndarray]:
     """MNIST `split` as uint8 images `[N, 28, 28]` and int32 labels `[N]`, cached in ~/.cache/sparx."""
     cache = Path.home() / ".cache" / "sparx"
     prefix = "train" if split == "train" else "t10k"
@@ -38,70 +63,39 @@ def load(split):
         with gzip.open(path) as file:
             arrays.append(np.frombuffer(file.read(), np.uint8, offset=offset))
     images, labels = arrays
-    return images.reshape(-1, 28, 28), labels.astype(np.int32)
+    return {"image": images.reshape(-1, 28, 28), "label": labels.astype(np.int32)}
 
 
-class Net(nn.Module):
-    hidden: int = 512
-
-    @nn.compact
-    def __call__(self, spikes):  # [T, B, 28, 28]
-        x = spikes.reshape(*spikes.shape[:2], -1)
-        x = sparx.nn.LIF(tau=2.0, detach_reset=True)(nn.Dense(self.hidden)(x))
-        x = sparx.nn.LIF(tau=2.0, detach_reset=True)(nn.Dense(self.hidden)(x))
-        return sparx.nn.LI(tau=2.0)(nn.Dense(10)(x))
+def random_images(count: int, seed: int) -> dict[str, np.ndarray]:
+    """`count` random uint8 images and labels in MNIST's layout, for a smoke run."""
+    rng = np.random.default_rng(seed)
+    return {"image": rng.integers(0, 256, (count, 28, 28), dtype=np.uint8),
+            "label": rng.integers(0, 10, count).astype(np.int32)}
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--epochs", type=int, default=2)
-    parser.add_argument("--steps", type=int, default=8, help="time steps per image")
-    parser.add_argument("--batch", type=int, default=128)
-    parser.add_argument("--learning-rate", type=float, default=1e-3)
-    args = parser.parse_args()
-
-    train_x, train_y = load("train")
-    test_x, test_y = load("test")
-    net = Net()
-    key = jax.random.key(0)
-    params = net.init(key, jnp.zeros((args.steps, 1, 28, 28)))
-    optimizer = optax.adam(args.learning_rate)
-    opt_state = optimizer.init(params)
-
-    encoder = sparx.encode.Rate(args.steps)
-
-    def logits(params, key, images):
-        spikes = encoder(key, images)  # uint8 pixels are read as x / 255
-        return jnp.mean(net.apply(params, spikes), axis=0)
-
-    @jax.jit
-    def train_step(params, opt_state, key, images, labels):
-        def loss(params):
-            return optax.softmax_cross_entropy_with_integer_labels(logits(params, key, images), labels).mean()
-
-        value, grads = jax.value_and_grad(loss)(params)
-        updates, opt_state = optimizer.update(grads, opt_state)
-        return optax.apply_updates(params, updates), opt_state, value
-
-    @jax.jit
-    def correct(params, key, images, labels):
-        return jnp.sum(jnp.argmax(logits(params, key, images), -1) == labels)
-
-    batches = len(train_y) // args.batch
-    for epoch in range(args.epochs):
-        start = time.perf_counter()
-        order = np.random.default_rng(epoch).permutation(len(train_y))
-        for i in range(batches):
-            rows = order[i * args.batch:(i + 1) * args.batch]
-            key, step_key = jax.random.split(key)
-            params, opt_state, loss = train_step(params, opt_state, step_key, train_x[rows], train_y[rows])
-        loss.block_until_ready()
-        elapsed = time.perf_counter() - start
-        hits = sum(int(correct(params, jax.random.fold_in(key, i), test_x[i:i + 1000], test_y[i:i + 1000]))
-                   for i in range(0, len(test_y), 1000))
-        print(f"epoch {epoch + 1}: loss {float(loss):.4f}, test accuracy {hits / len(test_y):.4f}, "
-              f"{batches} steps in {elapsed:.0f} s on {jax.devices()[0].device_kind}")
+def main(config: Config) -> None:
+    if config.smoke:
+        config = replace(config, epochs=1, batch=32, hidden=32)
+        train, test = random_images(256, 0), random_images(64, 1)
+        loading = Loading(workers=0, threads=1, read_buffer=1)
+    else:
+        train, test = load("train"), load("test")
+        loading = Loading()
+    data = Dataset.from_records(train, batch=config.batch, loading=loading)
+    per_epoch = data.steps_per_epoch
+    assert per_epoch is not None  # records held in memory have a count
+    net = SpikingMLP(hidden=(config.hidden, config.hidden), classes=10,
+                     neuron=sparx.nn.LIF(tau=2.0, detach_reset=True), readout_tau=2.0)
+    objective = SpikingClassifierObjective(net, Field("image", (28, 28)), sparx.encode.Rate(config.steps))
+    trainer = Trainer(objective, optax.adam(config.learning_rate), key=jax.random.key(0),
+                      checkpoints=Checkpoints(str(config.out)))
+    state = trainer.fit(data, steps=config.epochs * per_epoch, log_every=min(100, per_epoch),
+                        eval_every=per_epoch, metrics=[Accuracy()],
+                        validation={"test": evaluation_pass(test, config.batch)})
+    classifier = objective.pipeline(state)
+    print(f"predicted {np.asarray(classifier(test['image'][:10])).tolist()} "
+          f"for labels {test['label'][:10].tolist()}")
 
 
 if __name__ == "__main__":
-    main()
+    main(tyro.cli(Config))

@@ -6,25 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def _fake_shd(cache: Path, seed: int, records: int) -> None:
-    """Two SHD-layout files whose classes differ by which half of the channels fire."""
-    h5py = pytest.importorskip("h5py")
-    rng = np.random.default_rng(seed)
-    for split in ("train", "test"):
-        labels = rng.integers(0, 2, records).astype(np.uint16)
-        with h5py.File(cache / f"shd_{split}.h5", "w") as file:
-            times = file.create_dataset("spikes/times", (records,), dtype=h5py.vlen_dtype(np.float32))
-            units = file.create_dataset("spikes/units", (records,), dtype=h5py.vlen_dtype(np.uint16))
-            for i, label in enumerate(labels):
-                times[i] = np.sort(rng.uniform(0, 1.4, 60)).astype(np.float32)
-                units[i] = (rng.integers(0, 350, 60) + 350 * int(label)).astype(np.uint16)
-            file.create_dataset("labels", data=labels)
 
 
 SNN_DELAYS_FLAGS = [
@@ -32,7 +16,7 @@ SNN_DELAYS_FLAGS = [
     "--model.config", json.dumps({"hidden": [16], "classes": 2, "delays": [3, 3], "extend": True,
                                   "batch_norm": True, "use_bias": False, "dropout_mask": "sequence",
                                   "neuron": {"name": "lif", "fields": {"tau": 3.0}}}),
-    "--deployed", json.dumps({"sigma": 0}),
+    "--deployed", "sigma", "0",
     "--groups", json.dumps({"delays": {"patterns": ["*/delay"], "bounds": [0, 3],
                                        "learning_rate": {"name": "cosine", "fields": {"peak": 0.1,
                                                                                      "warmup_steps": 0}}}}),
@@ -41,20 +25,25 @@ SNN_DELAYS_FLAGS = [
 
 @pytest.mark.parametrize("delayed", [False, True])
 def test_the_recipe_trains_and_its_run_loads_through_dew_pipeline(tmp_path, delayed):
-    _fake_shd(tmp_path, 0, 64)
     env = {**os.environ, "JAX_PLATFORMS": "cpu"}
-    model = ["--model.config", json.dumps({"hidden": [16], "classes": 2, "delays": 3,
-                                           "neuron": {"name": "lif", "fields": {"tau": 3.0}}})]
-    command = [sys.executable, str(ROOT / "recipes/snn/train.py"),
-               "--data.cache", str(tmp_path), "--data.steps", "20", "--data.channels", "70",
-               "--data.loading.workers", "0", "--data.loading.threads", "1",
-               "--data.loading.read-buffer", "1",
-               *(SNN_DELAYS_FLAGS if delayed else model),
-               "--schedules", json.dumps({"sigma": {"name": "linear", "fields": {"peak": 1.5, "end": 0.5}}}),
-               "--trainer.batch-size", "16", "--trainer.steps", "8", "--trainer.log-every", "4",
-               "--trainer.eval-every", "8", "--trainer.checkpoint-every", "8",
-               "--trainer.checkpoint-dir", str(tmp_path / "runs"), "--trainer.name", "toy",
-               "--trainer.multi-host", "False"]
+    recipe = [sys.executable, str(ROOT / "recipes/snn/train.py")]
+    width = {"sigma": {"name": "linear", "fields": {"peak": 1.5, "end": 0.5}}}
+    schedules = ["--schedules", json.dumps(width)]
+    runs = ["--trainer.checkpoint-dir", str(tmp_path / "runs"), "--trainer.name", "toy"]
+    if delayed:
+        # The documented form: the dataset named as a subcommand, every setting a flag.
+        pytest.importorskip("h5py")
+        from sparx.datasets import write_synthetic_shd
+        write_synthetic_shd(tmp_path, records=64)
+        command = [*recipe, "data:shd", "--data.cache", str(tmp_path), "--data.steps", "20",
+                   "--data.channels", "70", "--data.loading.workers", "0", "--data.loading.threads", "1",
+                   "--data.loading.read-buffer", "1", *SNN_DELAYS_FLAGS, *schedules,
+                   "--trainer.batch-size", "16", "--trainer.steps", "8", "--trainer.log-every", "4",
+                   "--trainer.eval-every", "8", "--trainer.checkpoint-every", "8",
+                   "--trainer.multi-host", "False", *runs]
+    else:
+        model = {"delays": 3, "neuron": {"name": "lif", "fields": {"tau": 3.0}}}
+        command = [*recipe, "--smoke", "--model.config", json.dumps(model), *schedules, *runs]
     done = subprocess.run(command, capture_output=True, text=True, env=env, timeout=900)
     assert done.returncode == 0, done.stderr[-3000:]
     run = tmp_path / "runs" / "toy"
