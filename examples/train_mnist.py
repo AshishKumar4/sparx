@@ -15,8 +15,6 @@ classifier in another process. `--smoke` trains on 256 random images
 for a few steps instead, and downloads nothing.
 """
 
-import gzip
-import urllib.request
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -28,11 +26,10 @@ from dew import Checkpoints, Field, Trainer
 from dew.data import Dataset, Loading
 
 import sparx
+from sparx.datasets import mnist
 from sparx.metrics import Accuracy
 from sparx.models import SpikingMLP
 from sparx.objectives import SpikingClassifierObjective
-
-MNIST = "https://storage.googleapis.com/cvdf-datasets/mnist/{name}.gz"
 
 
 @dataclass
@@ -49,22 +46,6 @@ class Config:
     """Train on 256 random images for a few steps; nothing is downloaded."""
 
 
-def load(split: str) -> dict[str, np.ndarray]:
-    """MNIST `split` as uint8 images `[N, 28, 28]` and int32 labels `[N]`, cached in ~/.cache/sparx."""
-    cache = Path.home() / ".cache" / "sparx"
-    prefix = "train" if split == "train" else "t10k"
-    arrays = []
-    for name, offset in ((f"{prefix}-images-idx3-ubyte", 16), (f"{prefix}-labels-idx1-ubyte", 8)):
-        path = cache / f"{name}.gz"
-        if not path.exists():
-            cache.mkdir(parents=True, exist_ok=True)
-            urllib.request.urlretrieve(MNIST.format(name=name), path)
-        with gzip.open(path) as file:
-            arrays.append(np.frombuffer(file.read(), np.uint8, offset=offset))
-    images, labels = arrays
-    return {"image": images.reshape(-1, 28, 28), "label": labels.astype(np.int32)}
-
-
 def random_images(count: int, seed: int) -> dict[str, np.ndarray]:
     """`count` random uint8 images and labels in MNIST's layout, for a smoke run."""
     rng = np.random.default_rng(seed)
@@ -78,7 +59,7 @@ def main(config: Config) -> None:
         train, test = random_images(256, 0), random_images(64, 1)
         loading = Loading(workers=0, threads=1, read_buffer=1)
     else:
-        train, test = load("train"), load("test")
+        train, test = mnist("train"), mnist("test")
         loading = Loading()
     data = Dataset.from_records(train, batch=config.batch, validation=test, loading=loading)
     per_epoch = data.steps_per_epoch

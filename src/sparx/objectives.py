@@ -10,6 +10,8 @@ objectives:
 - `ActivityFitObjective` fits a network's spikes to recorded ones.
 - `EPropObjective` trains a recurrent spiking layer with e-prop's online
   gradients (`sparx.learn.eprop`) in place of backpropagation.
+- `PredictiveCodingObjective` trains a stack of layers with predictive
+  coding's or PC-ALM's local weight updates (`sparx.learn.PredictiveCoding`).
 
     import optax
     from dew import Field, Trainer
@@ -32,6 +34,7 @@ batch count for nothing in the loss.
 from __future__ import annotations
 
 import functools
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
@@ -61,7 +64,15 @@ from dew.training.optim import ScheduleBase
 
 from sparx.dynamics import NeuronModel
 from sparx.encode import SpikeEncoder
-from sparx.learn import EPropParams, bptt_loss, eprop, eprop_forward
+from sparx.learn import (
+    EPropParams,
+    PredictiveCoding,
+    bptt_loss,
+    eprop,
+    eprop_forward,
+    sequential_blocks,
+    squared_error,
+)
 from sparx.losses import READOUTS, Readout, readout_logits, readout_losses, van_rossum
 from sparx.nn import RATES
 from sparx.rates import firing_rates, rate_penalty
@@ -71,7 +82,8 @@ if TYPE_CHECKING:
     from dew.inference.tasks import Processor
     from dew.records import JSON
 
-__all__ = ["ActivityFitObjective", "EPropObjective", "RateBand", "SpikingClassifierObjective"]
+__all__ = ["ActivityFitObjective", "EPropObjective", "PredictiveCodingObjective", "RateBand",
+           "SpikingClassifierObjective"]
 
 
 def _row_weights(batch: Batch, rows: int) -> jax.Array:
@@ -431,3 +443,75 @@ class EPropObjective(Objective[Ratio]):
         ones = jnp.ones_like(losses)[:, None]
         return TokenScores(losses=losses[:, None], weights=ones,
                            correct=(jnp.argmax(logits, -1) == labels)[:, None])
+
+
+class PredictiveCodingObjective(Objective[Ratio]):
+    """Classify with a stack of layers whose weight updates are predictive coding's or PC-ALM's.
+
+    `model` is a Flax `nn.Sequential` over the field `sample`, flattened per
+    example, each element one layer of the stack (`sparx.learn.residual_mlp`
+    builds Seely and Gould's residual MLP). Its output scores `classes`
+    classes against the one-hot labels under `labels` by half the squared
+    error, the loss of their experiments, averaged over the batch's rows.
+    `rule` (`sparx.learn.PredictiveCoding`) relaxes the hidden activity from
+    the forward pass, and its weight update, the energy's gradient at the
+    relaxed activity, goes to dew's trainer as the loss's own
+    (`Objective.with_gradients`), so the trainer's optimizer, accumulation
+    and logging apply it. `rule=None` trains the same stack by
+    backpropagation, their baseline. The reported loss is the forward
+    pass's whatever the rule, beside the batch's accuracy. Evaluation
+    returns `TokenScores` for `sparx.metrics.Accuracy`.
+    """
+
+    artifact = TokenScores
+    shown: Mapping[str, Shown] = {"accuracy": Shown(better="higher", percent=True)}
+
+    def __init__(self, model: nn.Sequential, sample: Field, *, classes: int,
+                 rule: PredictiveCoding | None = None, labels: str = "label"):
+        if not isinstance(model, nn.Sequential):
+            raise TypeError(f"predictive coding relaxes each layer of a stack: an nn.Sequential, not "
+                            f"{type(model).__name__}")
+        self.model = self.bind_model(model)
+        self.stack = model
+        self.sample = sample
+        self.classes = classes
+        self.rule = rule
+        self.labels = labels
+        self.inputs = InputSpec(sample=sample)
+
+    def fresh_variables(self, key: jax.Array, held: Variables | None) -> Variables:
+        return dict(self.model.init(key, jnp.zeros((1, math.prod(self.sample.shape)), jnp.float32)))
+
+    def _scored(self, variables: Variables,
+                batch: Batch) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+        """The flattened inputs `[B, in]`, the labels `[B]`, their one-hot targets and the outputs."""
+        x = jnp.asarray(batch[self.sample.key], jnp.float32)
+        x = x.reshape(x.shape[0], -1)
+        labels = jnp.asarray(batch[self.labels])
+        output = self.model.apply(variables, x)
+        assert not isinstance(output, tuple)  # no mutable collection, so apply returns the output alone
+        return x, labels, jax.nn.one_hot(labels, self.classes, dtype=x.dtype), output
+
+    def loss(self, variables: Variables, batch: Batch, step: Step) -> tuple[Ratio, Aux]:
+        x, labels, target, output = self._scored(variables, batch)
+        weights = _row_weights(batch, x.shape[0])
+        stats = Ratio(jnp.sum(weights * squared_error(output, target)), jnp.sum(weights))
+        correct = (jnp.argmax(output, axis=-1) == labels).astype(jnp.float32)
+        metrics = {"accuracy": jnp.sum(weights * correct) / jnp.sum(weights)}
+        if self.rule is None:
+            return stats, Aux(metrics=metrics)
+        held = variables["params"]
+        blocks, params = sequential_blocks(self.stack, jax.lax.stop_gradient(held))
+        grads = self.rule.gradient(blocks, params, x, target, rows=weights)
+        # The update mirrors the parameters: a layer without any, an activation, has none to update.
+        update = {f"layers_{k}": grad for k, grad in enumerate(grads) if f"layers_{k}" in held}
+        gradients = jax.tree.unflatten(jax.tree.structure(stats), [update, None])
+        return self.with_gradients(stats, gradients, held), Aux(metrics=metrics)
+
+    def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
+        _, labels, target, output = self._scored(self.evaluation_variables(params, step), batch)
+        losses = squared_error(output, target)
+        ones = jnp.ones_like(losses)[:, None]
+        return TokenScores(losses=losses[:, None], weights=ones,
+                           correct=(jnp.argmax(output, axis=-1) == labels)[:, None])
+

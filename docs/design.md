@@ -39,7 +39,7 @@ It adds six of its own:
 dew (platform)    Trainer . MeshSpec/Layout . Checkpoints . Dataset/Grain . Tracker . Profiler . records . run classes/CLI/launch . pipeline . Server
                     ^ objectives, datasets, models, tasks and run classes recorded by import path
 sparx.objectives  objectives (classification, sequence, activity fitting, online learning), with metrics, tasks, dataset specs, recipes
-sparx.learn       exact event gradients (EventProp) . online rules (e-prop, OTTT) . conversion
+sparx.learn       exact event gradients (EventProp) . online rules (e-prop, OTTT) . REINFORCE . predictive coding (PC, PC-ALM) . conversion
 sparx.graph       Population . Projection . Connectivity . Network (a Flax module) . builders (random, spatial, connectome)
                   simulate() . monitors . step order . delay buffers . connectivity kernels . sharding rules
 sparx.nn          layers over time-major tensors: the dense fast path
@@ -233,7 +233,10 @@ It compiles one chunk of the time loop, carries state between chunks, streams mo
 | Surrogate-gradient BPTT | `custom_jvp` spikes (today), with dew's remat policies over time chunks for memory | `sparx.surrogate` |
 | Exact event-based gradients | EventProp (Wunderlich and Pehle 2021): adjoint dynamics over spike times; needs the in-step spike times of 4.2 | `sparx.learn.events` |
 | Forward and online learning | forward-mode gradients through the `custom_jvp`; e-prop (Bellec et al. 2020) and OTTT (Xiao et al. 2022) as eligibility-trace updates every step, memory independent of `T` | `sparx.learn.online`, with a dew objective that updates every chunk |
-| Local plasticity | STDP and three-factor rules as state updates during simulation | `sparx.dynamics.plasticity` |
+| Local plasticity | STDP, triplet STDP and reward-modulated STDP (Izhikevich 2007, NEST's `stdp_dopamine_synapse`) as state updates during simulation | `sparx.dynamics.plasticity` |
+| Reward-driven learning | REINFORCE (Williams 1992) for escape-noise neurons: an eligibility per synapse, `d log P(spikes) / dw`, weighed by the reward | `sparx.learn.reinforce` |
+| Fast weights | differentiable plasticity and Backpropamine (Miconi et al. 2018, 2019): Hebbian traces each sequence writes, their plasticity learned by BPTT | `sparx.dynamics.PlasticRecurrentCell`, `sparx.nn.Plastic` |
+| Local energy minimization | predictive coding and PC-ALM (Seely and Gould 2026): hidden activity relaxed on a layered energy, each weight's update read from its own layer's error | `sparx.learn.predictive`, with a dew objective that hands the update to the trainer |
 | Fitting to recordings | gradient descent on network parameters against recorded spikes, rates or voltages, with spike-train distances (van Rossum 2001, Victor-Purpura 1996) and PSTH losses | `sparx.objectives.ActivityFitObjective` |
 | Conversion | trained ANN weights mapped to an IF network with threshold balancing | `sparx.learn.convert` |
 
@@ -253,7 +256,7 @@ Models are Flax modules that a run's record names by import path:
 
 | dew piece | Use in sparx |
 | --- | --- |
-| `Trainer`, `Objective`, `Step`, `Aux`, `Ratio` | all gradient training; sparx objectives subclass `Objective` (today: `SpikingClassifierObjective`, `ActivityFitObjective`, `EPropObjective`) |
+| `Trainer`, `Objective`, `Step`, `Aux`, `Ratio` | all gradient training; sparx objectives subclass `Objective` (today: `SpikingClassifierObjective`, `ActivityFitObjective`, `EPropObjective`, `PredictiveCodingObjective`) |
 | `MeshSpec`, `Layout`, logical axes | data, fsdp and tensor parallel training of layers; neuron-partitioned simulation |
 | `Checkpoints` (Orbax), preemption handling | training and long simulation runs |
 | `Dataset`, Grain sources and transforms | neuromorphic datasets as dew dataset specs, with event-level augmentation as Grain transforms and resumable, sharded reading |

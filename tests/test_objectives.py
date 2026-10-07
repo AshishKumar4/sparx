@@ -16,9 +16,16 @@ from dew.training.optim import Exponential, Linear, OneCycle, ParamGroup
 import sparx
 from sparx.datasets import holdout
 from sparx.encode import Direct, Events, Rate
+from sparx.learn import PredictiveCoding, residual_mlp, sequential_blocks, squared_error
 from sparx.metrics import Accuracy
 from sparx.nn import LI, LIF
-from sparx.objectives import ActivityFitObjective, EPropObjective, RateBand, SpikingClassifierObjective
+from sparx.objectives import (
+    ActivityFitObjective,
+    EPropObjective,
+    PredictiveCodingObjective,
+    RateBand,
+    SpikingClassifierObjective,
+)
 from sparx.tasks import SpikingClassification
 
 LOADING = Loading(workers=0, threads=1, read_buffer=1)
@@ -433,3 +440,68 @@ def test_the_eprop_objective_trains_through_dews_trainer():
     state = trainer.fit(data, steps=3, log_every=3, eval_every=3, metrics=[Accuracy()])
     assert "val/accuracy" in trainer._display.evaluations["val"][-1].scores
     assert np.all(np.diag(state.variables["params"]["w_rec"]) == 0)
+
+
+PC_ALM = PredictiveCoding(8, 0.2, alpha=1.0)
+
+
+def pc_objective(rule=PC_ALM):
+    return PredictiveCodingObjective(residual_mlp(6, 4, 12, 3, "tanh"), Field("image", (3, 4)), classes=3,
+                                     rule=rule)
+
+
+def pc_batch(seed):
+    rng = np.random.default_rng(seed)
+    return {"image": rng.normal(size=(8, 3, 4)).astype(np.float32),
+            "label": rng.integers(0, 3, 8).astype(np.int32)}
+
+
+@pytest.mark.parametrize("rule", [PC_ALM, None])
+def test_the_predictive_coding_objectives_gradient_is_its_rules(rule):
+    objective = pc_objective(rule)
+    variables = objective.init(jax.random.key(0))
+    batch = {key: jnp.asarray(value) for key, value in pc_batch(1).items()}
+    step = Step(jnp.asarray(0), jax.random.key(1), None)
+    grads = jax.grad(lambda v: objective.scalar_loss(v, batch, step)[0])(variables)["params"]
+    x, target = batch["image"].reshape(8, 12), jax.nn.one_hot(batch["label"], 3)
+    if rule is None:  # backpropagation through the stack
+        expected = jax.grad(lambda v: jnp.mean(squared_error(objective.model.apply(v, x), target)))(variables)
+        expected = expected["params"]
+    else:
+        blocks, params = sequential_blocks(objective.stack, variables["params"])
+        # The trainer differentiates the mean over the batch of 8.
+        expected = {f"layers_{k}": g for k, g in enumerate(rule.gradient(blocks, params, x, target))}
+        expected = jax.tree.map(lambda g: g / 8, expected)
+    for got, want in zip(jax.tree.leaves(grads), jax.tree.leaves(expected), strict=True):
+        np.testing.assert_allclose(got, want, rtol=1e-6, atol=1e-8)  # observed 0
+    assert all(np.any(np.asarray(g) != 0) for g in jax.tree.leaves(grads))
+
+
+def test_a_repeated_row_counts_for_nothing_in_the_predictive_coding_objective():
+    objective = pc_objective()
+    variables = objective.init(jax.random.key(0))
+    real = {key: jnp.asarray(value) for key, value in pc_batch(1).items()}
+    step = Step(jnp.asarray(0), jax.random.key(1), None)
+
+    def value_and_grad(batch):
+        return jax.value_and_grad(lambda v: objective.scalar_loss(v, batch, step)[0])(variables)
+
+    want, want_grads = value_and_grad(real)
+    got, got_grads = value_and_grad(padded_batch(real, 3))
+    np.testing.assert_allclose(got, want, rtol=1e-6)  # observed 0
+    for a, b in zip(jax.tree.leaves(got_grads), jax.tree.leaves(want_grads), strict=True):
+        np.testing.assert_allclose(a, b, rtol=1e-5, atol=1e-7)  # observed 0
+
+
+def test_the_predictive_coding_objective_trains_through_dews_trainer():
+    objective = pc_objective()
+    data = Dataset.from_records(pc_batch(2), batch=8, validation=pc_batch(3), loading=LOADING)
+    trainer = Trainer(objective, optax.adam(1e-2), key=jax.random.key(0))
+    trainer.fit(data, steps=3, log_every=3, eval_every=3, metrics=[Accuracy()])
+    assert "val/accuracy" in trainer._display.evaluations["val"][-1].scores
+
+
+def test_the_predictive_coding_objective_refuses_a_model_that_is_not_a_stack():
+    with pytest.raises(TypeError, match=r"nn\.Sequential"):
+        PredictiveCodingObjective(LIF(), Field("image", (4,)), classes=2)
+

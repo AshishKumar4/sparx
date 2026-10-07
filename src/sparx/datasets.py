@@ -10,6 +10,9 @@ same data as a dew dataset spec, which a run's `data` holds (`--data.channels
 140` on the recipe's command line). `write_synthetic_shd` writes small files
 in SHD's layout, which smoke runs and tests read in its place.
 
+`mnist` reads MNIST (LeCun et al. 1998) or Fashion-MNIST (Xiao et al. 2017)
+as uint8 images and labels.
+
 `holdout` splits records into a part to train on and a part to validate on.
 
 Reading the files needs h5py (`pip install "sparxml[datasets]"`).
@@ -30,9 +33,15 @@ from dew.data import Dataset, DatasetSpec
 from dew.data.dataset import Tokenize
 from numpy.typing import ArrayLike
 
-__all__ = ["SHD", "SHD_URL", "Binning", "bin_events", "holdout", "shd", "write_synthetic_shd"]
+__all__ = ["MNIST_URLS", "SHD", "SHD_URL", "Binning", "bin_events", "holdout", "mnist", "shd",
+           "write_synthetic_shd"]
 
 SHD_URL = "https://zenkelab.org/datasets/shd/{split}.h5.gz"
+MNIST_URLS = {
+    "mnist": "https://storage.googleapis.com/cvdf-datasets/mnist/{name}.gz",
+    "fashion": "https://raw.githubusercontent.com/zalandoresearch/fashion-mnist/master/data/fashion/{name}.gz",
+}
+"""Where `mnist` fetches each IDX file: the MNIST mirror and Zalando's Fashion-MNIST repository."""
 _CHANNELS = 700
 
 
@@ -110,6 +119,32 @@ def _download(split: str, cache: Path) -> Path:
         shutil.copyfileobj(source, target)
     path.with_suffix(".h5.partial").rename(path)
     return path
+
+
+def mnist(split: Literal["train", "test"], *, fashion: bool = False,
+          cache: str | Path | None = None) -> dict[str, np.ndarray]:
+    """MNIST `split`, or Fashion-MNIST's with `fashion=True`: uint8 images `[N, 28, 28]` under `"image"`
+    and int32 labels `[N]` under `"label"`.
+
+    The gzipped IDX files download once to `cache`, `~/.cache/sparx` by
+    default, Fashion-MNIST's under `fashion/`.
+    """
+    root = Path(cache) if cache is not None else Path.home() / ".cache" / "sparx"
+    root = root / "fashion" if fashion else root
+    prefix = "train" if split == "train" else "t10k"
+    arrays = []
+    for name, header in ((f"{prefix}-images-idx3-ubyte", 16), (f"{prefix}-labels-idx1-ubyte", 8)):
+        path = root / f"{name}.gz"
+        if not path.exists():
+            root.mkdir(parents=True, exist_ok=True)
+            partial = path.with_suffix(".gz.partial")
+            url = MNIST_URLS["fashion" if fashion else "mnist"].format(name=name)
+            urllib.request.urlretrieve(url, partial)
+            partial.rename(path)
+        with gzip.open(path) as file:
+            arrays.append(np.frombuffer(file.read(), np.uint8, offset=header))
+    images, labels = arrays
+    return {"image": images.reshape(-1, 28, 28), "label": labels.astype(np.int32)}
 
 
 def shd(split: Literal["train", "test"], steps: int = 100, max_time: float = 1.4, channels: int = 700,

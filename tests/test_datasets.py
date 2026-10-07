@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from sparx.datasets import bin_events, shd
+from sparx.datasets import bin_events, mnist, shd
 
 
 def test_events_are_counted_into_their_time_and_channel_bins():
@@ -69,3 +69,28 @@ def test_shd_refuses_a_file_without_its_layout(tmp_path):
         file.create_dataset("labels", data=np.zeros(2, np.uint16))
     with pytest.raises(ValueError, match="lacks SHD"):
         shd("test", path=path)
+
+
+def _idx(path, magic, header, payload):
+    """A gzipped IDX file as LeCun's are laid out: a big-endian magic number, the sizes, then the bytes."""
+    import gzip
+    import struct
+
+    with gzip.open(path, "wb") as file:
+        sizes = b"".join(struct.pack(">I", n) for n in header)
+        file.write(struct.pack(">I", magic) + sizes + payload.tobytes())
+
+
+@pytest.mark.parametrize("fashion", [False, True])
+def test_mnist_reads_the_idx_layout(tmp_path, fashion):
+    rng = np.random.default_rng(0)
+    images = rng.integers(0, 256, (5, 28, 28), dtype=np.uint8)
+    labels = rng.integers(0, 10, 5).astype(np.uint8)
+    folder = tmp_path / "fashion" if fashion else tmp_path
+    folder.mkdir(exist_ok=True)
+    _idx(folder / "t10k-images-idx3-ubyte.gz", 2051, (5, 28, 28), images)
+    _idx(folder / "t10k-labels-idx1-ubyte.gz", 2049, (5,), labels)
+    records = mnist("test", fashion=fashion, cache=tmp_path)
+    np.testing.assert_array_equal(records["image"], images)
+    np.testing.assert_array_equal(records["label"], labels)
+    assert records["label"].dtype == np.int32

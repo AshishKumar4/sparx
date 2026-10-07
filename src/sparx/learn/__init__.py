@@ -13,13 +13,24 @@ from sparx.learn.online import (
     ottt,
     ottt_dense,
 )
+from sparx.learn.predictive import (
+    PredictiveCoding,
+    ResidualBlock,
+    Settled,
+    residual_mlp,
+    sequential_blocks,
+    squared_error,
+)
 from sparx.learn.reinforce import ReinforceParams, policy_gradient, reinforce
 
 __all__ = [
     "EPropParams",
     "EventLIF",
     "OTTTLayer",
+    "PredictiveCoding",
     "ReinforceParams",
+    "ResidualBlock",
+    "Settled",
     "SpikingMaxPool",
     "accumulate",
     "bptt_loss",
@@ -34,6 +45,9 @@ __all__ = [
     "ottt_dense",
     "policy_gradient",
     "reinforce",
+    "residual_mlp",
     "run_converted",
+    "sequential_blocks",
     "spike_times",
+    "squared_error",
 ]
