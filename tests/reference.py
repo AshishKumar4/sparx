@@ -27,6 +27,20 @@ def lif(xs, decay, threshold=1.0, reset="subtract"):
     return np.stack(spikes), np.stack(membranes)
 
 
+def bernoulli(xs, noise, decay, beta, threshold=1.0, reset="subtract"):
+    """BernoulliCell: the LIF membrane, firing where the noise falls below sigmoid(beta (v - threshold))."""
+    v = np.zeros(xs.shape[1:])
+    spikes, probabilities = [], []
+    for x, u in zip(xs, noise, strict=True):
+        v = decay * v + x
+        p = 1 / (1 + np.exp(-beta * (v - threshold)))
+        s = (u < p).astype(np.float64)
+        v = _reset(v, s, threshold, reset)
+        spikes.append(s)
+        probabilities.append(p)
+    return np.stack(spikes), np.stack(probabilities), v
+
+
 def li(xs, decay):
     v = np.zeros(xs.shape[1:])
     out = []

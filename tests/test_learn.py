@@ -10,11 +10,12 @@ import numpy as np
 import optax
 import pytest
 
-from sparx.dynamics import ALIFCell, LICell, LIFCell, Serial, SynapticInput, decay
+from sparx.dynamics import ALIFCell, BernoulliCell, LICell, LIFCell, Serial, SynapticInput, decay
 from sparx.learn import (
     EPropParams,
     EventLIF,
     OTTTLayer,
+    ReinforceParams,
     SpikingMaxPool,
     bptt_loss,
     convert,
@@ -24,6 +25,8 @@ from sparx.learn import (
     fold_batch_norm,
     normalize,
     ottt,
+    policy_gradient,
+    reinforce,
     run_converted,
     spike_times,
 )
@@ -533,3 +536,132 @@ def test_a_two_layer_event_network_learns_spike_latencies():
     first = jnp.min(out, -1)
     accuracy = float(jnp.mean(jnp.argmin(first, -1) == labels))
     assert accuracy >= 0.95 and np.isfinite(float(value))
+
+
+# REINFORCE on a layer of Bernoulli neurons.
+
+
+def log_probability(cell, params, inputs, spikes):
+    """log P(spikes) of one example, `inputs` `[T, in]`, `spikes` `[T, N]`, written from the cell's equations
+    with every spike held: its membrane, its sigmoid probability, its reset."""
+    v = jnp.zeros(spikes.shape[1])
+    last = jnp.zeros(spikes.shape[1])
+    total = 0.0
+    for u, s in zip(inputs, spikes, strict=True):
+        v = cell.decay * v + u @ params.w_in + last @ params.w_rec
+        a = cell.beta * (v - cell.threshold)
+        total += jnp.sum(s * jax.nn.log_sigmoid(a) + (1 - s) * jax.nn.log_sigmoid(-a))
+        v = jnp.where(s > 0, 0.0, v) if cell.reset == "zero" else v - s * cell.threshold
+        last = s
+    return total
+
+
+def every_trajectory(steps, size):
+    """Every spike train of `size` neurons over `steps` steps, `[2 ** (steps size), steps, size]`."""
+    bits = (np.arange(2 ** (steps * size))[:, None] >> np.arange(steps * size)) & 1
+    return bits.reshape(-1, steps, size).astype(np.float64)
+
+
+def small_layer(seed):
+    """Two Bernoulli neurons with recurrence over three steps of two inputs, float64."""
+    rng = np.random.default_rng(seed)
+    params = ReinforceParams(jnp.asarray(rng.normal(0, 1.0, (2, 2))), jnp.asarray(rng.normal(0, 1.0, (2, 2))))
+    return params, jnp.asarray(rng.random((3, 2)))
+
+
+@pytest.mark.parametrize("reset", ["zero", "subtract"])
+def test_reinforce_eligibility_is_the_score_of_every_trajectory(reset):
+    # Each of the 64 trajectories is forced by its noise: its eligibility is the gradient of its own
+    # log-probability, and REINFORCE's expectation over all of them, weighed by their probabilities, is
+    # the exact gradient of the expected reward.
+    with jax.enable_x64(new_val=True):
+        cell = BernoulliCell(0.7, threshold=0.5, beta=2.0, reset=reset)
+        params, inputs = small_layer(0)
+        spikes = every_trajectory(3, 2)
+        count = len(spikes)
+        rewards = jnp.asarray(np.random.default_rng(1).normal(size=count))
+        batch = jnp.broadcast_to(inputs[:, None], (3, count, 2))
+        drawn, eligibility = reinforce(cell, params, batch, jnp.asarray(1 - spikes.transpose(1, 0, 2)))
+        np.testing.assert_array_equal(np.asarray(drawn).transpose(1, 0, 2), spikes)
+
+        def log_p(params, s):
+            return log_probability(cell, params, inputs, s)
+
+        scores = jax.vmap(jax.grad(log_p), in_axes=(None, 0))(params, jnp.asarray(spikes))
+        for mine, theirs in zip(eligibility, scores, strict=True):
+            np.testing.assert_allclose(mine, theirs, rtol=1e-12, atol=1e-12)  # observed 8.9e-16
+        probability = jnp.exp(jax.vmap(log_p, in_axes=(None, 0))(params, jnp.asarray(spikes)))
+        np.testing.assert_allclose(jnp.sum(probability), 1.0, rtol=1e-12)  # observed 2.2e-16
+
+        def expected_reward(params):
+            probabilities = jnp.exp(jax.vmap(log_p, in_axes=(None, 0))(params, jnp.asarray(spikes)))
+            return jnp.sum(probabilities * rewards)
+
+        exact = jax.grad(expected_reward)(params)
+        for e, g in zip(eligibility, exact, strict=True):
+            np.testing.assert_allclose(jnp.einsum("b,b...->...", probability * rewards, e), g, rtol=1e-12,
+                                       atol=1e-12)  # observed 1.7e-16
+            # The score has mean zero, so a baseline adds nothing to the expectation. Observed 3.3e-16.
+            np.testing.assert_allclose(jnp.einsum("b,b...->...", probability, e), 0.0, atol=1e-12)
+        assert all(np.abs(np.asarray(g)).max() > 1e-3 for g in exact)  # the gradient is not trivially 0
+
+
+def test_policy_gradient_estimates_the_gradient_of_the_expected_reward():
+    # Sampled trajectories: the estimate is within a few standard errors of the exact gradient, and a
+    # baseline at the expected reward leaves it so with a smaller spread.
+    with jax.enable_x64(new_val=True):
+        cell = BernoulliCell(0.7, threshold=0.5, beta=2.0)
+        params, inputs = small_layer(2)
+        spikes = every_trajectory(3, 2)
+        table = jnp.asarray(np.random.default_rng(3).normal(size=len(spikes))) + 3.0
+
+        def log_p(params, s):
+            return log_probability(cell, params, inputs, s)
+
+        def expected_reward(params):
+            probabilities = jnp.exp(jax.vmap(log_p, in_axes=(None, 0))(params, jnp.asarray(spikes)))
+            return jnp.sum(probabilities * table)
+
+        exact, mean = jax.grad(expected_reward)(params), expected_reward(params)
+        samples = 20000
+        noise = jax.random.uniform(jax.random.key(0), (3, samples, 2), jnp.float64)
+        batch = jnp.broadcast_to(inputs[:, None], (3, samples, 2))
+        drawn, eligibility = reinforce(cell, params, batch, noise)
+        index = jnp.sum(drawn.transpose(1, 0, 2).reshape(samples, 6) * (2 ** jnp.arange(6)), axis=1)
+        rewards = table[index.astype(jnp.int32)]
+        spreads = []
+        for baseline in (0.0, mean):
+            estimate = policy_gradient(eligibility, rewards, baseline)
+            for e, g, got in zip(eligibility, exact, estimate, strict=True):
+                each = (rewards - baseline)[:, None, None] * e
+                error = np.asarray(jnp.std(each, axis=0)) / np.sqrt(samples)
+                assert np.all(np.abs(np.asarray(got) - np.asarray(g)) < 5 * error)
+            each = (rewards - baseline)[:, None, None] * eligibility.w_in
+            spreads.append(float(jnp.mean(jnp.std(each, axis=0))))
+        assert spreads[1] < spreads[0] / 2  # rewards near 3 make the plain estimate's spread large
+
+
+def test_ascending_the_policy_gradient_teaches_a_layer_which_neuron_to_fire():
+    # The reward counts neuron 0's spikes and takes away neuron 1's; from weights that fire both alike,
+    # a hundred REINFORCE steps with a running-mean baseline make neuron 0 fire and neuron 1 fall silent.
+    cell = BernoulliCell(0.8, threshold=1.0, beta=3.0)
+    params = ReinforceParams(jnp.full((3, 2), 0.4), jnp.zeros((2, 2)))
+    inputs = jnp.ones((10, 32, 3))
+    baseline = 0.0
+
+    @jax.jit
+    def update(params, key, baseline):
+        noise = jax.random.uniform(key, (10, 32, 2))
+        spikes, eligibility = reinforce(cell, params, inputs, noise)
+        rewards = jnp.sum(spikes[..., 0] - spikes[..., 1], axis=0)
+        gradient = policy_gradient(eligibility, rewards, baseline)
+        ascended = jax.tree.map(lambda w, g: w + 0.05 * g, params, gradient)
+        return ascended, jnp.mean(rewards), spikes.mean((0, 1))
+
+    first = None
+    for key in jax.random.split(jax.random.key(0), 100):
+        params, reward, rates = update(params, key, baseline)
+        baseline = 0.9 * baseline + 0.1 * float(reward)
+        first = rates if first is None else first
+    assert abs(float(first[0] - first[1])) < 0.1  # alike at the start
+    assert float(rates[0]) > 0.8 and float(rates[1]) < 0.1

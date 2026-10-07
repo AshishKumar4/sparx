@@ -142,7 +142,9 @@ class SynapticInput:
     potential, so an excitatory and an inhibitory conductance pull the
     voltage toward different targets. `jump` (mV) is added to the voltage at
     the end of the step, before the threshold test. `gap` is the step's
-    gap-junction coupling, None for a neuron without junctions.
+    gap-junction coupling, None for a neuron without junctions. `noise` is
+    a uniform draw in [0, 1) per neuron, which a stochastic model fires by
+    (`sparx.dynamics.BernoulliCell`); None for every other model.
     """
 
     current: jax.Array | float = 0.0
@@ -150,6 +152,7 @@ class SynapticInput:
     conductance: Mapping[str, jax.Array] = struct.field(default_factory=dict)
     jump: jax.Array | float = 0.0
     gap: Gap | None = None
+    noise: jax.Array | None = None
 
     def current_at(self, s: jax.Array | float) -> jax.Array:
         """The total current (pA) `s` ms into the step, the drive of gap junctions included."""

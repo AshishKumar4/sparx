@@ -6,6 +6,7 @@ import reference
 
 from sparx.dynamics import (
     ALIFCell,
+    BernoulliCell,
     Izhikevich,
     LICell,
     LIFCell,
@@ -131,6 +132,38 @@ def test_the_graded_models_say_so_and_the_spiking_ones_do_not():
     assert RecurrentCell(RateCell(0.5), jnp.eye(2)).graded
 
 
+@pytest.mark.parametrize("reset", ["subtract", "zero", "none"])
+def test_bernoulli_matches_the_reference_loop(reset):
+    xs = currents(12, scale=0.6)
+    noise = np.asarray(jax.random.uniform(jax.random.key(3), xs.shape))
+    model = BernoulliCell(0.8, threshold=1.0, beta=3.0, reset=reset)
+    (spikes, probability), state = run(model, SynapticInput(jump=jnp.asarray(xs), noise=jnp.asarray(noise)),
+                                       record=lambda state: state.p)
+    expected, p, v = reference.bernoulli(xs.astype(np.float64), noise.astype(np.float64), 0.8, 3.0,
+                                         reset=reset)
+    # The closest draw lies 2.7e-5 from its probability, far above float32 rounding.
+    np.testing.assert_array_equal(spikes.value, expected)
+    np.testing.assert_allclose(probability, p, rtol=1e-5, atol=1e-6)  # observed 1.9e-7
+    np.testing.assert_allclose(state.v, v, rtol=1e-5, atol=1e-5)  # observed 2.6e-7
+    assert 0.1 < expected.mean() < 0.9  # the noise decides, neither all nor none fire
+
+
+def test_a_noise_of_one_minus_the_spikes_replays_them():
+    # p lies strictly between 0 and 1, so noise 0 always fires and noise 1 never does.
+    spikes = (np.random.default_rng(5).random((T, B, F)) < 0.4).astype(np.float32)
+    out, _ = run(BernoulliCell(0.9, beta=0.5), SynapticInput(jump=jnp.asarray(currents(13) * 4),
+                                                             noise=jnp.asarray(1 - spikes)))
+    np.testing.assert_array_equal(out.value, spikes)
+
+
+def test_noise_goes_to_a_stochastic_model_and_only_there():
+    xs = jnp.asarray(currents(14))
+    with pytest.raises(ValueError, match="fires by its noise"):
+        run(BernoulliCell(0.8), xs)
+    with pytest.raises(ValueError, match="fires without noise"):
+        run(LIFCell(0.8), SynapticInput(jump=xs, noise=jnp.zeros_like(xs)))
+
+
 def test_alif_matches_the_reference_loop():
     xs = currents(5, scale=1.0)
     spikes, _ = fired(ALIFCell(0.9, 0.97, beta=0.5), jnp.asarray(xs))
@@ -213,6 +246,7 @@ MODELS = {
         jnp.asarray(np.random.default_rng(9).normal(0, 0.3, (F, F)), jnp.float32)),
     "recurrent_rate": RecurrentCell(
         RateCell(0.8, 0.1), jnp.asarray(np.random.default_rng(9).normal(0, 0.5, (F, F)), jnp.float32)),
+    "bernoulli": BernoulliCell(0.8, beta=3.0),
 }
 
 
@@ -220,14 +254,19 @@ MODELS = {
 @pytest.mark.parametrize("split", [1, 17, 39])
 def test_running_in_two_chunks_equals_one_run(name, split):
     model = MODELS[name]
-
-    def given(xs):
-        return SynapticInput(current=xs * 10.0) if name == "izhikevich" else xs
-
     xs = jnp.asarray(currents(10))
-    whole, final = fired(model, given(xs))
-    head, middle = fired(model, given(xs[:split]))
-    tail, end = fired(model, given(xs[split:]), middle)
+    noise = jax.random.uniform(jax.random.key(4), xs.shape)
+
+    def given(steps):
+        if name == "izhikevich":
+            return SynapticInput(current=xs[steps] * 10.0)
+        if name == "bernoulli":  # each step's noise comes with it, whatever the chunk
+            return SynapticInput(jump=xs[steps], noise=noise[steps])
+        return xs[steps]
+
+    whole, final = fired(model, given(slice(None)))
+    head, middle = fired(model, given(slice(None, split)))
+    tail, end = fired(model, given(slice(split, None)), middle)
     np.testing.assert_array_equal(jnp.concatenate([head, tail]), whole)
     for a, b in zip(jax.tree.leaves(end), jax.tree.leaves(final), strict=True):
         np.testing.assert_array_equal(a, b)

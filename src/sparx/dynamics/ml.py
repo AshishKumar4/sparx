@@ -59,6 +59,8 @@ __all__ = [
     "ACTIVATIONS",
     "ALIFCell",
     "ALIFState",
+    "BernoulliCell",
+    "BernoulliState",
     "LICell",
     "LIFCell",
     "MembraneState",
@@ -70,14 +72,23 @@ __all__ = [
 ]
 
 
-def _jump(inputs: SynapticInput) -> jax.Array:
-    """The step's input to a dimensionless membrane, its jump; anything else is refused."""
+def _dimensionless(inputs: SynapticInput) -> jax.Array:
+    """The step's input to a dimensionless membrane, its jump; currents, conductances and gap
+    junctions are refused."""
     held = inputs.current
     if (inputs.currents or inputs.conductance or inputs.gap is not None
             or not (isinstance(held, float | int) and held == 0)):
         raise ValueError("a dimensionless model takes its input as a jump (SynapticInput.jump), "
                          "not as currents, conductances or gap junctions")
     return jnp.asarray(inputs.jump)
+
+
+def _jump(inputs: SynapticInput) -> jax.Array:
+    """A deterministic model's input, its jump (`_dimensionless`), which fires without noise."""
+    if inputs.noise is not None:
+        raise ValueError("a deterministic model fires without noise; SynapticInput.noise is for "
+                         "a stochastic model (BernoulliCell)")
+    return _dimensionless(inputs)
 
 
 def _at_end(value: jax.Array) -> Output:
@@ -123,6 +134,70 @@ class LIFCell:
 
     def after_threshold(self, state: MembraneState, jump: jax.Array, fired: jax.Array) -> MembraneState:
         return MembraneState(jump_after_threshold(state.v, jump, _overwritten(self.reset, fired)))
+
+
+class BernoulliState(NamedTuple):
+    v: jax.Array
+    """The membrane, after the reset of the step that set it."""
+    p: jax.Array
+    """The step's firing probability, read before the reset."""
+
+
+@struct.dataclass
+class BernoulliCell:
+    """A leaky integrate-and-fire neuron with escape noise: it fires with a probability of its membrane.
+
+        v[t] = decay ** dt * v[t-1] + x[t]
+        p[t] = sigmoid(beta * (v[t] - threshold))
+        s[t] = 1 where noise[t] < p[t], else 0
+        v[t] <- reset(v[t], s[t])
+
+    `noise[t]` is uniform on [0, 1), one draw per neuron per step, which
+    the caller passes as `SynapticInput.noise` (`jax.random.uniform` of a
+    key), so the cell is a pure function of its inputs and a given noise
+    replays one trajectory; noise `1 - s` forces the spikes `s`, since
+    `p` lies strictly between 0 and 1. `p` is a probability per step, the
+    discrete-time escape noise of Pfister et al. (Neural Computation
+    2006), whatever `dt` is; `beta` is the inverse of the noise's
+    temperature, and as it grows the cell approaches `LIFCell`. The spike is a
+    sample and passes no gradient: `sparx.learn.reinforce` trains a layer
+    of these cells from the probability of the spikes they drew.
+    """
+
+    decay: jax.Array | float
+    threshold: jax.Array | float = 1.0
+    beta: jax.Array | float = 1.0
+    reset: Reset = struct.field(pytree_node=False, default="subtract")
+    graded = False
+
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> BernoulliState:
+        dtype = membrane_dtype(dtype)
+        return BernoulliState(jnp.zeros(shape, dtype), jnp.zeros(shape, dtype))
+
+    def step(self, state: BernoulliState, inputs: SynapticInput,
+             dt: float) -> tuple[BernoulliState, Output]:
+        x = _dimensionless(inputs)
+        if inputs.noise is None:
+            raise ValueError("a BernoulliCell fires by its noise: give SynapticInput.noise, uniform on "
+                             "[0, 1)")
+        v = self.decay ** dt * state.v + x
+        p = jax.nn.sigmoid(self.beta * (v - self.threshold))
+        s = (inputs.noise < p).astype(v.dtype)
+        if self.reset == "zero":
+            after = jnp.where(s > 0, 0.0, v)
+        elif self.reset == "subtract":
+            after = v - s * self.threshold
+        elif self.reset == "none":
+            after = v
+        else:
+            raise ValueError(f"reset must be subtract, zero or none, not {self.reset!r}")
+        return BernoulliState(after, p), _at_end(s.astype(x.dtype))
+
+    def is_refractory(self, state: BernoulliState, dt: float) -> jax.Array:
+        return _never(state.v)
+
+    def after_threshold(self, state: BernoulliState, jump: jax.Array, fired: jax.Array) -> BernoulliState:
+        return state._replace(v=jump_after_threshold(state.v, jump, _overwritten(self.reset, fired)))
 
 
 @struct.dataclass

@@ -13,11 +13,13 @@ from sparx.learn.online import (
     ottt,
     ottt_dense,
 )
+from sparx.learn.reinforce import ReinforceParams, policy_gradient, reinforce
 
 __all__ = [
     "EPropParams",
     "EventLIF",
     "OTTTLayer",
+    "ReinforceParams",
     "SpikingMaxPool",
     "accumulate",
     "bptt_loss",
@@ -30,6 +32,8 @@ __all__ = [
     "normalize",
     "ottt",
     "ottt_dense",
+    "policy_gradient",
+    "reinforce",
     "run_converted",
     "spike_times",
 ]
