@@ -20,13 +20,13 @@ Saves to `tests/fixtures/flynn.npz`. The committed fixture came from fly-gym
     python tools/make_flynn_fixtures.py [path to the cloned repository]
 """
 
-import ast
 import math
 import sys
 from pathlib import Path
 
 import numpy as np
 import torch
+from lifted import lift
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tests" / "fixtures" / "flynn.npz"
@@ -36,13 +36,8 @@ NEURONS, EDGES, TYPES, INPUTS, OUTPUTS, STEPS, BATCH = 40, 240, 5, 6, 5, 15, 3
 def spectral_rescaling(path: Path):
     """Their `rescale_spectral_radius_` and the power iteration it calls, lifted from `core/utils.py`,
     which imports pandas for its table readers."""
-    names = {"spectral_radius_power_iter", "rescale_spectral_radius_"}
-    body = [node for node in ast.parse(path.read_text()).body
-            if isinstance(node, ast.FunctionDef) and node.name in names]
-    assert {node.name for node in body} == names
-    namespace = {"torch": torch, "math": math}
-    exec(compile(ast.Module(body=body, type_ignores=[]), str(path), "exec"), namespace)
-    return namespace["rescale_spectral_radius_"]
+    names = ("spectral_radius_power_iter", "rescale_spectral_radius_")
+    return lift(path, *names, torch=torch, math=math)["rescale_spectral_radius_"]
 
 
 def main():

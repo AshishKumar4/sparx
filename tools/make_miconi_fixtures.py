@@ -39,7 +39,6 @@ The repositories default to `ref-differentiable-plasticity` and
 `ref-backpropamine` cloned next to sparx.
 """
 
-import ast
 import random
 import sys
 from collections.abc import Callable
@@ -48,6 +47,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
+from lifted import lift
 from torch import nn
 from torch.autograd import Variable
 
@@ -64,15 +64,11 @@ STEPS, BATCH, INPUTS, HIDDEN = 20, 3, 5, 6
 
 
 def lifted(path: Path, name: str, **constants: object) -> Callable:
-    """The top-level class or function `name` of the script at `path`, defined over `constants`."""
-    tree = ast.parse(path.read_text())
-    body = [node for node in tree.body
-            if isinstance(node, ast.ClassDef | ast.FunctionDef) and node.name == name]
-    assert len(body) == 1, f"{path} defines {name} {len(body)} times"
-    namespace = {"torch": torch, "nn": nn, "F": F, "Variable": Variable, "np": np, "random": random,
-                 **constants}
-    exec(compile(ast.Module(body=body, type_ignores=[]), str(path), "exec"), namespace)
-    return namespace[name]
+    """The class or function `name` of the script at `path`, over the modules their scripts import."""
+    modules = {"torch": torch, "nn": nn, "F": F, "Variable": Variable, "np": np, "random": random}
+    found = lift(path, name, **modules, **constants)[name]
+    assert callable(found)
+    return found
 
 
 def on_cpu(build: Callable[[], nn.Module]) -> nn.Module:

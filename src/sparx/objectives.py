@@ -86,6 +86,21 @@ __all__ = ["ActivityFitObjective", "EPropObjective", "PredictiveCodingObjective"
            "SpikingClassifierObjective"]
 
 
+def _per_example(losses: jax.Array, correct: jax.Array | None = None) -> TokenScores:
+    """`TokenScores` with one row per example: its loss `[B]`, counted once, and whether its prediction
+    is its label (`correct`, `[B]`; False for an objective that predicts no class)."""
+    rows = losses[:, None]
+    hits = jnp.zeros_like(rows, bool) if correct is None else correct[:, None]
+    return TokenScores(losses=rows, weights=jnp.ones_like(rows), correct=hits)
+
+
+def _with_rule(objective: Objective[Ratio], stats: Ratio, update: Variables, params: Variables) -> Ratio:
+    """`stats` whose total's gradient in `params` is `update`, a learning rule's own, and whose row count
+    has none, for dew's trainer to apply as it applies a loss's gradient (`Objective.with_gradients`)."""
+    gradients = jax.tree.unflatten(jax.tree.structure(stats), [update, None])
+    return objective.with_gradients(stats, gradients, params)
+
+
 def _row_weights(batch: Batch, rows: int) -> jax.Array:
     """1 for each real row of `batch` and 0 for each repeat (`VALID_ROWS`); all 1 in training."""
     valid = batch.get(VALID_ROWS)
@@ -223,8 +238,7 @@ class SpikingClassifierObjective(Objective[Ratio]):
             # `mutable` is unset, so apply returns the outputs alone, not a pair.
             assert not isinstance(outputs, tuple)
             losses = readout_losses(self.readout, outputs, labels)
-            correct = jnp.argmax(readout_logits(self.readout, outputs), -1) == labels
-            return losses[:, None], correct[:, None]
+            return losses, jnp.argmax(readout_logits(self.readout, outputs), -1) == labels
 
         return jax.jit(scores)
 
@@ -232,7 +246,7 @@ class SpikingClassifierObjective(Objective[Ratio]):
         field, labels = jnp.asarray(batch[self.sample.key]), jnp.asarray(batch[self.labels])
         losses, correct = self._scores(self.evaluation_variables(params, step), field, labels, step.key,
                                        step.step)
-        return TokenScores(losses=losses, weights=jnp.ones_like(losses), correct=correct)
+        return _per_example(losses, correct)
 
     def task_record(self) -> Mapping[str, JSON]:
         """The encoder, readout, schedules and deployed arguments of the classifier."""
@@ -333,8 +347,7 @@ class ActivityFitObjective(Objective[Ratio]):
 
     def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
         per_example, _, _ = self._distances(self.evaluation_variables(params, step), batch)
-        ones = jnp.ones_like(per_example)[:, None]
-        return TokenScores(losses=per_example[:, None], weights=ones, correct=jnp.zeros_like(ones, bool))
+        return _per_example(per_example)
 
 
 type EPropRule = Literal["eprop", "random", "bptt"]
@@ -430,19 +443,14 @@ class EPropObjective(Objective[Ratio]):
         no_self = 1 - jnp.eye(self.hidden)
         rule = {"w_in": grads.w_in, "w_rec": grads.w_rec * no_self, "w_out": grads.w_out,
                 "b_out": grads.b_out}
-        stats = Ratio(total, jnp.sum(weights))
-        # The rule mirrors the statistics' tree: the total's gradient, and none for the row count.
-        gradients = jax.tree.unflatten(jax.tree.structure(stats), [rule, None])
-        return self.with_gradients(stats, gradients, variables["params"]), Aux(metrics={})
+        return _with_rule(self, Ratio(total, jnp.sum(weights)), rule, variables["params"]), Aux(metrics={})
 
     def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
         network, inputs, labels = self._network(self.evaluation_variables(params, step), batch)
         outputs, _ = eprop_forward(self.cell, network, inputs, tau=self.tau, dt=self.dt)
         logits = jnp.mean(outputs, axis=0)
         losses = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
-        ones = jnp.ones_like(losses)[:, None]
-        return TokenScores(losses=losses[:, None], weights=ones,
-                           correct=(jnp.argmax(logits, -1) == labels)[:, None])
+        return _per_example(losses, jnp.argmax(logits, -1) == labels)
 
 
 class PredictiveCodingObjective(Objective[Ratio]):
@@ -505,13 +513,9 @@ class PredictiveCodingObjective(Objective[Ratio]):
         grads = self.rule.gradient(blocks, params, x, target, rows=weights)
         # The update mirrors the parameters: a layer without any, an activation, has none to update.
         update = {f"layers_{k}": grad for k, grad in enumerate(grads) if f"layers_{k}" in held}
-        gradients = jax.tree.unflatten(jax.tree.structure(stats), [update, None])
-        return self.with_gradients(stats, gradients, held), Aux(metrics=metrics)
+        return _with_rule(self, stats, update, held), Aux(metrics=metrics)
 
     def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
         _, labels, target, output = self._scored(self.evaluation_variables(params, step), batch)
-        losses = squared_error(output, target)
-        ones = jnp.ones_like(losses)[:, None]
-        return TokenScores(losses=losses[:, None], weights=ones,
-                           correct=(jnp.argmax(output, axis=-1) == labels)[:, None])
+        return _per_example(squared_error(output, target), jnp.argmax(output, axis=-1) == labels)
 
