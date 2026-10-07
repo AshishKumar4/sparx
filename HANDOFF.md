@@ -4,7 +4,7 @@ The state of sparx and its dew work as of 7 October 2026: what exists, what is o
 
 ## State
 
-- The suite passes: 539 tests, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
+- The suite passes: 551 tests, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
 - sparx pins dew at `6329435` on dew's `main` (`pyproject.toml`).
 - Every commit is authored by Ashish Kumar Singh <ashishkmr472@gmail.com>.
 
@@ -18,6 +18,7 @@ The state of sparx and its dew work as of 7 October 2026: what exists, what is o
   - REINFORCE for a recurrent layer of escape-noise (Bernoulli) LIF neurons.
   - Fast weights: differentiable plasticity (decaying Hebbian trace, Oja's rule) and Backpropamine (simple and retroactive neuromodulation), each a rule module a researcher can replace.
   - Predictive coding and PC-ALM for any stack of layers, with a dew objective that hands the local update to the trainer.
+  - FLYNN, a whole connectome trained as a rate network: a learned weight per synapse, bias per neuron and leak per cell class.
   - EventProp-style exact gradients.
   - ANN-to-SNN conversion of CNNs, checked against snntoolbox.
   - NIR exchange with snnTorch: dense, conv and recurrent.
@@ -36,6 +37,7 @@ The state of sparx and its dew work as of 7 October 2026: what exists, what is o
 - **FlyWire whole brain:** 1.9 ms per 0.1 ms step on a 4-core CPU.
 - **Fast weights:** Miconi et al.'s four plastic networks, run in PyTorch, agree with sparx's in activity, traces and gradients within 5e-14 in float64. On their pattern completion shrunk to 8 bits, every rule leaves 4 to 5% of the zeroed bits wrong after 300 steps, and the same network without a trace 22%. Their full task (1000 bits, 2000 episodes; `examples/pattern_completion.py`) takes 1.6 s an episode on 4 CPU cores, about an hour a run; its result is not recorded yet.
 - **PC-ALM:** Seely and Gould's JAX reference and sparx agree in settled activity, multipliers and weight updates within 5e-14 in float64. On their headline Fashion-MNIST cell (width and depth 32, one epoch, through dew's trainer) sparx scores 75.1, 76.1 and 76.5% by PC-ALM, 62.2, 65.5 and 65.6% by PC and 77.8, 76.9 and 76.7% by BP at seeds 0 to 2; their code on the same machine scores 77.73, 76.49 and 76.34%, 68.17, 64.49 and 66.54%, and 78.65, 76.85 and 77.31%. The ranking is theirs, and sparx averages 0.5 to 2 points lower in all three, backpropagation included.
+- **FLYNN:** Wang and Chen's PyTorch cell and sparx's agree in activity and gradients within 1e-15 in float64. Their code scales the weights by a power iteration whose estimate depends on its random start when the dominant eigenvalues are a complex pair, as a signed connectome's often are (on the parity test's connectome: 1.8 to 46 by start, against an exact 48.1); sparx scales by the exact radius.
 - **No GPU or TPU numbers exist yet.**
 
 ## dew: the bedrock
@@ -70,9 +72,9 @@ Open in dew, for sparx:
 
 ## Open work, in suggested order
 
-1. **Learning rules from the owner's research notes** (bio-inspired continual learning), each checked against a reference. Done: REINFORCE with Bernoulli neurons (enumerated trajectories), reward-modulated STDP (NEST), fast weights (Miconi et al.'s four networks), PC-ALM (Sakana AI's JAX reference). Open:
-   - a FLYNN-style trainable connectome builder (Wang and Chen, arXiv 2607.00025; their code, github.com/ben-gitdev/fly-gym, is checked out in `/home/user/refs`);
+1. **Learning rules from the owner's research notes** (bio-inspired continual learning), each checked against a reference. Done: REINFORCE with Bernoulli neurons (enumerated trajectories), reward-modulated STDP (NEST), fast weights (Miconi et al.'s four networks), PC-ALM (Sakana AI's JAX reference), and the FLYNN trainable connectome (their PyTorch cell). Open:
    - a deterministic reconstruction of RNeuralNet with its reward-diffusion rule as a baseline. No public source by that name was found; the owner's notes should say which paper or code it is.
+   - FLYNN on the whole FlyWire connectome: `sparx.graph.connectome.FLYNN` takes `Connectome.from_shiu`'s tables and their cell classes, sensory and descending neurons, but no full-brain training has been run, and their navigation task (MuJoCo) is not ported.
 2. **`research/continual/`**, built only on sparx and dew's public API.
    - Start with the small modular core (16 x 256 units), selective fast plasticity (`sparx.nn.Plastic` with a neuromodulated trace), a BPTT reference and a switch-and-door adaptation task, as the notes recommend.
    - Anything awkward to express there is a gap to fix in sparx or dew.
