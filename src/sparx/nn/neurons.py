@@ -168,17 +168,18 @@ def history_window(module: nn.Module, x: jax.Array, held: int) -> jax.Array:
     return window
 
 
-def adopt(neuron: Neuron, owner: nn.Module, name: str) -> Neuron:
-    """`neuron` as `owner`'s child called `name`, so its parameters sit under `owner` wherever it was built.
+def adopt[Child: nn.Module](child: Child, owner: nn.Module, name: str) -> Child:
+    """`child` (a neuron, a Hebbian trace) as `owner`'s child called `name`, so its parameters sit under
+    `owner` wherever it was built.
 
-    A neuron built inside a parent's compact method belongs to that parent,
+    A module built inside a parent's compact method belongs to that parent,
     and one handed down from a parent's field belongs to the parent; the
     clone makes it `owner`'s own. One built outside any module and given to
     `owner` as its field `name` is already that child.
     """
-    if neuron.parent is owner and neuron.name == name:
-        return neuron
-    return neuron.clone(parent=owner, name=name)
+    if child.parent is owner and child.name == name:
+        return child
+    return child.clone(parent=owner, name=name)
 
 
 def _decay(module: nn.Module, name: str, tau: float, learn: bool, features: int) -> jax.Array | float:
@@ -245,7 +246,9 @@ class Rate(Neuron):
     `h <- alpha h + (1 - alpha) f(x + bias)` with `alpha = exp(-dt / tau)`.
     `bias` is learned per feature, starting at 0, as FLYNN learns theirs;
     `learn_tau` learns the leak per feature, starting at `tau`.
-    `Recurrent(Rate())` is FLYNN's recurrence with a dense matrix.
+    `Recurrent(Rate())` is FLYNN's recurrence with a dense matrix. `tau=0`
+    keeps no memory, `h = f(x + bias)`, the unit of an Elman network and
+    of Miconi et al.'s plastic networks (`Plastic(Rate(tau=0))`).
     """
 
     tau: float = 2.0
@@ -255,7 +258,9 @@ class Rate(Neuron):
     def build(self, x: jax.Array) -> RateCell:
         features = x.shape[-1]
         bias = self.param("bias", nn.initializers.zeros_init(), (features,), jnp.float32)
-        return RateCell(_decay(self, "decay", self.tau, self.learn_tau, features), bias, self.activation)
+        leak = 0.0 if self.tau == 0 and not self.learn_tau else _decay(
+            self, "decay", self.tau, self.learn_tau, features)
+        return RateCell(leak, bias, self.activation)
 
 
 class Synaptic(Neuron):

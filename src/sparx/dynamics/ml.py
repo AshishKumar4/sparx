@@ -37,7 +37,7 @@ attributes and parameters; pure JAX code can use them directly.
 from __future__ import annotations
 
 import dataclasses
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, Protocol
 
 import jax
 import jax.numpy as jnp
@@ -61,13 +61,21 @@ __all__ = [
     "ALIFState",
     "BernoulliCell",
     "BernoulliState",
+    "DecayingHebb",
+    "EligibleHebb",
+    "HebbianRule",
     "LICell",
     "LIFCell",
     "MembraneState",
+    "ModulatedHebb",
+    "OjaHebb",
+    "PlasticRecurrentCell",
+    "PlasticState",
     "RateCell",
     "RateState",
     "RecurrentCell",
     "RecurrentState",
+    "RetroactiveHebb",
     "Serial",
 ]
 
@@ -437,4 +445,231 @@ class RecurrentCell[State]:
 
     def after_threshold(self, state: RecurrentState[State], jump: jax.Array,
                         fired: jax.Array) -> RecurrentState[State]:
+        return state._replace(inner=self.inner.after_threshold(state.inner, jump, fired))
+
+
+
+class HebbianRule[Trace](Protocol):
+    """How the Hebbian trace of a `PlasticRecurrentCell` changes over a step.
+
+    A rule keeps a `Trace` of what it has seen, `init_trace(shape, dtype)`
+    at the start of a sequence for outputs of `shape` `[..., F]`, and
+    `hebb(trace)` is the `[..., F, F]` matrix the cell scales by `alpha`.
+    `update(trace, pre, post, dt)` takes the output fed back this step
+    (`pre`, `[..., F]`) and the step's new output (`post`); the entry
+    `[..., i, j]` belongs to the connection from unit `i` to unit `j`.
+    """
+
+    def init_trace(self, shape: tuple[int, ...], dtype: jnp.dtype) -> Trace: ...
+
+    def hebb(self, trace: Trace) -> jax.Array: ...
+
+    def update(self, trace: Trace, pre: jax.Array, post: jax.Array, dt: float) -> Trace: ...
+
+
+def _coactivity(pre: jax.Array, post: jax.Array) -> jax.Array:
+    """`pre[..., i] * post[..., j]`, `[..., F, F]`."""
+    return pre[..., :, None] * post[..., None, :]
+
+
+def _connections(shape: tuple[int, ...], dtype: jnp.dtype) -> jax.Array:
+    """Zeros, one per connection among outputs of `shape`: `[..., F, F]`, at least float32."""
+    return jnp.zeros((*shape, shape[-1]), membrane_dtype(dtype))
+
+
+def _modulation(post: jax.Array, modulator: jax.Array, bias: jax.Array | float) -> jax.Array:
+    """One neuromodulator level per example, `tanh(post . modulator + bias)`, `[...]`."""
+    return jnp.tanh(jnp.sum(post * modulator, axis=-1) + bias)
+
+
+@struct.dataclass
+class DecayingHebb:
+    """A Hebbian trace that decays toward the latest coactivity at the rate `eta`.
+
+        keep = (1 - eta) ** dt
+        hebb[i, j] <- keep hebb[i, j] + (1 - keep) pre[i] post[j]
+
+    Differentiable plasticity's trace (Miconi et al. 2018, eq. 2), at
+    `dt = 1` the `hebb = (1 - eta) * hebb + eta * outer(yin, yout)` of their
+    `simple/simple.py`, with one `eta` for every connection, learned with
+    the weights. A step of `dt` keeps what `dt` unit steps would of the old
+    trace, so `eta` is a rate per unit of time and lies in [0, 1).
+    """
+
+    eta: jax.Array | float
+
+    def init_trace(self, shape: tuple[int, ...], dtype: jnp.dtype) -> jax.Array:
+        return _connections(shape, dtype)
+
+    def hebb(self, trace: jax.Array) -> jax.Array:
+        return trace
+
+    def update(self, trace: jax.Array, pre: jax.Array, post: jax.Array, dt: float) -> jax.Array:
+        keep = (1 - self.eta) ** dt
+        return keep * trace + (1 - keep) * _coactivity(pre, post)
+
+
+@struct.dataclass
+class OjaHebb:
+    """Oja's rule: a Hebbian trace that each postsynaptic unit's own activity bounds.
+
+        hebb[i, j] <- hebb[i, j] + dt eta post[j] (pre[i] - post[j] hebb[i, j])
+
+    Differentiable plasticity's alternative to the decaying trace (Miconi et
+    al. 2018, eq. 3; their `maze/maze.py` with `rule="oja"`), which keeps a
+    memory without input instead of letting it decay to zero (Oja 1982).
+    """
+
+    eta: jax.Array | float
+
+    def init_trace(self, shape: tuple[int, ...], dtype: jnp.dtype) -> jax.Array:
+        return _connections(shape, dtype)
+
+    def hebb(self, trace: jax.Array) -> jax.Array:
+        return trace
+
+    def update(self, trace: jax.Array, pre: jax.Array, post: jax.Array, dt: float) -> jax.Array:
+        target = post[..., None, :]
+        return trace + dt * self.eta * target * (pre[..., :, None] - target * trace)
+
+
+@struct.dataclass
+class ModulatedHebb:
+    """A Hebbian trace whose rate the network's own activity sets through a neuromodulator, clipped.
+
+        m = tanh(sum_j post[j] modulator[j] + modulator_bias)
+        eta[j] = m fanout[j] + fanout_bias[j]
+        hebb[i, j] <- clip(hebb[i, j] + dt eta[j] pre[i] post[j], -clip, clip)
+
+    Backpropamine's simple neuromodulation (Miconi et al. 2019, eq. 3), with
+    the fan-out of their appendix and `simplemaze/maze.py`: one modulator
+    level per example, read off the new activity (their `h2mod`, `[F]` and
+    a scalar), fanned out to a rate per postsynaptic unit (their
+    `modfanout`, `[F]` and `[F]`). The rate can be negative, so the trace
+    can grow, shrink or flip sign; the clip, 2 in their code, bounds it.
+    """
+
+    modulator: jax.Array
+    modulator_bias: jax.Array | float
+    fanout: jax.Array | float
+    fanout_bias: jax.Array | float
+    clip: float = struct.field(pytree_node=False, default=2.0)
+
+    def init_trace(self, shape: tuple[int, ...], dtype: jnp.dtype) -> jax.Array:
+        return _connections(shape, dtype)
+
+    def hebb(self, trace: jax.Array) -> jax.Array:
+        return trace
+
+    def update(self, trace: jax.Array, pre: jax.Array, post: jax.Array, dt: float) -> jax.Array:
+        level = _modulation(post, self.modulator, self.modulator_bias)
+        eta = level[..., None] * self.fanout + self.fanout_bias
+        return jnp.clip(trace + dt * eta[..., None, :] * _coactivity(pre, post), -self.clip, self.clip)
+
+
+class EligibleHebb(NamedTuple):
+    hebb: jax.Array
+    """The plastic part of the weights, `[..., F, F]`, which the modulator writes."""
+    eligibility: jax.Array
+    """The recent coactivity of each connection, `[..., F, F]`."""
+
+
+@struct.dataclass
+class RetroactiveHebb:
+    """A Hebbian trace that a neuromodulator writes from an eligibility trace of recent coactivity.
+
+        m = tanh(sum_j post[j] modulator[j] + modulator_bias)
+        hebb[i, j] <- clip(hebb[i, j] + dt m eligibility[i, j], -clip, clip)
+        keep = (1 - eta) ** dt
+        eligibility[i, j] <- keep eligibility[i, j] + (1 - keep) pre[i] post[j]
+
+    Backpropamine's retroactive neuromodulation (Miconi et al. 2019, eqs. 4
+    and 5; their `maze/batch.py` with `type="modul"` and the hard clip at
+    1, `addpw=3`). The coactivity changes no weight until the modulator
+    arrives, so a signal that comes later (a reward) can still credit the
+    connections that were active before it, as dopamine gates the plasticity
+    recent activity left behind.
+    """
+
+    modulator: jax.Array
+    modulator_bias: jax.Array | float
+    eta: jax.Array | float
+    clip: float = struct.field(pytree_node=False, default=1.0)
+
+    def init_trace(self, shape: tuple[int, ...], dtype: jnp.dtype) -> EligibleHebb:
+        return EligibleHebb(_connections(shape, dtype), _connections(shape, dtype))
+
+    def hebb(self, trace: EligibleHebb) -> jax.Array:
+        return trace.hebb
+
+    def update(self, trace: EligibleHebb, pre: jax.Array, post: jax.Array, dt: float) -> EligibleHebb:
+        level = _modulation(post, self.modulator, self.modulator_bias)[..., None, None]
+        hebb = jnp.clip(trace.hebb + dt * level * trace.eligibility, -self.clip, self.clip)
+        keep = (1 - self.eta) ** dt
+        return EligibleHebb(hebb, keep * trace.eligibility + (1 - keep) * _coactivity(pre, post))
+
+
+class PlasticState[State, Trace](NamedTuple):
+    inner: State
+    output: jax.Array
+    """The step's output, fed back in the next."""
+    trace: Trace
+    """What the rule keeps, one per example."""
+
+
+@struct.dataclass
+class PlasticRecurrentCell[State, Trace]:
+    """Feed a model's output back through fixed weights plus a Hebbian trace that changes as it runs.
+
+        output[t] = inner.step(x[t] + output[t-1] @ (weight + alpha * hebb[t-1]))
+        hebb[t] = rule.update(hebb[t-1], output[t-1], output[t], dt)
+
+    Differentiable plasticity (Miconi et al. 2018): `weight` and `alpha`,
+    `[F, F]`, are each connection's fixed weight and how much of its trace
+    it adds, learned by backpropagating through the traces, and `alpha`
+    `[F]` gives one per postsynaptic unit (Backpropamine's language models).
+    Each example's trace starts at zero, so what the network stores in it
+    is what that sequence taught it. Wrapping `RateCell(0.0)`, a tanh unit
+    without leak, gives their networks, with the rule `DecayingHebb` or
+    `OjaHebb` (2018), `ModulatedHebb` or `RetroactiveHebb` (Backpropamine,
+    2019); a spiking model gives fast weights between spikes. The trace is
+    part of the state, so a stream fed in chunks carries it, and
+    backpropagating holds one per example per step, `T * B * F * F` values
+    for the Hebbian trace alone. `weight[i, j]` runs from unit `i` to unit
+    `j`, as in `RecurrentCell`; the product runs at `precision`.
+    """
+
+    inner: NeuronModel[State]
+    weight: jax.Array
+    alpha: jax.Array | float
+    rule: HebbianRule[Trace]
+    precision: PrecisionLike = struct.field(pytree_node=False, default=None)
+
+    @property
+    def graded(self) -> bool:
+        return self.inner.graded
+
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> PlasticState[State, Trace]:
+        return PlasticState(self.inner.init_state(shape, dtype), jnp.zeros(shape, dtype),
+                            self.rule.init_trace(shape, dtype))
+
+    def step(self, state: PlasticState[State, Trace], inputs: SynapticInput,
+             dt: float) -> tuple[PlasticState[State, Trace], Output]:
+        hebb = self.rule.hebb(state.trace)
+        pre = state.output.astype(hebb.dtype)
+        weights = self.weight + self.alpha * hebb
+        feedback = jnp.einsum("...i,...ij->...j", pre, weights, precision=self.precision)
+        fed = dataclasses.replace(inputs, jump=inputs.jump + feedback)
+        inner, out = self.inner.step(state.inner, fed, dt)
+        value = out.value.astype(state.output.dtype)
+        trace = self.rule.update(state.trace, pre, value.astype(hebb.dtype), dt)
+        # The weights promote the trace's update, so each part is cast back to the dtype it started in.
+        trace = jax.tree.map(lambda new, old: new.astype(old.dtype), trace, state.trace)
+        return PlasticState(inner, value, trace), Output(value, out.offset)
+
+    def is_refractory(self, state: PlasticState[State, Trace], dt: float) -> jax.Array:
+        return self.inner.is_refractory(state.inner, dt)
+
+    def after_threshold(self, state: PlasticState[State, Trace], jump: jax.Array,
+                        fired: jax.Array) -> PlasticState[State, Trace]:
         return state._replace(inner=self.inner.after_threshold(state.inner, jump, fired))

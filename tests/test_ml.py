@@ -10,8 +10,11 @@ from sparx.dynamics import (
     Izhikevich,
     LICell,
     LIFCell,
+    ModulatedHebb,
+    PlasticRecurrentCell,
     RateCell,
     RecurrentCell,
+    RetroactiveHebb,
     Serial,
     SynapticInput,
     Term,
@@ -247,6 +250,13 @@ MODELS = {
     "recurrent_rate": RecurrentCell(
         RateCell(0.8, 0.1), jnp.asarray(np.random.default_rng(9).normal(0, 0.5, (F, F)), jnp.float32)),
     "bernoulli": BernoulliCell(0.8, beta=3.0),
+    "plastic_rate": PlasticRecurrentCell(
+        RateCell(0.0), jnp.asarray(np.random.default_rng(9).normal(0, 0.5, (F, F)), jnp.float32),
+        jnp.asarray(np.random.default_rng(10).normal(0, 0.5, (F, F)), jnp.float32),
+        ModulatedHebb(jnp.full(F, 0.5), 0.1, jnp.linspace(-2.0, 2.0, F), 0.1)),
+    "plastic_lif": PlasticRecurrentCell(
+        LIFCell(0.8), jnp.asarray(np.random.default_rng(9).normal(0, 0.3, (F, F)), jnp.float32),
+        jnp.full(F, 0.5), RetroactiveHebb(jnp.full(F, 0.5), -0.2, 0.3)),
 }
 
 

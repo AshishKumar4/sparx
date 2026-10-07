@@ -89,12 +89,13 @@ The LIF family (`LIF`, `IF`, `LI`, `Synaptic`, `ALIF`) shares one discrete-time 
 | `LIF(tau, threshold, reset, surrogate, detach_reset)` | leaky integrate-and-fire | `learn_tau=True`: a decay per feature |
 | `IF(threshold, reset, ...)` | integrate-and-fire, no leak | |
 | `LI(tau)` | leaky integrator, never fires, returns its membrane | `learn_tau` |
-| `Rate(tau, activation)` | leaky rate unit, FLYNN's: `h <- alpha h + (1 - alpha) f(x + b)`, returns its activity | `b`; `learn_tau` |
+| `Rate(tau, activation)` | leaky rate unit, FLYNN's: `h <- alpha h + (1 - alpha) f(x + b)`, returns its activity; `tau=0` keeps no memory, `h = f(x + b)` | `b`; `learn_tau` |
 | `Synaptic(tau, tau_synapse, ...)` | current-based LIF: a decaying synaptic current charges the membrane | `learn_tau` (both) |
 | `ALIF(tau, tau_adapt, beta, ...)` | adaptive threshold that rises by `beta` per spike (Bellec et al. 2020) | `learn_tau` (both) |
 | `Izhikevich(a, b, c, d, dt)` | Izhikevich's two-variable neuron (2003) on input currents, `dt` in ms | |
 | `Dynamics(model, dt=dt)` | any neuron model of `sparx.dynamics`, such as `AdEx`, on input currents | |
 | `Recurrent(neuron)` | feeds any neuron's spikes back to its input through a learned `[F, F]` matrix | the matrix |
+| `Plastic(neuron, rule)` | feeds any neuron's output back through a learned matrix plus fast weights, `alpha` times a Hebbian trace that each sequence writes from zero (Miconi et al. 2018, 2019) | the matrix, `alpha`, the rule's rates and neuromodulator |
 | `PSN()` | parallel spiking neuron: `H = W X + b` over all `T x T` step pairs (Fang et al. 2023) | `W`, `b` |
 | `MaskedPSN(k)` | the PSN restricted to the `k` most recent steps | `W`, `b` |
 | `SlidingPSN(k)` | `k` weights slid over time, any `T`, causal | weights, `b` |
@@ -105,6 +106,15 @@ The LIF family (`LIF`, `IF`, `LI`, `Synaptic`, `ALIF`) shares one discrete-time 
 `DelayedDense` learns each delay by spreading the synapse over a Gaussian centered at it; the width is a call argument that a schedule shrinks during training, and `sigma=0` reads exactly the rounded delay, the network to deploy.
 
 The PSNs have no loop over time at all. Each is one `[T, T] x [T, N]` product followed by a threshold, so no step waits for the one before it; Fang et al. report that this also learns longer dependencies than the LIF. `Recurrent(ALIF())` is the recurrent adaptive network (LSNN) of Bellec et al. `Recurrent(Rate())` is FLYNN's recurrence with a dense matrix.
+
+`Plastic` is differentiable plasticity (Miconi et al. 2018). Its feedback runs through `recurrent + alpha * hebb`, where the Hebbian trace `hebb` starts at zero for every sequence and follows `rule`, so it holds what that sequence showed the network, and backpropagation through the traces learns the matrix, each connection's `alpha` and the rule's parameters. The rule is a module, as the neuron is: `DecayingTrace` and `OjaTrace` are Miconi et al.'s decaying Hebbian trace and Oja's rule; `ModulatedTrace` and `RetroactiveTrace` are Backpropamine's (Miconi et al. 2019), whose neuromodulator, read off the units, sets each unit's plasticity or writes an eligibility trace of recent coactivity into the weights. A rule of your own is a `sparx.dynamics.HebbianRule` (`init_trace`, `hebb` and `update`) and a `HebbianTrace` whose `build` declares its parameters. `Plastic(Rate(tau=0))` is their tanh network: run against their four networks in PyTorch, its activity, traces and gradients agree within 5e-14 ([docs/fidelity.md](docs/fidelity.md#learning-rules)). With a spiking neuron, the decaying trace is a running average of coincident spikes. Backpropagating through the layer holds a `[B, F, F]` trace per step.
+
+```python
+import sparx.nn as snn
+
+layer = snn.Plastic(snn.Rate(tau=0), rule=snn.ModulatedTrace())     # Backpropamine's network
+spiking = snn.Plastic(snn.LIF(), rule=snn.RetroactiveTrace(eta=0.1))  # fast weights between spikes
+```
 
 ## Surrogate gradients
 
@@ -221,7 +231,7 @@ optimizer = OptimConfig(optimizer="adam", param_groups=(
     ParamGroup("weights", ("*",), schedule=OneCycle(peak=5e-3), weight_decay=1e-5)))
 ```
 
-Dew's validation pass scores every record of a split: it fills the split's last batch with repeats, which the objectives' losses (`Objective.row_mean`) and the metrics count for nothing. SHD has no validation split, and `sparx.datasets.holdout(train, 0.1)` holds out part of the training set to select on. The objective logs the batch accuracy and every spiking layer's firing rate (`rate/<layer>`), updates BatchNorm statistics, passes dropout keys, and evaluates to dew's `TokenScores`, which `sparx.metrics.Accuracy` reads. `Accuracy` works with dew's `Best` to keep the checkpoint of best validation accuracy. [`examples/train_shd.py`](examples/train_shd.py) is the full script; `--recipe snn-delays` runs Hammouamri et al.'s SHD recipe, and its docstring lists what still differs from their code. `sparx.objectives.EPropObjective` trains a recurrent layer with e-prop's gradients under the same trainer, handing them to it as its loss's own (`Objective.with_gradients`) ([`examples/train_shd_eprop.py`](examples/train_shd_eprop.py)). Every example takes `--smoke`, which trains a small network for a few steps on synthetic data and downloads nothing.
+Dew's validation pass scores every record of a split: it fills the split's last batch with repeats, which the objectives' losses (`Objective.row_mean`) and the metrics count for nothing. SHD has no validation split, and `sparx.datasets.holdout(train, 0.1)` holds out part of the training set to select on. The objective logs the batch accuracy and every spiking layer's firing rate (`rate/<layer>`), updates BatchNorm statistics, passes dropout keys, and evaluates to dew's `TokenScores`, which `sparx.metrics.Accuracy` reads. `Accuracy` works with dew's `Best` to keep the checkpoint of best validation accuracy. [`examples/train_shd.py`](examples/train_shd.py) is the full script; `--recipe snn-delays` runs Hammouamri et al.'s SHD recipe, and its docstring lists what still differs from their code. `sparx.objectives.EPropObjective` trains a recurrent layer with e-prop's gradients under the same trainer, handing them to it as its loss's own (`Objective.with_gradients`) ([`examples/train_shd_eprop.py`](examples/train_shd_eprop.py)). `sparx.nn.BatchMajor` runs a time-major stack on dew's batch-major records, so any sparx stack also trains under dew's generic `Supervised` objective, its loss a function of the outputs and the batch: [`examples/pattern_completion.py`](examples/pattern_completion.py) trains a `Plastic` network on Miconi et al.'s pattern completion that way. Every example takes `--smoke`, which trains a small network for a few steps on synthetic data and downloads nothing.
 
 A run's record names each of sparx's classes by its import path, as dew records any class: `run.json` holds a spiking model as `{"class": "sparx.models:SpikingMLP", "fields": {...}}`, its neuron as `{"class": "sparx.nn.neurons:ALIF", ...}`, the way it holds a transformer, and nothing is registered. `dew.pipeline(run_dir, trust=("sparx",))` loads a trained classifier back in a fresh process as a `SpikingClassification`; `trust` lets the record import sparx, as `trust_remote_code` does in transformers. A model of your own reloads the same way once it is defined at the top level of an importable module:
 

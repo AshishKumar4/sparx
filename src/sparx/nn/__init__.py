@@ -20,7 +20,8 @@ from .neurons import (
     record_rates,
 )
 from .parallel import PSN, MaskedPSN, SlidingPSN, band_mask
-from .reshape import Flatten, Flattens
+from .plastic import DecayingTrace, HebbianTrace, ModulatedTrace, OjaTrace, Plastic, RetroactiveTrace
+from .reshape import BatchMajor, Flatten, Flattens
 
 __all__ = [
     "ALIF",
@@ -30,16 +31,23 @@ __all__ = [
     "PSN",
     "RATES",
     "STATE",
+    "BatchMajor",
+    "DecayingTrace",
     "DelayedDense",
     "Dynamics",
     "Flatten",
     "Flattens",
+    "HebbianTrace",
     "Izhikevich",
     "MaskedPSN",
     "Modelled",
+    "ModulatedTrace",
     "Neuron",
+    "OjaTrace",
+    "Plastic",
     "Rate",
     "Recurrent",
+    "RetroactiveTrace",
     "SlidingPSN",
     "Synaptic",
     "adopt",

@@ -1,4 +1,4 @@
-"""Shape layers for Flax linen, over time-major inputs `[T, B, ...]`."""
+"""Shape layers for Flax linen, over time-major inputs `[T, B, ...]`, and a wrapper for batch-major ones."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
-__all__ = ["Flatten", "Flattens"]
+__all__ = ["BatchMajor", "Flatten", "Flattens"]
 
 
 @runtime_checkable
@@ -49,3 +49,19 @@ class Flatten(nn.Module):
             raise ValueError(f"cannot flatten the last {self.ndim} axes of a {x.ndim}-d input")
         x = jnp.moveaxis(x, -1, -self.ndim)
         return x.reshape(*x.shape[:x.ndim - self.ndim], -1)
+
+
+class BatchMajor(nn.Module):
+    """Run a time-major `layer` (a sparx layer or a stack of them) on batch-major input `[B, T, ...]`.
+
+    dew batches records along the first axis, so a model that dew's
+    `Supervised` objective trains reads `[B, T, ...]` and its loss reads
+    one row per example. This wrapper hands `layer` the input time-major,
+    `[T, B, ...]`, and returns its output batch-major again. The layer's
+    parameters sit under `layer`.
+    """
+
+    layer: nn.Module
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        return jnp.swapaxes(self.layer(jnp.swapaxes(x, 0, 1)), 0, 1)
