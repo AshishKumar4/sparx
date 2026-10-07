@@ -11,12 +11,12 @@ The state of sparx and its dew work as of 7 October 2026: what exists, what is o
 ### What sparx does
 
 - **Training spiking networks.**
-  - Flax layers: LIF, ALIF, synaptic, rate, PSN, learned delays, recurrent layers, and plastic recurrent layers with fast weights (`Plastic`).
+  - Flax layers: LIF, ALIF, synaptic, rate, PSN, learned delays, and recurrent layers, fixed or with fast weights (`Recurrent(neuron, rule=...)`).
   - Surrogate gradients.
   - Objectives on dew's `Trainer`: classifier, activity fit, e-prop and predictive coding; any sparx stack also trains under dew's generic `Supervised` through `nn.BatchMajor`.
   - Online rules: e-prop and OTTT.
   - REINFORCE for a recurrent layer of escape-noise (Bernoulli) LIF neurons.
-  - Fast weights: differentiable plasticity (decaying Hebbian trace, Oja's rule) and Backpropamine (simple and retroactive neuromodulation), each a rule module a researcher can replace.
+  - One recurrence for every algorithm: `sparx.dynamics.RecurrentCell(inner, wiring, fast_weights)` runs any neuron model over a `Dense` or `Sparse` (connectome) wiring, fixed or with `FastWeights`. The Hebbian rules (differentiable plasticity's decaying trace and Oja's rule, Backpropamine's simple and retroactive neuromodulation) read each connection's units through the wiring, so each runs on a dense layer and on a connectome alike, and a rule of your own is one dataclass and one module.
   - Predictive coding and PC-ALM for any stack of layers, with a dew objective that hands the local update to the trainer.
   - FLYNN, a whole connectome trained as a rate network: a learned weight per synapse, bias per neuron and leak per cell class.
   - EventProp-style exact gradients.
@@ -35,7 +35,7 @@ The state of sparx and its dew work as of 7 October 2026: what exists, what is o
 
 - **SHD, Hammouamri et al.'s recipe, 20 epochs, matched on one machine:** sparx 91.87%, against their official code's 93.59% at the last epoch and 94.03% at the best. A training step's gradients agree with theirs to 6e-7. The README lists the differences that remain.
 - **FlyWire whole brain:** 1.9 ms per 0.1 ms step on a 4-core CPU.
-- **Fast weights:** Miconi et al.'s four plastic networks, run in PyTorch, agree with sparx's in activity, traces and gradients within 5e-14 in float64. On their pattern completion shrunk to 8 bits, every rule leaves 4 to 5% of the zeroed bits wrong after 300 steps, and the same network without a trace 22%. Their full task (1000 bits, 2000 episodes; `examples/pattern_completion.py`) takes 1.6 s an episode on 4 CPU cores, about an hour a run; its result is not recorded yet.
+- **Fast weights:** Miconi et al.'s four plastic networks, run in PyTorch, agree with sparx's in activity, traces and gradients within 5e-14 in float64. On their full pattern completion (1000 bits, five patterns, 2000 episodes, 59 minutes on 4 CPU cores) the decaying trace leaves 0.3% of the zeroed bits wrong and the same network without fast weights 50.1%, chance. A sparse wiring of every pair computes the dense layer under every rule.
 - **PC-ALM:** Seely and Gould's JAX reference and sparx agree in settled activity, multipliers and weight updates within 5e-14 in float64. On their headline Fashion-MNIST cell (width and depth 32, one epoch, through dew's trainer) sparx scores 75.1, 76.1 and 76.5% by PC-ALM, 62.2, 65.5 and 65.6% by PC and 77.8, 76.9 and 76.7% by BP at seeds 0 to 2; their code on the same machine scores 77.73, 76.49 and 76.34%, 68.17, 64.49 and 66.54%, and 78.65, 76.85 and 77.31%. The ranking is theirs, and sparx averages 0.5 to 2 points lower in all three, backpropagation included.
 - **FLYNN:** Wang and Chen's PyTorch cell and sparx's agree in activity and gradients within 1e-15 in float64. Their code scales the weights by a power iteration whose estimate depends on its random start when the dominant eigenvalues are a complex pair, as a signed connectome's often are (on the parity test's connectome: 1.8 to 46 by start, against an exact 48.1); sparx scales by the exact radius.
 - **No GPU or TPU numbers exist yet.**
