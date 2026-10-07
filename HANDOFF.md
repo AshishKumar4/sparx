@@ -1,20 +1,23 @@
 # Handoff
 
-The state of sparx and its dew work as of 6 October 2026: what exists, what is open, and how to pick it up. `README.md` describes the library, `docs/design.md` its architecture and plan, `docs/fidelity.md` every model's reference and check, and `docs/performance.md` the measurements.
+The state of sparx and its dew work as of 7 October 2026: what exists, what is open, and how to pick it up. `README.md` describes the library, `docs/design.md` its architecture and plan, `docs/fidelity.md` every model's reference and check, and `docs/performance.md` the measurements.
 
 ## State
 
-- The suite passes: 479 tests, plus the two whole-brain tests, which run when their data is present. ruff, pyright and the prose checker (`tools/lint_slop.py`) are clean. CI runs the same gate.
-- sparx pins dew at `6329435` on dew's `main` (`pyproject.toml`), which holds everything `integration/all` had.
+- The suite passes: 539 tests, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
+- sparx pins dew at `6329435` on dew's `main` (`pyproject.toml`).
 - Every commit is authored by Ashish Kumar Singh <ashishkmr472@gmail.com>.
 
 ### What sparx does
 
 - **Training spiking networks.**
-  - Flax layers: LIF, ALIF, synaptic, rate, PSN, learned delays and recurrent layers.
+  - Flax layers: LIF, ALIF, synaptic, rate, PSN, learned delays, recurrent layers, and plastic recurrent layers with fast weights (`Plastic`).
   - Surrogate gradients.
-  - Objectives on dew's `Trainer`: classifier, activity fit and e-prop.
-  - Online rules: e-prop (14x faster than before) and OTTT.
+  - Objectives on dew's `Trainer`: classifier, activity fit, e-prop and predictive coding; any sparx stack also trains under dew's generic `Supervised` through `nn.BatchMajor`.
+  - Online rules: e-prop and OTTT.
+  - REINFORCE for a recurrent layer of escape-noise (Bernoulli) LIF neurons.
+  - Fast weights: differentiable plasticity (decaying Hebbian trace, Oja's rule) and Backpropamine (simple and retroactive neuromodulation), each a rule module a researcher can replace.
+  - Predictive coding and PC-ALM for any stack of layers, with a dew objective that hands the local update to the trainer.
   - EventProp-style exact gradients.
   - ANN-to-SNN conversion of CNNs, checked against snntoolbox.
   - NIR exchange with snnTorch: dense, conv and recurrent.
@@ -22,7 +25,7 @@ The state of sparx and its dew work as of 6 October 2026: what exists, what is o
 - **Simulating biology.**
   - Neurons: LIF, AdEx, Izhikevich (2003 classes and all twenty 2004 patterns), Hodgkin-Huxley, graded-potential neurons and rate units.
   - Synapses: current, conductance and graded synapses; stochastic release; gap junctions; neuromodulators.
-  - Plasticity: STDP, triplet STDP and Tsodyks-Markram.
+  - Plasticity: STDP, triplet STDP, reward-modulated STDP (NEST's `stdp_dopamine_synapse`) and Tsodyks-Markram.
   - Networks with delays and event delivery; `simulate` on dew's mesh and checkpoints; records by name.
   - Connectomes: Shiu et al.'s whole fly brain on FlyWire (reproduced) and on the male CNS (weight calibrated with `matched_w_syn`).
 - **One neuron protocol for both halves.** `step(state, SynapticInput, dt) -> (state, Output)` covers ML cells, physical models and graded models. `nn.Dynamics` makes any of them a layer, and any of them can be a `Population`.
@@ -31,7 +34,11 @@ The state of sparx and its dew work as of 6 October 2026: what exists, what is o
 
 - **SHD, Hammouamri et al.'s recipe, 20 epochs, matched on one machine:** sparx 91.87%, against their official code's 93.59% at the last epoch and 94.03% at the best. A training step's gradients agree with theirs to 6e-7. The README lists the differences that remain.
 - **FlyWire whole brain:** 1.9 ms per 0.1 ms step on a 4-core CPU.
-- **No GPU or TPU n## dew: the bedrock
+- **Fast weights:** Miconi et al.'s four plastic networks, run in PyTorch, agree with sparx's in activity, traces and gradients within 5e-14 in float64. On their pattern completion shrunk to 8 bits, every rule leaves 4 to 5% of the zeroed bits wrong after 300 steps, and the same network without a trace 22%. Their full task (1000 bits, 2000 episodes; `examples/pattern_completion.py`) takes 1.6 s an episode on 4 CPU cores, about an hour a run; its result is not recorded yet.
+- **PC-ALM:** Seely and Gould's JAX reference and sparx agree in settled activity, multipliers and weight updates within 5e-14 in float64. On their headline Fashion-MNIST cell (width and depth 32, one epoch, through dew's trainer) sparx scores 75.1, 76.1 and 76.5% by PC-ALM, 62.2, 65.5 and 65.6% by PC and 77.8, 76.9 and 76.7% by BP at seeds 0 to 2; their code on the same machine scores 77.73, 76.49 and 76.34%, 68.17, 64.49 and 66.54%, and 78.65, 76.85 and 77.31%. The ranking is theirs, and sparx averages 0.5 to 2 points lower in all three, backpropagation included.
+- **No GPU or TPU numbers exist yet.**
+
+## dew: the bedrock
 
 The owner's rule: dew is the foundation wherever it has the concept, and sparx dogfoods it. Changes to dew go only through issues and pull requests from branches. Never merge them, and never push to dew's shared branches; the owner merges.
 
@@ -45,9 +52,10 @@ On 7 October 2026 sparx moved from `integration/all` at `306b2bf` to dew's `main
 - #41's nested records and #34's public record writer (`dew.registry.to_record`).
 - #43's gradient hook: `EPropObjective` hands e-prop's gradient over through `Objective.with_gradients`, with the memory the `custom_vjp` had (0.56 MB at T=100, 1.20 MB at T=1000, against 7.3 MB for BPTT at T=1000).
 - #44's exports and #45's one JSON flag for a mapping of records (`--objective.schedules`).
-- #46: dew's `tools/lint_slop.py` takes `--root` and `--package`, and adds SLOP010.
+- #46: dew's `tools/lint_slop.py` takes `--root` and `--package`, and adds SLOP010; sparx's copy is dew's verbatim.
+- #36's extra validation splits (`RunConfig.train(..., validation=...)`) and a validation loss that drops the repeats filling the last batch.
 
-This session had no GitHub API access to dew (read-only git), so the issues' and pull requests' own states were not read; the list above is what dew `main`'s code and commit messages show.
+This session had no GitHub API access to dew (git reads only), so the issues' and pull requests' own states were not read; the list above is what dew `main`'s code and commit messages show.
 
 Open in dew, for sparx:
 
@@ -57,20 +65,16 @@ Open in dew, for sparx:
 | Export `OMITTED` and `Omitted` from `dew.objectives.base` | an objective's `build_task` override needs the sentinel; sparx imports it outside `__all__` |
 | Export `Artifact` from `dew.artifacts` | a metric's `__call__` takes it, as `dew.objectives.base.Metric` declares; sparx imports it outside `__all__` |
 | A constructor for a validation reader alone | `Dataset.from_records(records, batch=..., validation=split).val` builds a training stream too, and refuses a source smaller than one batch, so the SNN-delays example pairs its holdout with the training records |
-
-ich #40 leaves out.
+| `Objective.with_gradients` without the rule in the loss's value | `value + vdot(rule, params - stop_gradient(params))` keeps the rule live in the value, so a validation loss computes an update it never applies (PC-ALM: 46 ms a validation batch against 0.3 ms without the rule); a `custom_vjp` whose primal ignores the rule would let XLA drop it |
+| `Supervised`'s metrics in the validation pass | the validation pass reports `Supervised`'s loss alone, so `examples/pattern_completion.py` scores its holdout's zeroed bits itself after `fit` |
 
 ## Open work, in suggested order
 
-1. **Learning rules from the owner's research notes** (bio-inspired continual learning), each checked against a reference:
-   - REINFORCE eligibility with Bernoulli neurons, verified by enumerating trajectories;
-   - reward-modulated STDP (Izhikevich 2007) on the new neuromodulator hook;
-   - fast weights (differentiable plasticity and Backpropamine, against Miconi's code);
-   - PC-ALM (against Sakana's JAX reference);
-   - a FLYNN-style trainable connectome builder;
-   - a deterministic reconstruction of RNeuralNet with its reward-diffusion rule as a baseline.
+1. **Learning rules from the owner's research notes** (bio-inspired continual learning), each checked against a reference. Done: REINFORCE with Bernoulli neurons (enumerated trajectories), reward-modulated STDP (NEST), fast weights (Miconi et al.'s four networks), PC-ALM (Sakana AI's JAX reference). Open:
+   - a FLYNN-style trainable connectome builder (Wang and Chen, arXiv 2607.00025; their code, github.com/ben-gitdev/fly-gym, is checked out in `/home/user/refs`);
+   - a deterministic reconstruction of RNeuralNet with its reward-diffusion rule as a baseline. No public source by that name was found; the owner's notes should say which paper or code it is.
 2. **`research/continual/`**, built only on sparx and dew's public API.
-   - Start with the small modular core (16 x 256 units), selective fast plasticity, a BPTT reference and a switch-and-door adaptation task, as the notes recommend.
+   - Start with the small modular core (16 x 256 units), selective fast plasticity (`sparx.nn.Plastic` with a neuromodulated trace), a BPTT reference and a switch-and-door adaptation task, as the notes recommend.
    - Anything awkward to express there is a gap to fix in sparx or dew.
 3. **Remaining DX review items** (the review's numbering):
    - item 6, the name clashes: `LIF` in four places, `Delta`, `Izhikevich`;
@@ -79,7 +83,7 @@ ich #40 leaves out.
    - the documentation plan: tutorials from training to export, a cortical circuit with a Brian2/NEST lookup table, connectomes, mixing the halves, and generated API pages.
 4. **Speed benchmarks against Brian2 and NEST** on an idle machine. There are none today; the parity tests only check agreement.
 5. **A `docs/design.md` rewrite** to describe the code as it is. Sections 5 and 6 still sketch an older monitor and receptor API.
-6. **GPU and TPU measurements** (design phase 7), then kernels where profiling shows they pay: event delivery and bit-packed spikes.
+6. **GPU and TPU measurements** (design phase 7), then kernels where profiling shows they pay: event delivery and bit-packed spikes. A plastic layer's step reads and writes several `[B, F, F]` arrays and backpropagating keeps one trace per step, so its CPU time is memory traffic (1.6 s per episode of 106 steps at F = 1001 on 4 cores); a remat of the step would trade compute for that memory.
 7. **Smaller deferred items:**
    - stochastic release should deplete Tsodyks-Markram resources by actual releases;
    - voltage-dependent graded-synapse kinetics;
@@ -91,9 +95,13 @@ ich #40 leaves out.
 
 ## Working on it
 
-- **Environment:**
-  - `/home/user/.venv` is sparx's, with dew installed editable from `/home/user/dew`.
-  - `/home/user/.venv-ref` holds the reference tools: NEST 3.10, Brian2 2.10, snnTorch, torch, nir, elephant, DCLS, snntoolbox and tensorflow.
+- **Environment.** A container starts without these; recreate them:
+  - `/home/user/.venv` is sparx's, with dew installed editable from `/home/user/dew` (`--no-deps -e` after sparx, since dew's git pin would otherwise conflict). `constraints.txt` pins jax to an archive of AshishKumar4/jax at `19a48d1d`; where the network proxy refuses GitHub archives (403), clone that commit and point a local constraint at the checkout (`jax @ file:///path/to/jax`).
+  - `/home/user/.venv-ref` holds the simulators: NEST 3.10 and Brian2 2.10, plus torch 2.14.1+cpu (`--index-url https://download.pytorch.org/whl/cpu`; PyPI's wheel pulls CUDA). It regenerates `nest.npz` bit for bit.
+  - Neither venv holds elephant, neo and quantities, which `tools/make_elephant_fixtures.py` needs; the elephant fixture was not regenerated in this container.
+  - Their PC-ALM code is plain JAX and runs in `/home/user/.venv` (it needs PyYAML, which dew brings): `PYTHONPATH=<pc-alm checkout> python scripts/run_headline_grid.py ... --data-dir <dir with FashionMNIST/raw/*.gz>`, the IDX files `sparx.datasets.mnist` downloads.
+  - `/home/user/.venv-torch` holds the PyTorch tools' references: torch 2.14.1+cpu, snnTorch 1.0.0, nir 1.0.8, nirtorch 2.6, dcls 0.1.1, torchvision and SpikingJelly's imports. Every torch-based fixture tool reproduces its fixture bit for bit there, except the order of edges in the `.nir` files (`PYTHONHASHSEED`). snntoolbox needs tensorflow 2.21 and tf-keras in a venv of its own.
+  - Reference checkouts live in `/home/user/refs` (differentiable-plasticity, backpropamine, spikingjelly, OTTT-SNN, SNN-delays, pc-alm, fly-gym); each tool's docstring names the commit and takes the path.
   - Octave runs Izhikevich's `figure1.m` for `tools/make_izhikevich_2004_fixtures.py`.
 - **Keep `/home/user/dew` detached at the pinned commit.** sparx's tests import dew from that checkout, so a branch checked out there changes what they test. Do dew work in separate worktrees (`git worktree add ... /home/user/dew-wt/<topic>`).
 - **Data, which tests skip when absent:**
@@ -109,10 +117,10 @@ ich #40 leaves out.
   JAX_PLATFORMS=cpu pytest tests -q
   ```
 
-  The whole-brain tests take about 9 GB, and the full suite about 12 minutes on 4 CPU cores. On a 15 GB machine, run one suite at a time.
+  The whole-brain tests take about 9 GB, and the full suite about 17 minutes on 4 CPU cores. On a 15 GB machine, run one suite at a time.
 - **Conventions:** dew's `CONTRIBUTING.md` and `AGENTS.md` apply, mirrored in sparx's:
   - one path for each thing;
-  - parity tests against the reference implementation, with the observed difference written beside each tolerance;
+  - parity tests against the reference implementation, with the observed difference written beside each tolerance, and a mutation shown to break each new check;
   - comments explain why;
   - no `Any`;
   - dew's prose rules.
