@@ -7,7 +7,7 @@ with rounded positions and zero `SIG` at evaluation. Saves inputs,
 parameters, outputs and gradients to `tests/fixtures/dcls.npz`, which
 `tests/test_reference.py` compares `sparx.nn.DelayedDense` against.
 
-    pip install dcls==<version below> torch
+    pip install dcls==0.1.1 torch
     python tools/make_dcls_fixtures.py
 
 The reference's right padding, which lengthens the output by `(K - 1) // 2`

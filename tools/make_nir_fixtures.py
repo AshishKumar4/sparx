@@ -18,8 +18,12 @@ Each `.npz` holds the input, the output spikes and the first spiking
 layer's spikes (`hidden`). `tests/test_nir.py` imports each graph into
 sparx, runs it, and exports it back.
 
-    pip install snntorch nir
+    pip install snntorch==1.0.0 nir==1.0.8 nirtorch==2.6
     python tools/make_nir_fixtures.py
+
+`snntorch.export_nir` imports nirtorch, which builds a graph's edges from a
+set, so the order of the edges in a `.nir` file follows `PYTHONHASHSEED`;
+the graph and every array are the same whatever the order.
 """
 
 from pathlib import Path

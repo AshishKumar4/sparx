@@ -429,10 +429,10 @@ def test_conversion_matches_rueckauer_et_als_toolbox():
         want = STB[f"normalized/{k}/weight"]
         if k == 2:
             want = _channels_first_rows(want, flat)
-        # Observed 1.2e-7.
+        # Observed 2.4e-7.
         np.testing.assert_allclose(normalized["params"][name]["kernel"], want, rtol=1e-5, atol=1e-6)
         np.testing.assert_allclose(normalized["params"][name]["bias"], STB[f"normalized/{k}/bias"], rtol=1e-5,
-                                   atol=1e-6)  # observed 2.4e-7
+                                   atol=1e-6)  # observed 1.8e-7
     snn, snn_variables = convert(folded_model, normalized)
     steps = int(STB["steps"])
     out, rates = _spiking_rates(snn, snn_variables, jnp.asarray(STB["x_test"]), steps)
@@ -441,7 +441,7 @@ def test_conversion_matches_rueckauer_et_als_toolbox():
     # The first layer fires the same spikes: the converted stack's layer 1, the IF after the convolution.
     np.testing.assert_array_equal(np.round(np.asarray(rates[1]) * steps), STB["counts/SpikeConv2D/0"])
     # Their gate counts the current step's spikes, so an input can win a tie with the spike it fires
-    # now; their pool then outfires its most active input, here by up to 0.26. Ours does not, so the
+    # now; their pool then outfires its most active input, here by up to 0.21. Ours does not, so the
     # layers after it differ by those spikes, and the predictions agree.
     most_active = theirs[0].reshape(-1, 4, 2, 4, 2, 8).max(axis=(2, 4))
     assert (theirs[1] - most_active).max() > 0.2

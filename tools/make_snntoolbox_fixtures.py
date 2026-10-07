@@ -71,7 +71,8 @@ def main():
     import tensorflow as tf
     from tensorflow import keras
 
-    tf.random.set_seed(0)
+    # Python's, numpy's and TensorFlow's seeds: tf-keras draws its initial weights from all three.
+    keras.utils.set_random_seed(0)
     x, y = bars(1000 + TEST, seed=0)
     trained = cnn(keras, "linear")
     trained.compile(optimizer=keras.optimizers.Adam(1e-2),

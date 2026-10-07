@@ -9,6 +9,8 @@ release 0.0.0.0.14 predates it). The committed fixture came from commit
 c6cb8e46738bf6010cb94904fe5995e66d6451fc with torch 2.14.1+cpu:
 
     git clone https://github.com/fangwei123456/spikingjelly ../spikingjelly
+    git -C ../spikingjelly checkout c6cb8e46738bf6010cb94904fe5995e66d6451fc
+    pip install torch torchvision loguru packaging    # SpikingJelly's own imports
     PYTHONPATH=../spikingjelly python tools/make_reference_fixtures.py
 
 Every case asserts that no membrane comes within `MARGIN` of its threshold,

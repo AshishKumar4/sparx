@@ -13,15 +13,22 @@ SpikingJelly's `integrate_events_by_fixed_duration_shd`, and the learning
 rates, Adam momentum and width their full SHD configuration trains each of
 its 150 epochs with. Saves to `tests/fixtures/snn_delays.npz`, which
 `tests/test_reference.py` compares `sparx.models.SpikingMLP`,
-`sparx.datasets.bin_events` and `sparx.optim`'s schedules against.
+`sparx.datasets.bin_events` and dew's schedules against.
 
 Their code needs the SpikingJelly of 2023 they ran on (its SHD frames are
-event-anchored, later releases bin on a grid), DCLS and torch:
+event-anchored, later releases bin on a grid), DCLS and torch. SpikingJelly
+6fbee6ed34ed5a65187f4721d1a412f6a526ca6a (2023-12-04) reproduces the
+committed fixture, as does 6dca147a (2023-05-30); their `shd.py` matches
+the hash the fixture records. Commits fb03f787 (2023-12-05) to 06303ba8
+(2024-02-19) refuse the network's input to `layer.BatchNorm1d`, whose shape
+check always fails there:
 
-    PYTHONPATH=<SpikingJelly 2023 tree>:<SNN-delays checkout> python tools/make_snn_delays_fixtures.py
+    git -C <SpikingJelly checkout> checkout 6fbee6ed34ed5a65187f4721d1a412f6a526ca6a
+    pip install dcls==0.1.1 torch torchvision scipy matplotlib tqdm h5py
+    PYTHONPATH=<SpikingJelly checkout>:<SNN-delays checkout> python tools/make_snn_delays_fixtures.py
 
-`model.py` imports wandb, and `datasets.py` torchaudio and torchvision, at
-module level; none of them runs here, so stubs on the path do.
+`model.py` imports wandb, and `datasets.py` torchaudio, at module level;
+neither runs here, so stubs on the path do.
 Dropout is 0, since a random mask cannot be matched; the tests check the
 sequence-held mask on its own.
 """

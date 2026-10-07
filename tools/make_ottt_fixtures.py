@@ -7,9 +7,14 @@ hidden layer and a wrapped readout. It trains one batch as their
 `train_cifar.py` does: a cross-entropy loss each step, divided by the number
 of steps and backpropagated at once, gradients accumulating over steps.
 Saves inputs, labels, weights and gradients to `tests/fixtures/ottt.npz`.
+The committed fixture came from OTTT-SNN c15d5da05eea0c48e1fa837a4f8073297006d93f
+with torch 2.14.1+cpu:
 
     pip install torch
     python tools/make_ottt_fixtures.py [path to the cloned repository]
+
+The default path is next to the checkout the tool runs from, so a run from
+a git worktree passes it.
 """
 
 import sys
