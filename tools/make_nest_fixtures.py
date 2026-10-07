@@ -2,9 +2,10 @@
 
 Drives NEST's integrate-and-fire models with random weighted spike trains on
 an excitatory and an inhibitory input plus a constant current, and records
-the membrane voltage every step and the spikes. Saves them with the inputs
-to `tests/fixtures/nest.npz`, which `tests/test_reference_nest.py` compares
-`sparx.dynamics` against.
+the membrane voltage every step and the spikes; runs small recurrent
+networks; and records the weights plastic synapses transmit. Saves them with
+the inputs to `tests/fixtures/nest.npz`, which `tests/test_simulators.py`,
+`tests/test_graph.py` and `tests/test_plasticity.py` compare sparx against.
 
     pip install nest-simulator==<version below>
     python tools/make_nest_fixtures.py
@@ -240,6 +241,60 @@ def plasticity(rng, model, synapse, neuron):
             "weights": weights["weights"], **params}
 
 
+DOPAMINE_DELAY = 1.0
+# Izhikevich's (2007) rule, NEST's defaults; a baseline under which n - b changes sign between dopamine
+# spikes, with bounds the weights never reach; and bounds the weights reach on both sides. Each with
+# the rate (per step) its dopamine neuron fires at.
+DOPAMINE = {
+    "dopamine_defaults": ({}, 0.002),
+    "dopamine_baseline": ({"b": 0.01, "Wmin": -1000.0, "Wmax": 1000.0}, 0.004),
+    "dopamine_bounded": ({"A_minus": 1.0, "Wmax": 60.0}, 0.006),
+}
+
+
+def dopamine(rng, synapse, rate):
+    """Dopamine-modulated STDP between parrot neurons, as `plasticity` runs pair STDP, with a dopamine
+    parrot replaying its own train into a volume transmitter after `DOPAMINE_DELAY` ms.
+
+    The volume transmitter delivers every step (its `deliver_interval` is the network's minimum delay,
+    one step), and stamps each dopamine spike with its arrival time.
+    """
+    nest.ResetKernel()
+    nest.resolution = DT
+    steps = round(PLASTIC_TIME / DT)
+    pre = nest.Create("parrot_neuron", PLASTIC_PAIRS)
+    post = nest.Create("parrot_neuron", PLASTIC_PAIRS)
+    released = nest.Create("parrot_neuron", 1)
+    for group, group_rate in ((pre, 0.004), (post, 0.003), (released, rate)):
+        for parrot in group:
+            times = (np.flatnonzero(rng.random(steps - 40) < group_rate) + 1) * DT
+            generator = nest.Create("spike_generator", params={"spike_times": times})
+            nest.Connect(generator, parrot, syn_spec={"delay": DT})
+    transmitter = nest.Create("volume_transmitter")
+    nest.Connect(released, transmitter, syn_spec={"delay": DOPAMINE_DELAY})
+    recorder = nest.Create("weight_recorder")
+    nest.CopyModel("stdp_dopamine_synapse", "recorded",
+                   {"weight_recorder": recorder, "volume_transmitter": transmitter, **synapse})
+    initial = 50.0
+    nest.Connect(pre, post, "one_to_one", syn_spec={"synapse_model": "recorded", "weight": initial,
+                                                    "delay": PLASTIC_DELAY, "receptor_type": 1})
+    spikes = nest.Create("spike_recorder")
+    nest.Connect(pre + post + released, spikes)
+    nest.Simulate(PLASTIC_TIME)
+    first = pre[0].global_id
+    trains = np.zeros((steps, 2 * PLASTIC_PAIRS + 1))
+    sent = spikes.events
+    trains[np.rint(sent["times"] / DT).astype(int) - 1, sent["senders"] - first] = 1
+    weights = recorder.events
+    params = {f"param/{k}": np.array(v) for k, v in nest.GetDefaults("recorded").items()
+              if k in ("A_plus", "A_minus", "tau_plus", "tau_c", "tau_n", "b", "Wmin", "Wmax")}
+    return {"pre": trains[:, :PLASTIC_PAIRS], "post": trains[:, PLASTIC_PAIRS:2 * PLASTIC_PAIRS],
+            "dopamine": trains[:, -1], "dopamine_delay": np.array(DOPAMINE_DELAY),
+            "initial": np.array(initial),
+            "weight_senders": weights["senders"] - first, "weight_times": weights["times"],
+            "weights": weights["weights"], **params}
+
+
 NETWORK_SIZE, NETWORK_TIME = 60, 500.0
 
 
@@ -316,6 +371,12 @@ def main():
         out = plasticity(rng, model, synapse, neuron)
         cases.update({f"plasticity/{name}/{k}": v for k, v in out.items()})
         print("plasticity", name, "weights", len(out["weights"]), out["weights"][:4])
+    # After the cases above, so their draws stay as they were.
+    for name, (synapse, rate) in DOPAMINE.items():
+        out = dopamine(rng, synapse, rate)
+        cases.update({f"plasticity/{name}/{k}": v for k, v in out.items()})
+        print("plasticity", name, "weights", len(out["weights"]), "range", out["weights"].min(),
+              out["weights"].max())
     np.savez_compressed(OUT, **cases)
     print(f"wrote {OUT} (nest {nest.__version__})")
 

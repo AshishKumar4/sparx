@@ -51,6 +51,8 @@ from sparx.dynamics.neurons import (
     izhikevich_2004,
 )
 from sparx.dynamics.plasticity import (
+    DopamineSTDP,
+    DopamineTraces,
     PairSTDP,
     Plasticity,
     STDPTraces,
@@ -89,6 +91,8 @@ __all__ = [
     "Arrivals",
     "BiExponential",
     "Delta",
+    "DopamineSTDP",
+    "DopamineTraces",
     "Exponential",
     "Gap",
     "Graded",

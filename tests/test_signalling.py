@@ -14,6 +14,7 @@ from sparx.dynamics import (
     LIF,
     Arrivals,
     Delta,
+    DopamineSTDP,
     Exponential,
     Graded,
     GradedPotential,
@@ -32,6 +33,7 @@ from sparx.graph import (
     AllToAll,
     ArrivalInput,
     CurrentInput,
+    FixedProbability,
     FromEdges,
     GapJunction,
     Modulator,
@@ -39,10 +41,12 @@ from sparx.graph import (
     Network,
     OneToOne,
     OutputTrace,
+    PoissonInput,
     Population,
     Projection,
     SpikeRaster,
     StateMonitor,
+    simulate,
 )
 
 GAP = np.load(Path(__file__).parent / "fixtures" / "nest_gap.npz")
@@ -291,8 +295,11 @@ class ReadsModulator:
 
     name: str = struct.field(pytree_node=False, default="dopamine")
 
-    def init_state(self, pre: int, post: int, dtype: jnp.dtype = jnp.float32) -> tuple[()]:
+    def init_state(self, pre: int, post: int, edges: int, dtype: jnp.dtype = jnp.float32) -> tuple[()]:
         return ()
+
+    def modulated_by(self):
+        return {self.name: None}
 
     def step(self, traces, weights, pre_spikes, post_arrivals, pre, post, dt, *, modulators):
         return traces, jnp.full_like(weights, modulators[self.name])
@@ -324,6 +331,53 @@ def test_a_modulator_follows_its_equation_and_plasticity_reads_it():
     weights = network.connections({**variables, **updated})["s->t:in"].weight
     np.testing.assert_array_equal(weights, np.full(10, records["c"][-1]))
     assert counted.sum() > 20 and spikes[:, [0, 2, 4]].sum() > 0  # only the named neurons release
+
+
+def dopamine_network(rule):
+    """Two populations of LIF neurons under Poisson input, joined by a projection under `rule`, and a third
+    whose spikes release dopamine with NEST's increment, 1 / tau_n, decaying with 200 ms."""
+    receptors = {"ex": Receptor(Exponential(5.0))}
+    drive = tuple(PoissonInput(name, rate=1000.0, weight=60.0, receptor="ex", count=5) for name in "abd")
+    return Network((Population("a", 20, LIF(), receptors), Population("b", 20, LIF(), receptors),
+                    Population("d", 4, LIF(), receptors)),
+                   (Projection("a", "b", FixedProbability(0.3), weight=20.0, delay=1.0, receptor="ex",
+                               plasticity=rule),),
+                   inputs=drive, modulators=(Modulator("dopamine", "d", tau=200.0, release=1 / 200.0),),
+                   dt=0.1)
+
+
+def test_dopamine_stdp_in_a_network_is_the_rule_on_the_networks_own_spikes():
+    # The network delivers presynaptic spikes as sent, postsynaptic ones after the projection's 1 ms, and
+    # the dopamine after each step's release; the rule fed the same, alone, learns the same weights.
+    # Pairings as strong both ways, so the weights spread between the bounds instead of all sinking.
+    rule = DopamineSTDP(a_minus=1.0, w_max=100.0)
+    network = dopamine_network(rule)
+    variables = network.init(jax.random.key(0))
+    result = simulate(network, variables, duration=400.0, key=jax.random.key(1),
+                      monitors={"a": SpikeRaster("a"), "b": SpikeRaster("b"),
+                                "da": ModulatorTrace("dopamine")})
+    edges = network.connections(variables)["a->b:ex"]
+    a, b = (np.asarray(result.records[name], np.float32) for name in "ab")
+    arrived = np.zeros_like(b)
+    arrived[10:] = b[:-10]
+    traces = rule.init_state(20, 20, len(edges.pre))
+    weights = jnp.asarray(edges.weight, jnp.float32)
+    pre, post = jnp.asarray(edges.pre), jnp.asarray(edges.post)
+    for t in range(len(a)):
+        traces, weights = rule.step(traces, weights, a[t], arrived[t], pre, post, 0.1,
+                                    modulators={"dopamine": jnp.asarray(result.records["da"][t])})
+    learned = network.connections(result.variables)["a->b:ex"].weight
+    np.testing.assert_allclose(learned, weights, rtol=1e-5, atol=1e-5)  # observed 0
+    assert a.sum() > 100 and b.sum() > 100 and float(result.records["da"].max()) > 0.01
+    # The weights moved apart, some to each bound and some between.
+    assert {0.0, 100.0} <= set(learned.tolist()) and np.any((learned > 0) & (learned < 100))
+
+
+def test_plasticity_refuses_a_modulator_the_network_lacks_or_another_time_constant():
+    with pytest.raises(ValueError, match="reads modulator 'serotonin', which the network lacks"):
+        dopamine_network(DopamineSTDP(modulator="serotonin")).init(jax.random.key(0))
+    with pytest.raises(ValueError, match=r"of 100\.0 ms, and the modulator decays with 200\.0 ms"):
+        dopamine_network(DopamineSTDP(tau_n=100.0)).init(jax.random.key(0))
 
 
 def test_a_modulator_refuses_a_graded_source_and_an_unknown_one():

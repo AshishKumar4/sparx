@@ -20,8 +20,9 @@ later. The caller passes postsynaptic spikes as they arrive.
 
 A rule also reads the network's neuromodulators each step, by name
 (`sparx.graph.Modulator`): volume-transmitted concentrations such as
-dopamine's, the third factor of a three-factor rule. The STDP rules here
-are two-factor and ignore them.
+dopamine's, the third factor of a three-factor rule. `PairSTDP` and
+`TripletSTDP` are two-factor and ignore them; `DopamineSTDP` is
+Izhikevich's (2007) reward-modulated STDP, which reads dopamine.
 """
 
 from __future__ import annotations
@@ -33,20 +34,29 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 
-__all__ = ["PairSTDP", "Plasticity", "STDPTraces", "TripletSTDP", "TripletTraces", "TsodyksMarkram",
-           "TsodyksMarkramState"]
+__all__ = ["DopamineSTDP", "DopamineTraces", "PairSTDP", "Plasticity", "STDPTraces", "TripletSTDP",
+           "TripletTraces", "TsodyksMarkram", "TsodyksMarkramState"]
 
 
 class Plasticity[Traces](Protocol):
     """A rule that changes the weights of a projection's edges with the spikes on either side.
 
-    Its traces live on neurons, `init_state(pre, post, dtype)` for `pre`
-    presynaptic and `post` postsynaptic neurons, and `step` advances them
-    and the weights `[E]` of the edges `pre[E] -> post[E]` by one step.
+    Its traces live on neurons and edges, `init_state(pre, post, edges,
+    dtype)` for `pre` presynaptic and `post` postsynaptic neurons joined by
+    `edges` synapses, and `step` advances them and the weights `[E]` of the
+    edges `pre[E] -> post[E]` by one step.
     """
 
-    def init_state(self, pre: int, post: int, dtype: jnp.dtype = jnp.float32) -> Traces:
+    def init_state(self, pre: int, post: int, edges: int, dtype: jnp.dtype = jnp.float32) -> Traces:
         """The traces with no spike yet."""
+        ...
+
+    def modulated_by(self) -> Mapping[str, float | None]:
+        """The modulators the rule reads, by name, each with the time constant (ms) the rule assumes
+        its concentration decays with, or None where the rule reads the concentration alone.
+
+        A network refuses a rule that reads a modulator it lacks, or one whose time constant differs.
+        """
         ...
 
     def step(self, traces: Traces, weights: jax.Array, pre_spikes: jax.Array, post_arrivals: jax.Array,
@@ -141,8 +151,11 @@ class PairSTDP:
     mu_minus: jax.Array | float = 1.0
     w_max: jax.Array | float = 100.0
 
-    def init_state(self, pre: int, post: int, dtype: jnp.dtype = jnp.float32) -> STDPTraces:
+    def init_state(self, pre: int, post: int, edges: int, dtype: jnp.dtype = jnp.float32) -> STDPTraces:
         return STDPTraces(jnp.zeros(pre, dtype), jnp.zeros(post, dtype))
+
+    def modulated_by(self) -> Mapping[str, float | None]:
+        return {}
 
     def step(self, traces: STDPTraces, weights: jax.Array, pre_spikes: jax.Array, post_arrivals: jax.Array,
              pre: jax.Array, post: jax.Array, dt: float, *,
@@ -190,9 +203,12 @@ class TripletSTDP:
     a3_minus: jax.Array | float = 2.3e-4
     w_max: jax.Array | float = 100.0
 
-    def init_state(self, pre: int, post: int, dtype: jnp.dtype = jnp.float32) -> TripletTraces:
+    def init_state(self, pre: int, post: int, edges: int, dtype: jnp.dtype = jnp.float32) -> TripletTraces:
         return TripletTraces(jnp.zeros(pre, dtype), jnp.zeros(pre, dtype), jnp.zeros(post, dtype),
                              jnp.zeros(post, dtype))
+
+    def modulated_by(self) -> Mapping[str, float | None]:
+        return {}
 
     def step(self, traces: TripletTraces, weights: jax.Array, pre_spikes: jax.Array, post_arrivals: jax.Array,
              pre: jax.Array, post: jax.Array, dt: float, *,
@@ -207,3 +223,74 @@ class TripletSTDP:
         depressed = jnp.maximum(w - k_post[post] * (self.a2_minus + self.a3_minus * r[pre]), 0.0)
         w = jnp.where(pre_spikes[pre] > 0, depressed, w)
         return TripletTraces(k_pre + pre_spikes, r + pre_spikes, k_post + post_arrivals, y + post_arrivals), w
+
+
+class DopamineTraces(NamedTuple):
+    pre: jax.Array
+    post: jax.Array
+    eligibility: jax.Array
+    """Each synapse's eligibility `c`, `[E]`."""
+    dopamine: jax.Array
+    """The dopamine concentration at the end of the last step, which this step's integral starts from."""
+
+
+@struct.dataclass
+class DopamineSTDP:
+    """Reward-modulated STDP (Izhikevich 2007): NEST's `stdp_dopamine_synapse` (Potjans et al. 2010).
+
+    Pair STDP writes each synapse's eligibility `c` instead of its weight,
+    and the weight follows the eligibility gated by the concentration `n`
+    of the network's modulator `modulator`, above a baseline `b`:
+
+        dc/dt = -c / tau_c + a_plus K_pre delta(t - t_post) - a_minus K_post delta(t - t_pre)
+        dw/dt = c (n - b)
+
+    `K_pre` sums `exp(-dt / tau_plus)` over earlier presynaptic spikes and
+    `K_post` sums `exp(-dt / tau_minus)` over earlier postsynaptic arrivals,
+    each read just before the spike that uses it, as in `PairSTDP`. Between
+    steps `c` decays with `tau_c` and `n` with `tau_n`, so the weight
+    integrates their product exactly, as NEST does between events; `tau_n`
+    must be the modulator's `tau`, which the network checks, so it is a
+    Python number and not traced. A modulator
+    whose `release` is `1 / tau_n` adds NEST's increment per dopamine spike.
+
+    The weight is clipped to `[w_min, w_max]` after every step, where NEST
+    clips at events (spikes, dopamine arrivals and the volume transmitter's
+    deliveries). The two agree while `n - b` keeps its sign between
+    dopamine releases, which it always does for `b = 0`, or while the
+    weight stays inside its bounds. The defaults are NEST's, Izhikevich's
+    (2007) values.
+    """
+
+    modulator: str = struct.field(pytree_node=False, default="dopamine")
+    tau_plus: jax.Array | float = 20.0
+    tau_minus: jax.Array | float = 20.0
+    tau_c: jax.Array | float = 1000.0
+    tau_n: float = struct.field(pytree_node=False, default=200.0)
+    a_plus: jax.Array | float = 1.0
+    a_minus: jax.Array | float = 1.5
+    b: jax.Array | float = 0.0
+    w_min: jax.Array | float = 0.0
+    w_max: jax.Array | float = 200.0
+
+    def init_state(self, pre: int, post: int, edges: int, dtype: jnp.dtype = jnp.float32) -> DopamineTraces:
+        return DopamineTraces(jnp.zeros(pre, dtype), jnp.zeros(post, dtype), jnp.zeros(edges, dtype),
+                              jnp.zeros((), dtype))
+
+    def modulated_by(self) -> Mapping[str, float | None]:
+        return {self.modulator: self.tau_n}
+
+    def step(self, traces: DopamineTraces, weights: jax.Array, pre_spikes: jax.Array,
+             post_arrivals: jax.Array, pre: jax.Array, post: jax.Array, dt: float, *,
+             modulators: Mapping[str, jax.Array]) -> tuple[DopamineTraces, jax.Array]:
+        """As `Plasticity.step`: the weight over the step, then this step's spikes on the eligibility."""
+        c, n = traces.eligibility, traces.dopamine
+        both = 1 / self.tau_c + 1 / self.tau_n
+        # The integral of c(s) (n(s) - b) over the step, both decaying from where the last step left them.
+        gained = c * (-n * jnp.expm1(-both * dt) / both + self.b * self.tau_c * jnp.expm1(-dt / self.tau_c))
+        w = jnp.clip(weights + gained, self.w_min, self.w_max)
+        k_pre = traces.pre * jnp.exp(-dt / self.tau_plus)
+        k_post = traces.post * jnp.exp(-dt / self.tau_minus)
+        c = (c * jnp.exp(-dt / self.tau_c) + self.a_plus * k_pre[pre] * post_arrivals[post]
+             - self.a_minus * k_post[post] * pre_spikes[pre])
+        return DopamineTraces(k_pre + pre_spikes, k_post + post_arrivals, c, modulators[self.modulator]), w

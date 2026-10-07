@@ -12,7 +12,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from sparx.dynamics import PairSTDP, TripletSTDP, TsodyksMarkram
+from sparx.dynamics import DopamineSTDP, PairSTDP, TripletSTDP, TsodyksMarkram
 
 NEST = np.load(Path(__file__).parent / "fixtures" / "nest.npz")
 # Traces decay by one factor per step here, 20,000 multiplications over a
@@ -39,23 +39,34 @@ def transmitted(weights, pre):
     return [weights[pre[:, i] > 0, i] for i in range(pre.shape[1])]
 
 
-def run_stdp(rule, case):
+def delayed(train, delay):
+    """`train` `[T, ...]` arriving `delay` ms later."""
+    shift = round(delay / DT)
+    out = np.zeros_like(train)
+    out[shift:] = train[:-shift]
+    return out
+
+
+def run_stdp(rule, case, dopamine=None):
+    """The weights `rule` transmits on the case's trains; `dopamine[T]`, the concentration after each step."""
     pre, post = case["pre"], case["post"]
-    shift = round(DELAY / DT)
-    arrivals = np.zeros_like(post)
-    arrivals[shift:] = post[:-shift]  # postsynaptic spikes reach the synapse a dendritic delay later
+    arrivals = delayed(post, DELAY)  # postsynaptic spikes reach the synapse a dendritic delay later
     n = pre.shape[1]
     index = jnp.arange(n)
+    concentration = np.zeros(len(pre)) if dopamine is None else dopamine
     with jax.enable_x64(new_val=True):
-        traces = rule.init_state(n, n, jnp.float64)
+        traces = rule.init_state(n, n, n, jnp.float64)
 
         def step(carry, spikes):
             traces, weights = carry
-            traces, weights = rule.step(traces, weights, *spikes, index, index, DT, modulators={})
+            pre_spikes, post_arrivals, level = spikes
+            traces, weights = rule.step(traces, weights, pre_spikes, post_arrivals, index, index, DT,
+                                        modulators={"dopamine": level})
             return (traces, weights), weights
 
         weights0 = jnp.full(n, float(case["initial"]), jnp.float64)
-        _, weights = jax.lax.scan(step, (traces, weights0), (jnp.asarray(pre), jnp.asarray(arrivals)))
+        _, weights = jax.lax.scan(step, (traces, weights0),
+                                  (jnp.asarray(pre), jnp.asarray(arrivals), jnp.asarray(concentration)))
     return transmitted(np.asarray(weights), pre)
 
 
@@ -112,3 +123,29 @@ def test_tsodyks_markram_depresses_and_facilitates():
         released = np.asarray(efficacy[::20, 0])
         assert released[0] == pytest.approx(float(rule.U))
         assert np.sign(released[3] - released[0]) == trend
+
+
+@pytest.mark.parametrize("name", ["dopamine_defaults", "dopamine_baseline", "dopamine_bounded"])
+def test_dopamine_stdp_is_nests(name):
+    # NEST adds 1 / tau_n to the dopamine trace at each arrival at its volume transmitter, and decays it
+    # with tau_n; a sparx Modulator with that release and time constant holds the same concentration.
+    case = fixture(name)
+    p = {key[len("param/"):]: float(value) for key, value in case.items() if key.startswith("param/")}
+    rule = DopamineSTDP(tau_plus=p["tau_plus"], tau_c=p["tau_c"], tau_n=p["tau_n"], a_plus=p["A_plus"],
+                        a_minus=p["A_minus"], b=p["b"], w_min=p["Wmin"], w_max=p["Wmax"])
+    arrived = delayed(case["dopamine"], float(case["dopamine_delay"]))
+    level, dopamine = 0.0, np.zeros(len(arrived))
+    for t, count in enumerate(arrived):
+        level = level * np.exp(-DT / rule.tau_n) + count / rule.tau_n
+        dopamine[t] = level
+    got = run_stdp(rule, case, dopamine)
+    for mine, theirs in zip(got, nest_weights(case), strict=True):
+        assert len(mine) == len(theirs) >= 40
+        # Observed 2.1e-12, 7.8e-13 and 4.7e-12 relative, defaults, baseline and bounded.
+        np.testing.assert_allclose(mine, theirs, rtol=1e-10)
+    # The weights moved, and each case reaches what it was written for: a bound, or none.
+    weights = np.concatenate(got)
+    assert np.ptp(weights) > 20
+    reached = {bound for bound in (p["Wmin"], p["Wmax"]) if np.any(weights == bound)}
+    assert reached == {"dopamine_defaults": {0.0}, "dopamine_baseline": set(),
+                       "dopamine_bounded": {0.0, 60.0}}[name]

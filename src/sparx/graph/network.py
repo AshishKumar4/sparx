@@ -745,6 +745,21 @@ def _check_couplings(network: Network, populations: Mapping[str, Population]) ->
                              f"graded")
         if m.tau <= 0:
             raise ValueError(f"modulator {m.name!r} needs a positive time constant, not {m.tau}")
+    _check_modulated(network)
+
+
+def _check_modulated(network: Network) -> None:
+    """Refuse plasticity that reads a modulator the network lacks, or assumes another time constant."""
+    taus = {m.name: m.tau for m in network.modulators}
+    for p in network.projections:
+        read = {} if p.plasticity is None else p.plasticity.modulated_by()
+        for name, tau in read.items():
+            if name not in taus:
+                raise ValueError(f"{p.key}: its plasticity reads modulator {name!r}, which the network "
+                                 f"lacks; it has {', '.join(map(repr, taus)) or 'none'}")
+            if tau is not None and tau != taus[name]:
+                raise ValueError(f"{p.key}: its plasticity integrates modulator {name!r} with a time "
+                                 f"constant of {tau} ms, and the modulator decays with {taus[name]} ms")
 
 
 def _check_population(population: Population, current: bool, dt: float) -> None:
@@ -849,7 +864,7 @@ class Network(nn.Module):
         return lags
 
     def _rest(self, populations: Mapping[str, Population], weights: Mapping[str, jax.Array],
-              lags: Mapping[str, int]) -> NetworkState:
+              edges: Mapping[str, Mapping[str, jax.Array]], lags: Mapping[str, int]) -> NetworkState:
         """The state a run starts from: resting neurons (or `initial`), empty buffers, fresh traces."""
         rng = _seed(self.make_rng("params"))
         dtype = jnp.dtype(self.dtype)
@@ -865,7 +880,8 @@ class Network(nn.Module):
         for p in self.projections:
             pre, post = populations[p.pre].size, populations[p.post].size
             if p.plasticity is not None:
-                plastic[p.key] = {"traces": p.plasticity.init_state(pre, post, dtype),
+                count = int(np.size(edges[p.key]["pre"]))
+                plastic[p.key] = {"traces": p.plasticity.init_state(pre, post, count, dtype),
                                   "weight": weights[p.key]}
             if p.short_term is not None:
                 short_term[p.key] = {"release": p.short_term.init_state((pre,), dtype),
@@ -950,7 +966,8 @@ class Network(nn.Module):
         for j in self.junctions:
             weights[j.key] = self.variable("connectome", f"weight:{j.key}",
                                            lambda k=j.key: jnp.asarray(build()[k]["weight"])).value
-        state = self.variable("state", "network", lambda: self._rest(populations, weights, self._lags(edges)))
+        state = self.variable("state", "network",
+                              lambda: self._rest(populations, weights, edges, self._lags(edges)))
         if self.is_initializing():
             return {}
         drive = dict(drive or {})
