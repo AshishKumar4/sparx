@@ -73,7 +73,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from sparx.dynamics import LIFCell, NeuronModel, RecurrentCell, decay
+from sparx.dynamics import Dense, LIFCell, NeuronModel, RecurrentCell, decay
 from sparx.nn import IF, LIF, Flatten, Flattens, Modelled, Recurrent
 
 if TYPE_CHECKING:
@@ -222,10 +222,13 @@ def _export_layer(layer: nn.Module, params: LayerParams, name: str, shape: tuple
             return {name: _export_neuron(cell, layer.dt, shape, dt, discretization)}, [], name
         if len(shape) != 1:
             raise NotImplementedError("a Recurrent layer exports on flat inputs")
+        if not isinstance(cell.wiring, Dense) or cell.fast_weights is not None:
+            raise NotImplementedError("NIR holds a fixed dense recurrence; a sparse or plastic one has no "
+                                      "node")
         lif, w_rec = f"{name}.lif", f"{name}.w_rec"
         nodes: dict[str, nir.NIRNode] = {
             lif: _export_neuron(cell.inner, layer.dt, shape, dt, discretization),
-            w_rec: nir.Linear(weight=np.asarray(cell.weight).T),
+            w_rec: nir.Linear(weight=np.asarray(cell.wiring.weight).T),
         }
         return nodes, [(lif, w_rec), (w_rec, lif)], lif
     if isinstance(layer, nn.Dense):

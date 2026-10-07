@@ -32,7 +32,7 @@ import jax
 import jax.numpy as jnp
 from jax.extend.core import Jaxpr, Literal, Var
 
-from sparx.dynamics import LICell, NeuronModel, RecurrentCell, SynapticInput, decay
+from sparx.dynamics import Dense, LICell, NeuronModel, RecurrentCell, SynapticInput, decay
 from sparx.dynamics.core import membrane_dtype
 
 __all__ = ["EPropParams", "OTTTLayer", "accumulate", "bptt_loss", "eligibility_traces", "eprop",
@@ -92,7 +92,7 @@ def eprop_forward(cell: NeuronModel, params: EPropParams, inputs: jax.Array, *, 
     `[T, B, N]`. With `cut_recurrence` the gradient stops at the fed-back
     spikes, which makes BPTT's gradient e-prop's.
     """
-    layer, readout = RecurrentCell(cell, params.w_rec, cut_gradient=cut_recurrence), _readout(tau)
+    layer, readout = RecurrentCell(cell, Dense(params.w_rec), cut_gradient=cut_recurrence), _readout(tau)
 
     # One scan over both models, with each step's products inside it. Two
     # `run`s, the input and readout products taken over all steps at once,

@@ -1,6 +1,7 @@
 """Flax linen layers for spiking networks, over time-major inputs `[T, ...]`."""
 
 from .delays import DelayedDense, delay_kernel
+from .hebbian import DecayingTrace, HebbianTrace, ModulatedTrace, OjaTrace, RetroactiveTrace
 from .neurons import (
     ALIF,
     IF,
@@ -20,7 +21,6 @@ from .neurons import (
     record_rates,
 )
 from .parallel import PSN, MaskedPSN, SlidingPSN, band_mask
-from .plastic import DecayingTrace, HebbianTrace, ModulatedTrace, OjaTrace, Plastic, RetroactiveTrace
 from .reshape import BatchMajor, Flatten, Flattens
 
 __all__ = [
@@ -44,7 +44,6 @@ __all__ = [
     "ModulatedTrace",
     "Neuron",
     "OjaTrace",
-    "Plastic",
     "Rate",
     "Recurrent",
     "RetroactiveTrace",

@@ -18,8 +18,9 @@ al.'s tables, `Connectome.from_malecns` for Janelia's), so
 
 `FLYNN` is Wang and Chen's trainable fly connectome network (arXiv
 2607.00025): a leaky tanh unit per neuron, recurrent through the synapses
-(`sparx.dynamics.SparseRecurrentCell`), with every weight, bias and cell
-class's leak trained by gradient descent, a Flax layer for dew's trainer.
+(`sparx.dynamics.RecurrentCell` on a `Sparse` wiring), with every weight,
+bias and cell class's leak trained by gradient descent, a Flax layer for
+dew's trainer.
 """
 
 from __future__ import annotations
@@ -36,12 +37,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from sparx.dynamics import RateCell, SparseRecurrentCell, SynapticInput
+from sparx.dynamics import FastWeights, RateCell, RecurrentCell, Sparse, SynapticInput
 from sparx.dynamics.neurons import LIF
 from sparx.dynamics.synapses import Delta, Exponential, Receptor
 from sparx.graph.connectivity import FromEdges
 from sparx.graph.network import Network, PoissonInput, Population, Projection
-from sparx.nn.neurons import Neuron
+from sparx.nn.hebbian import HebbianTrace
+from sparx.nn.neurons import Neuron, adopt
 
 __all__ = ["FLYNN", "FLYWIRE_630_MEDIAN_INPUTS", "SIGNS", "Connectome", "matched_w_syn", "shiu2024",
            "spectral_radius"]
@@ -272,8 +274,12 @@ class FLYNN(Neuron):
     logit starts, `log(update / (1 - update))`, their `leak_alpha` of 0.2.
 
     Their readout and input scales sit outside the network, and so do they
-    here. To train only the biases and leaks, as their code's default does,
-    give the `weight` parameter no optimizer (dew's `ParamGroup`).
+    here. A `rule` (`sparx.nn.DecayingTrace` and the other `HebbianTrace`s)
+    adds fast weights on the synapses, `alpha` per synapse starting at
+    `alpha_init` times a Hebbian trace each sequence writes, which FLYNN
+    does not have: differentiable plasticity on a connectome. To train only
+    the biases and leaks, as their code's default does, give the `weight`
+    parameter no optimizer (dew's `ParamGroup`).
     """
 
     connectome: Connectome = dataclasses.field(kw_only=True)
@@ -283,6 +289,8 @@ class FLYNN(Neuron):
     radius: float = 0.9
     update: float = 0.2
     activation: Literal["tanh", "relu", "sigmoid"] = "tanh"
+    rule: HebbianTrace | None = None
+    alpha_init: nn.initializers.Initializer = nn.initializers.normal(0.01)
 
     def __call__(self, x: jax.Array) -> jax.Array:
         return super().__call__(x)[..., np.asarray(self.output_neurons)]
@@ -292,7 +300,7 @@ class FLYNN(Neuron):
         drive = jnp.zeros((*x.shape[:-1], self.connectome.size), x.dtype)
         return SynapticInput(jump=drive.at[..., np.asarray(self.input_neurons)].add(x))
 
-    def build(self, x: jax.Array) -> SparseRecurrentCell:
+    def build(self, x: jax.Array) -> RecurrentCell:
         graph = self.connectome
         pre, post = jnp.asarray(graph.pre), jnp.asarray(graph.post)
         counts = jnp.asarray(graph.synapses, jnp.float32)
@@ -308,4 +316,9 @@ class FLYNN(Neuron):
         logits = self.param("update_logits", nn.initializers.constant(start), (classes,), jnp.float32)
         fraction = 0.99 * jax.nn.sigmoid(logits) + 0.01
         decay = 1 - fraction[jnp.asarray(self.types)]
-        return SparseRecurrentCell(RateCell(decay, bias, self.activation), pre, post, weight, graph.size)
+        fast = None
+        if self.rule is not None:
+            alpha = self.param("alpha", self.alpha_init, counts.shape, jnp.float32)
+            fast = FastWeights(alpha, adopt(self.rule, self, "rule")(graph.size))
+        wiring = Sparse(pre, post, weight, graph.size)
+        return RecurrentCell(RateCell(decay, bias, self.activation), wiring, fast)

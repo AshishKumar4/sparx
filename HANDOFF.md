@@ -76,7 +76,7 @@ Open in dew, for sparx:
    - a deterministic reconstruction of RNeuralNet with its reward-diffusion rule as a baseline. No public source by that name was found; the owner's notes should say which paper or code it is.
    - FLYNN on the whole FlyWire connectome: `sparx.graph.connectome.FLYNN` takes `Connectome.from_shiu`'s tables and their cell classes, sensory and descending neurons, but no full-brain training has been run, and their navigation task (MuJoCo) is not ported.
 2. **`research/continual/`**, built only on sparx and dew's public API.
-   - Start with the small modular core (16 x 256 units), selective fast plasticity (`sparx.nn.Plastic` with a neuromodulated trace), a BPTT reference and a switch-and-door adaptation task, as the notes recommend.
+   - Start with the small modular core (16 x 256 units), selective fast plasticity (`sparx.nn.Recurrent` with a neuromodulated trace; on a connectome's sparse wiring as well), a BPTT reference and a switch-and-door adaptation task, as the notes recommend.
    - Anything awkward to express there is a gap to fix in sparx or dew.
 3. **Remaining DX review items** (the review's numbering):
    - item 6, the name clashes: `LIF` in four places, `Delta`, `Izhikevich`;

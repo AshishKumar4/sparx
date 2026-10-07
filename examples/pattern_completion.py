@@ -20,7 +20,7 @@ episodes of one, weights and plasticity drawn at `0.01 * randn`, `eta` at
 0.01.
 
 The network is one tanh unit per input without leak (`sparx.nn.Rate` with
-`tau=0`, which also learns a bias per unit) behind `sparx.nn.Plastic`,
+`tau=0`, which also learns a bias per unit) behind `sparx.nn.Recurrent`,
 whose trace `--trace` picks: Miconi et al.'s decaying Hebbian trace or
 Oja's rule, or Backpropamine's neuromodulated or retroactive trace (Miconi
 et al. 2019); `none` is `sparx.nn.Recurrent` on the same units. dew's
@@ -139,7 +139,7 @@ def network(trace: str) -> nn.Module:
     unit = snn.Rate(tau=0)
     if trace == "none":
         return snn.BatchMajor(snn.Recurrent(unit, kernel_init=small))
-    return snn.BatchMajor(snn.Plastic(unit, rule=TRACES[trace], kernel_init=small, alpha_init=small))
+    return snn.BatchMajor(snn.Recurrent(unit, rule=TRACES[trace], kernel_init=small, alpha_init=small))
 
 
 def main(config: Config) -> None:

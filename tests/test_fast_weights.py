@@ -11,12 +11,15 @@ from flax import struct
 import sparx.nn as snn
 from sparx.dynamics import (
     DecayingHebb,
+    Dense,
+    FastWeights,
     LIFCell,
     ModulatedHebb,
     OjaHebb,
-    PlasticRecurrentCell,
     RateCell,
+    RecurrentCell,
     RetroactiveHebb,
+    Sparse,
     SynapticInput,
     run,
 )
@@ -48,8 +51,8 @@ def episode(name, given, parameters):
     """
     inputs = jnp.asarray(given["inputs"])
     drive = inputs if name == "hebb" else inputs @ parameters["i2h_weight"] + parameters["i2h_bias"]
-    model = PlasticRecurrentCell(RateCell(0.0), parameters["weight"], parameters["alpha"],
-                                 RULES[name][1](parameters), jax.lax.Precision.HIGHEST)
+    model = RecurrentCell(RateCell(0.0), Dense(parameters["weight"], jax.lax.Precision.HIGHEST),
+                          FastWeights(parameters["alpha"], RULES[name][1](parameters)))
 
     def step(state, x):
         state, out = model.step(state, SynapticInput(jump=x), 1.0)
@@ -97,16 +100,72 @@ def test_the_bounded_rules_clip_part_of_the_trace():
         assert 0.05 < held < 0.95, name
 
 
+WIRED = {
+    "fixed": None,
+    "decaying": FastWeights(0.4, DecayingHebb(0.2)),
+    "oja": FastWeights(0.4, OjaHebb(0.3)),
+    "modulated": FastWeights(0.4, ModulatedHebb(jnp.linspace(-1.0, 1.0, 5), 0.1, jnp.linspace(1.0, -2.0, 5),
+                                                0.2)),
+    "retroactive": FastWeights(0.4, RetroactiveHebb(jnp.linspace(1.0, -1.0, 5), 0.2, 0.3)),
+}
+
+
+@pytest.mark.parametrize("name", list(WIRED))
+def test_a_sparse_wiring_of_every_pair_is_the_dense_wiring(name):
+    # Every rule reads a connection's pre- and postsynaptic units through the wiring, so on an edge
+    # list of all pairs, in the dense matrix's order, it computes the dense layer's activity and traces.
+    rng = np.random.default_rng(6)
+    weight = jnp.asarray(rng.normal(0, 0.6, (5, 5)), jnp.float32)
+    pre, post = (jnp.asarray(a.ravel()) for a in np.meshgrid(np.arange(5), np.arange(5), indexing="ij"))
+    xs = jnp.asarray(rng.normal(0, 1.0, (20, 3, 5)), jnp.float32)
+    dense = RecurrentCell(RateCell(0.4, 0.1), Dense(weight, jax.lax.Precision.HIGHEST), WIRED[name])
+    sparse = RecurrentCell(RateCell(0.4, 0.1), Sparse(pre, post, weight.ravel(), 5), WIRED[name])
+    out, state = run(dense, xs)
+    sparse_out, sparse_state = run(sparse, xs)
+    # Observed at most 6.3e-7 in float32 (Oja's), where the matrix product and the edge sum add in
+    # other orders.
+    np.testing.assert_allclose(sparse_out.value, out.value, rtol=0, atol=1e-5)
+    for a, b in zip(jax.tree.leaves(sparse_state.trace), jax.tree.leaves(state.trace), strict=True):
+        np.testing.assert_allclose(a, np.asarray(b).reshape(3, 25), rtol=0, atol=1e-5)
+    if name != "fixed":  # the trace moved, and it shapes the activity
+        assert np.abs(np.asarray(jax.tree.leaves(state.trace)[0])).max() > 0.01
+        alone, _ = run(RecurrentCell(RateCell(0.4, 0.1), Dense(weight, jax.lax.Precision.HIGHEST)), xs)
+        assert np.abs(np.asarray(alone.value) - np.asarray(out.value)).max() > 1e-3
+
+
+def test_fast_weights_on_a_connectome_train():
+    # FLYNN's wiring with a Hebbian trace on its synapses: one alpha per synapse, learned with the rest.
+    from sparx.graph.connectome import FLYNN, Connectome
+
+    rng = np.random.default_rng(7)
+    pairs = rng.choice(30 * 30, 120, replace=False)
+    synapses = rng.integers(5, 30, 120) * rng.choice([-1, 1], 120)
+    graph = Connectome(np.arange(30), pairs % 30, pairs // 30, synapses)
+    net = FLYNN(connectome=graph, types=tuple(rng.integers(0, 3, 30).tolist()), input_neurons=(0, 1, 2),
+                output_neurons=(3, 4), rule=snn.ModulatedTrace())
+    x = jnp.asarray(rng.normal(size=(12, 2, 3)), jnp.float32)
+    variables = net.init(jax.random.key(0), x)
+    assert variables["params"]["alpha"].shape == (120,) and set(variables["params"]["rule"]) >= {"fanout"}
+
+    def loss(params):
+        return jnp.sum(net.apply({"params": params}, x)[-1] ** 2)
+
+    grads = jax.grad(loss)(variables["params"])
+    assert np.any(grads["alpha"] != 0)
+    assert all(np.any(np.asarray(g) != 0) for g in jax.tree.leaves(grads["rule"]))
+
+
 def test_a_decaying_trace_over_two_half_steps_is_one_whole_step():
     # keep = (1 - eta) ** dt: the trace decays as a rate per unit of time, whatever the step.
     rng = np.random.default_rng(0)
     with jax.enable_x64(new_val=True):
         trace, pre, post = (jnp.asarray(rng.normal(size=shape)) for shape in ((4, 4), (4,), (4,)))
+        wiring = Dense(jnp.zeros((4, 4)))
         for rule in (DecayingHebb(0.3), RetroactiveHebb(jnp.zeros(4), 0.0, 0.3)):
-            start = rule.init_trace((4,), jnp.float64)
+            start = rule.init_trace(wiring, (4,), jnp.float64)
             start = jax.tree.map(lambda zero: zero + trace, start)
-            halves = rule.update(rule.update(start, pre, post, 0.5), pre, post, 0.5)
-            whole = rule.update(start, pre, post, 1.0)
+            halves = rule.update(rule.update(start, wiring, pre, post, 0.5), wiring, pre, post, 0.5)
+            whole = rule.update(start, wiring, pre, post, 1.0)
             for a, b in zip(jax.tree.leaves(halves), jax.tree.leaves(whole), strict=True):
                 np.testing.assert_allclose(a, b, rtol=1e-14, atol=1e-15)
 
@@ -114,20 +173,20 @@ def test_a_decaying_trace_over_two_half_steps_is_one_whole_step():
 def test_a_retroactive_trace_credits_coactivity_the_modulator_arrives_after():
     # Coactivity with the modulator at zero leaves the weights alone and
     # fills the eligibility; a modulator that comes later writes it in.
-    rule = RetroactiveHebb(jnp.ones(2), 0.0, 0.5)
-    trace = rule.init_trace((2,), jnp.float32)
+    rule, wiring = RetroactiveHebb(jnp.ones(2), 0.0, 0.5), Dense(jnp.zeros((2, 2)))
+    trace = rule.init_trace(wiring, (2,), jnp.float32)
     active, silent = jnp.asarray([1.0, -1.0]), jnp.zeros(2)
-    trace = rule.update(trace, active, active, 1.0)  # m = tanh(0) = 0
+    trace = rule.update(trace, wiring, active, active, 1.0)  # m = tanh(0) = 0
     assert np.all(trace.hebb == 0) and np.any(trace.eligibility != 0)
-    reward = rule.update(trace, silent, jnp.asarray([2.0, 0.0]), 1.0)
+    reward = rule.update(trace, wiring, silent, jnp.asarray([2.0, 0.0]), 1.0)
     np.testing.assert_allclose(reward.hebb, np.tanh(2.0) * trace.eligibility, rtol=1e-6)
 
 
 def test_a_plastic_spiking_layer_keeps_its_trace_in_float32_under_bf16_spikes():
     rng = np.random.default_rng(1)
     xs = jnp.asarray(rng.normal(0.4, 0.8, (30, 2, 5)), jnp.bfloat16)
-    model = PlasticRecurrentCell(LIFCell(0.8), jnp.asarray(rng.normal(0, 0.3, (5, 5)), jnp.float32),
-                                 jnp.full((5,), 0.5, jnp.float32), DecayingHebb(0.2))
+    model = RecurrentCell(LIFCell(0.8), Dense(jnp.asarray(rng.normal(0, 0.3, (5, 5)), jnp.float32)),
+                          FastWeights(jnp.full((5,), 0.5, jnp.float32), DecayingHebb(0.2)))
     out, state = run(model, xs)
     assert out.value.dtype == jnp.bfloat16 and state.output.dtype == jnp.bfloat16
     assert state.trace.dtype == jnp.float32 and state.trace.shape == (2, 5, 5)
@@ -142,7 +201,7 @@ TRACES = {"decaying": snn.DecayingTrace(), "oja": snn.OjaTrace(), "modulated": s
 @pytest.mark.parametrize("name", list(TRACES))
 def test_a_plastic_layer_runs_the_cell_its_parameters_build(name):
     x = jnp.asarray(np.random.default_rng(2).normal(0, 1.0, (12, 3, 5)), jnp.float32)
-    layer = snn.Plastic(snn.Rate(tau=0), rule=TRACES[name])
+    layer = snn.Recurrent(snn.Rate(tau=0), rule=TRACES[name])
     variables = layer.init(jax.random.key(0), x)
     params = variables["params"]
     assert params["recurrent"].shape == params["alpha"].shape == (5, 5)
@@ -150,14 +209,14 @@ def test_a_plastic_layer_runs_the_cell_its_parameters_build(name):
     assert set(params["rule"]) == {"decaying": {"eta"}, "oja": {"eta"}, "retroactive": {"eta", *modulator},
                                    "modulated": {"fanout", "fanout_bias", *modulator}}[name]
     built = layer.apply(variables, x, method="model")
-    assert isinstance(built, PlasticRecurrentCell) and built.inner.decay == 0.0
+    assert isinstance(built, RecurrentCell) and built.fast_weights is not None and built.inner.decay == 0.0
     expected, _ = run(built, x)
     np.testing.assert_array_equal(layer.apply(variables, x), expected.value)
 
 
 def test_a_plastic_layer_fed_in_chunks_carries_its_trace():
     x = jnp.asarray(np.random.default_rng(3).normal(0, 1.0, (20, 2, 4)), jnp.float32)
-    layer = snn.Plastic(snn.LIF(), rule=snn.RetroactiveTrace(eta=0.3))
+    layer = snn.Recurrent(snn.LIF(), rule=snn.RetroactiveTrace(eta=0.3))
     variables = layer.init(jax.random.key(1), x)
     whole = layer.apply(variables, x)
     head, state = layer.apply(variables, x[:7], mutable=["state"])
@@ -170,13 +229,13 @@ def test_a_plastic_layer_fed_in_chunks_carries_its_trace():
 class Frozen:
     """A rule whose trace never moves from zero: a plastic layer that is not plastic."""
 
-    def init_trace(self, shape, dtype):
-        return jnp.zeros((*shape, shape[-1]), dtype)
+    def init_trace(self, wiring, shape, dtype):
+        return jnp.zeros(wiring.connections(shape), dtype)
 
     def hebb(self, trace):
         return trace
 
-    def update(self, trace, pre, post, dt):
+    def update(self, trace, wiring, pre, post, dt):
         return trace
 
 
@@ -188,7 +247,7 @@ class FrozenTrace(snn.HebbianTrace):
 def test_a_rule_of_ones_own_plugs_into_the_layer():
     # The trace stays zero, so the layer is Recurrent with the same weights.
     x = jnp.asarray(np.random.default_rng(4).normal(0.4, 0.8, (15, 2, 6)), jnp.float32)
-    plastic = snn.Plastic(snn.LIF(), rule=FrozenTrace())
+    plastic = snn.Recurrent(snn.LIF(), rule=FrozenTrace())
     variables = plastic.init(jax.random.key(2), x)
     recurrent = {"params": {"recurrent": variables["params"]["recurrent"]}}
     np.testing.assert_array_equal(plastic.apply(variables, x), snn.Recurrent(snn.LIF()).apply(recurrent, x))
@@ -197,7 +256,7 @@ def test_a_rule_of_ones_own_plugs_into_the_layer():
 def test_a_plastic_layer_steps_at_its_neurons_dt():
     x = jnp.zeros((3, 1, 2))
     with pytest.raises(ValueError, match="give both one dt"):
-        snn.Plastic(snn.Rate(tau=0, dt=0.5)).init(jax.random.key(0), x)
+        snn.Recurrent(snn.Rate(tau=0, dt=0.5), rule=snn.DecayingTrace()).init(jax.random.key(0), x)
 
 
 # Miconi et al.'s (2018) pattern completion (their simple/simple.py), small:
@@ -258,5 +317,5 @@ def test_fast_weights_learn_to_complete_a_pattern_the_episode_showed():
     small = nn.initializers.normal(0.01)  # their simple.py's draws
     fixed = completion_error(snn.Recurrent(snn.Rate(tau=0), kernel_init=small))
     for name, trace in TRACES.items():
-        error = completion_error(snn.Plastic(snn.Rate(tau=0), rule=trace, kernel_init=small))
+        error = completion_error(snn.Recurrent(snn.Rate(tau=0), rule=trace, kernel_init=small))
         assert error < 0.1 < 0.15 < fixed, (name, error, fixed)

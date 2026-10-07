@@ -1,19 +1,18 @@
-"""Plastic recurrent layers: fast weights that a Hebbian trace writes as each sequence runs.
+"""The Hebbian traces of plastic recurrent layers, as modules that declare their learned parameters.
 
-`Plastic` feeds a neuron layer's output back through a learned matrix plus
-`alpha * hebb`, where the Hebbian trace `hebb` starts at zero for every
-sequence and follows a rule of the units' own activity
-(`sparx.dynamics.PlasticRecurrentCell`). Gradient descent learns the fixed
-weights, each connection's plasticity `alpha` and the rule's parameters,
-through the traces: differentiable plasticity (Miconi et al. 2018) and its
-neuromodulated form, Backpropamine (Miconi et al. 2019).
+A recurrent layer given a `rule` (`sparx.nn.Recurrent(neuron, rule=...)`,
+`sparx.graph.connectome.FLYNN(..., rule=...)`) adds fast weights to its
+wiring: `alpha * hebb`, where the Hebbian trace `hebb` starts at zero for
+every sequence and follows the rule from the units' own activity
+(`sparx.dynamics.FastWeights`). Gradient descent learns the fixed weights,
+each connection's `alpha` and the rule's parameters through the traces:
+differentiable plasticity (Miconi et al. 2018) and its neuromodulated form,
+Backpropamine (Miconi et al. 2019).
 
-The rule is a module, as the neuron is, so it declares its own learned
-parameters:
+    layer = sparx.nn.Recurrent(sparx.nn.Rate(tau=0), rule=sparx.nn.ModulatedTrace())
 
-    layer = sparx.nn.Plastic(sparx.nn.Rate(tau=0), rule=sparx.nn.ModulatedTrace())
-
-A `HebbianTrace` builds a `sparx.dynamics.HebbianRule`, and a new rule is a
+A `HebbianTrace` builds a `sparx.dynamics.HebbianRule`, which runs on a
+dense wiring and on a connectome's sparse one alike. A new rule is a
 dataclass with `init_trace`, `hebb` and `update` and a `HebbianTrace` whose
 `build` declares its parameters and returns it.
 """
@@ -23,21 +22,10 @@ from __future__ import annotations
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-from flax.typing import PrecisionLike
 
-from sparx.dynamics import (
-    DecayingHebb,
-    HebbianRule,
-    ModulatedHebb,
-    OjaHebb,
-    PlasticRecurrentCell,
-    RetroactiveHebb,
-    SynapticInput,
-)
+from sparx.dynamics import DecayingHebb, HebbianRule, ModulatedHebb, OjaHebb, RetroactiveHebb
 
-from .neurons import LIF, Neuron, adopt
-
-__all__ = ["DecayingTrace", "HebbianTrace", "ModulatedTrace", "OjaTrace", "Plastic", "RetroactiveTrace"]
+__all__ = ["DecayingTrace", "HebbianTrace", "ModulatedTrace", "OjaTrace", "RetroactiveTrace"]
 
 
 def _linear_init(fan_in: int) -> nn.initializers.Initializer:
@@ -58,7 +46,7 @@ class HebbianTrace(nn.Module):
     """The Hebbian trace of a `Plastic` layer, which builds its rule with the rule's learned parameters.
 
     A subclass declares the parameters in `build(features)`, for `features`
-    units, and returns the rule, a `sparx.dynamics.HebbianRule`. `Plastic`
+    units, and returns the rule, a `sparx.dynamics.HebbianRule`. A layer
     calls it as its child `rule`, so they sit under `rule`.
     """
 
@@ -124,39 +112,3 @@ class RetroactiveTrace(HebbianTrace):
         eta = self.param("eta", nn.initializers.constant(self.eta), (), jnp.float32)
         return RetroactiveHebb(modulator, modulator_bias, eta, self.clip)
 
-
-class Plastic(Neuron):
-    """Feed `neuron`'s output back through a learned matrix plus fast weights that each sequence writes.
-
-    The feedback runs through `recurrent + alpha * hebb`, both `[F, F]` and
-    learned, where `rule` keeps `hebb` (`HebbianTrace`): `DecayingTrace`
-    and `OjaTrace` (Miconi et al. 2018), `ModulatedTrace` and
-    `RetroactiveTrace` (Backpropamine, Miconi et al. 2019).
-    `Plastic(Rate(tau=0))` is their tanh network, and a spiking neuron
-    learns fast weights between its spikes. `alpha` starts at `alpha_init`,
-    small and random as theirs does (`.01 * randn` in their
-    `simple/simple.py`); `recurrent` starts orthogonal, as `Recurrent`'s
-    does, where theirs is `kernel_init=nn.initializers.normal(0.01)`. As in
-    `Recurrent`, the input projection stays outside, the neuron's
-    parameters live under `neuron`, and the layer's `dt` must be the
-    neuron's. Backpropagating holds a `[B, F, F]` trace per step.
-    """
-
-    neuron: Neuron = LIF()
-    rule: HebbianTrace = DecayingTrace()
-    kernel_init: nn.initializers.Initializer = nn.initializers.orthogonal()
-    alpha_init: nn.initializers.Initializer = nn.initializers.normal(0.01)
-    precision: PrecisionLike = None
-
-    def inputs(self, x: jax.Array) -> SynapticInput:
-        return self.neuron.inputs(x)
-
-    def build(self, x: jax.Array) -> PlasticRecurrentCell:
-        if self.dt != self.neuron.dt:
-            raise ValueError(f"Plastic steps at dt={self.dt}, its neuron at dt={self.neuron.dt}; "
-                             "give both one dt")
-        features = x.shape[-1]
-        weight = self.param("recurrent", self.kernel_init, (features, features), jnp.float32)
-        alpha = self.param("alpha", self.alpha_init, (features, features), jnp.float32)
-        return PlasticRecurrentCell(adopt(self.neuron, self, "neuron").model(x), weight, alpha,
-                                    adopt(self.rule, self, "rule")(features), self.precision)

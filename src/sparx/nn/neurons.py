@@ -43,6 +43,8 @@ from flax.typing import PrecisionLike
 from sparx import dynamics
 from sparx.dynamics import (
     ALIFCell,
+    Dense,
+    FastWeights,
     LICell,
     LIFCell,
     NeuronModel,
@@ -55,6 +57,8 @@ from sparx.dynamics import (
     run,
 )
 from sparx.surrogate import ATan, Surrogate
+
+from .hebbian import HebbianTrace
 
 __all__ = [
     "ALIF",
@@ -248,7 +252,7 @@ class Rate(Neuron):
     `learn_tau` learns the leak per feature, starting at `tau`.
     `Recurrent(Rate())` is FLYNN's recurrence with a dense matrix. `tau=0`
     keeps no memory, `h = f(x + bias)`, the unit of an Elman network and
-    of Miconi et al.'s plastic networks (`Plastic(Rate(tau=0))`).
+    of Miconi et al.'s plastic networks (`Recurrent(Rate(tau=0), rule=...)`).
     """
 
     tau: float = 2.0
@@ -372,13 +376,26 @@ class Dynamics(Neuron):
 
 
 class Recurrent(Neuron):
-    """Feed `neuron`'s spikes back into its input through a learned `[F, F]` matrix.
+    """Feed `neuron`'s output back into its input through a learned `[F, F]` matrix, fixed or plastic.
 
     `Recurrent(ALIF())` is a recurrent adaptive layer (LSNN). The input
     projection stays outside, as an `nn.Dense` before this layer, so it runs
     over all time steps at once; only the feedback product runs inside the
     loop. The wrapped neuron's parameters live under `neuron`, and the
     layer's `dt` must be the neuron's.
+
+    With a `rule` (`sparx.nn.DecayingTrace`, `OjaTrace`, `ModulatedTrace`,
+    `RetroactiveTrace` or a `HebbianTrace` of your own), the feedback runs
+    through `recurrent + alpha * hebb`: fast weights a Hebbian trace writes
+    from zero in every sequence, differentiable plasticity (Miconi et al.
+    2018) and Backpropamine (Miconi et al. 2019). `alpha`, `[F, F]`, starts
+    at `alpha_init`, small and random as theirs does (`.01 * randn` in their
+    `simple/simple.py`; theirs also start `recurrent` at
+    `kernel_init=nn.initializers.normal(0.01)`), and the rule's parameters
+    sit under `rule`. `Recurrent(Rate(tau=0), rule=...)` is their tanh
+    network; a spiking neuron learns fast weights between its spikes.
+    Backpropagating through a plastic layer holds a `[B, F, F]` trace per
+    step.
 
     Backpropagation through the feedback multiplies by the recurrent matrix
     at every step, and a heavy-tailed surrogate passes gradient through
@@ -391,6 +408,8 @@ class Recurrent(Neuron):
     neuron: Neuron = LIF()
     kernel_init: nn.initializers.Initializer = nn.initializers.orthogonal()
     precision: PrecisionLike = None
+    rule: HebbianTrace | None = None
+    alpha_init: nn.initializers.Initializer = nn.initializers.normal(0.01)
 
     def inputs(self, x: jax.Array) -> SynapticInput:
         return self.neuron.inputs(x)
@@ -401,4 +420,8 @@ class Recurrent(Neuron):
                              "give both one dt")
         features = x.shape[-1]
         weight = self.param("recurrent", self.kernel_init, (features, features), jnp.float32)
-        return RecurrentCell(adopt(self.neuron, self, "neuron").model(x), weight, self.precision)
+        fast = None
+        if self.rule is not None:
+            alpha = self.param("alpha", self.alpha_init, (features, features), jnp.float32)
+            fast = FastWeights(alpha, adopt(self.rule, self, "rule")(features))
+        return RecurrentCell(adopt(self.neuron, self, "neuron").model(x), Dense(weight, self.precision), fast)

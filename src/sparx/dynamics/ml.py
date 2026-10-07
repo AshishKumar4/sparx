@@ -62,22 +62,23 @@ __all__ = [
     "BernoulliCell",
     "BernoulliState",
     "DecayingHebb",
+    "Dense",
     "EligibleHebb",
+    "FastWeights",
     "HebbianRule",
     "LICell",
     "LIFCell",
     "MembraneState",
     "ModulatedHebb",
     "OjaHebb",
-    "PlasticRecurrentCell",
-    "PlasticState",
     "RateCell",
     "RateState",
     "RecurrentCell",
     "RecurrentState",
     "RetroactiveHebb",
     "Serial",
-    "SparseRecurrentCell",
+    "Sparse",
+    "Wiring",
 ]
 
 
@@ -397,134 +398,130 @@ class ALIFCell:
         return state._replace(v=jump_after_threshold(state.v, jump, _overwritten(self.reset, fired)))
 
 
-class RecurrentState[State](NamedTuple):
-    inner: State
-    output: jax.Array
-    """The step's output, fed back in the next."""
+class Wiring(Protocol):
+    """Which units of a recurrent layer reach which, and with what weights: `Dense` or `Sparse`.
+
+    `send(output, fast)` carries a layer's outputs `[..., F]` back to every
+    unit's input through the wiring's weights, plus `fast`, extra weights
+    per example and connection (a plastic trace's), or None. A plasticity
+    rule reads values at each connection's presynaptic unit
+    (`presynaptic(x)`), at its postsynaptic unit (`postsynaptic(x)`), or one
+    per example at every connection (`per_example(x)`), so one rule serves
+    every wiring. `connections(shape)` is the shape of one value per
+    connection for outputs of `shape`, and refuses outputs the wiring does
+    not fit.
+    """
+
+    def connections(self, shape: tuple[int, ...]) -> tuple[int, ...]: ...
+
+    def send(self, output: jax.Array, fast: jax.Array | None) -> jax.Array: ...
+
+    def presynaptic(self, x: jax.Array) -> jax.Array: ...
+
+    def postsynaptic(self, x: jax.Array) -> jax.Array: ...
+
+    def per_example(self, x: jax.Array) -> jax.Array: ...
 
 
 @struct.dataclass
-class RecurrentCell[State]:
-    """Feed a model's output back to its own input jump through `weight`, `[F, F]`.
+class Dense:
+    """Every unit to every unit through `weight`, `[F, F]`, `weight[i, j]` from unit `i` to unit `j`.
 
-        output[t] = inner.step(x[t] + output[t-1] @ weight)
-
-    Wrapping `ALIFCell` gives the recurrent adaptive network (LSNN) of Bellec
-    et al. (2020); wrapping `RateCell` gives FLYNN's recurrence with a dense
-    `weight`, which multiplies from the right (`weight[i, j]` from unit `i`
-    to unit `j`). The product runs at `precision`, the matrix product
-    precision of `jax.lax.dot`. `cut_gradient` stops the gradient at the
-    fed-back output (the weight still receives its gradient), which is the
-    gradient e-prop computes online (their `stop_z_gradients`).
+    The product multiplies from the right at `precision`, the matrix
+    product precision of `jax.lax.dot`. A value per connection is `[..., F,
+    F]`.
     """
 
-    inner: NeuronModel[State]
     weight: jax.Array
     precision: PrecisionLike = struct.field(pytree_node=False, default=None)
-    cut_gradient: bool = struct.field(pytree_node=False, default=False)
 
-    @property
-    def graded(self) -> bool:
-        return self.inner.graded
+    def connections(self, shape: tuple[int, ...]) -> tuple[int, ...]:
+        if self.weight.shape != (shape[-1], shape[-1]):
+            raise ValueError(f"a [{shape[-1]}, {shape[-1]}] weight feeds {shape[-1]} units back, not "
+                             f"{list(self.weight.shape)}")
+        return (*shape, shape[-1])
 
-    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> RecurrentState[State]:
-        return RecurrentState(self.inner.init_state(shape, dtype), jnp.zeros(shape, dtype))
+    def send(self, output: jax.Array, fast: jax.Array | None) -> jax.Array:
+        if fast is None:
+            return jnp.matmul(output.astype(self.weight.dtype), self.weight, precision=self.precision)
+        weights = self.weight + fast
+        return jnp.einsum("...i,...ij->...j", output.astype(weights.dtype), weights, precision=self.precision)
 
-    def step(self, state: RecurrentState[State], inputs: SynapticInput,
-             dt: float) -> tuple[RecurrentState[State], Output]:
-        fed_back = jax.lax.stop_gradient(state.output) if self.cut_gradient else state.output
-        feedback = jnp.matmul(fed_back.astype(self.weight.dtype), self.weight, precision=self.precision)
-        fed = dataclasses.replace(inputs, jump=inputs.jump + feedback)
-        inner, out = self.inner.step(state.inner, fed, dt)
-        # The feedback promotes the step's input, so the output is cast back
-        # to the dtype the carry started with, the input's.
-        value = out.value.astype(state.output.dtype)
-        return RecurrentState(inner, value), Output(value, out.offset)
+    def presynaptic(self, x: jax.Array) -> jax.Array:
+        return x[..., :, None]
 
-    def is_refractory(self, state: RecurrentState[State], dt: float) -> jax.Array:
-        return self.inner.is_refractory(state.inner, dt)
+    def postsynaptic(self, x: jax.Array) -> jax.Array:
+        return x[..., None, :]
 
-    def after_threshold(self, state: RecurrentState[State], jump: jax.Array,
-                        fired: jax.Array) -> RecurrentState[State]:
-        return state._replace(inner=self.inner.after_threshold(state.inner, jump, fired))
+    def per_example(self, x: jax.Array) -> jax.Array:
+        return x[..., None, None]
 
 
 @struct.dataclass
-class SparseRecurrentCell[State]:
-    """Feed a model's output back to its own input through a list of weighted edges, `pre -> post`.
+class Sparse:
+    """Units wired along the edges `pre[e] -> post[e]` with `weight[e]`, among `size` units.
 
-        output[t] = inner.step(x[t] + sum_e weight[e] output[t-1][pre[e]] at post[e])
-
-    The sparse counterpart of `RecurrentCell`, for a wiring diagram whose
-    edges are a small part of all pairs: a connectome, where FLYNN (Wang and
-    Chen, arXiv 2607.00025) trains `weight` on the whole fly brain's 5.3
-    million edges among 139 thousand neurons. Each step gathers the
-    presynaptic outputs and sums them at their postsynaptic neurons, in time
-    and memory proportional to the edges. `size` is the number of neurons,
-    the last axis of the input; `pre` and `post` index it, and `weight` is
-    one value per edge, a leaf that trains like a dense matrix's entries.
+    For a wiring diagram whose edges are a small part of all pairs, a
+    connectome: FLYNN (Wang and Chen, arXiv 2607.00025) trains the whole fly
+    brain's 5.3 million edges among 139 thousand neurons. Sending gathers
+    the presynaptic outputs and sums them at their postsynaptic units, in
+    time and memory proportional to the edges. A value per connection is
+    one per edge, `[..., E]`.
     """
 
-    inner: NeuronModel[State]
     pre: jax.Array
     post: jax.Array
     weight: jax.Array
     size: int = struct.field(pytree_node=False)
 
-    @property
-    def graded(self) -> bool:
-        return self.inner.graded
-
-    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> RecurrentState[State]:
+    def connections(self, shape: tuple[int, ...]) -> tuple[int, ...]:
         if shape[-1] != self.size:
-            raise ValueError(f"the cell's {self.size} neurons read inputs of {self.size} features, "
+            raise ValueError(f"the wiring's {self.size} units read inputs of {self.size} features, "
                              f"not {shape[-1]}")
-        return RecurrentState(self.inner.init_state(shape, dtype), jnp.zeros(shape, dtype))
+        return (*shape[:-1], self.weight.shape[0])
 
-    def step(self, state: RecurrentState[State], inputs: SynapticInput,
-             dt: float) -> tuple[RecurrentState[State], Output]:
-        sent = state.output.astype(self.weight.dtype)[..., self.pre] * self.weight
-        feedback = jnp.moveaxis(jax.ops.segment_sum(jnp.moveaxis(sent, -1, 0), self.post, self.size), 0, -1)
-        fed = dataclasses.replace(inputs, jump=inputs.jump + feedback)
-        inner, out = self.inner.step(state.inner, fed, dt)
-        value = out.value.astype(state.output.dtype)
-        return RecurrentState(inner, value), Output(value, out.offset)
+    def send(self, output: jax.Array, fast: jax.Array | None) -> jax.Array:
+        weights = self.weight if fast is None else self.weight + fast
+        sent = output.astype(weights.dtype)[..., self.pre] * weights
+        return jnp.moveaxis(jax.ops.segment_sum(jnp.moveaxis(sent, -1, 0), self.post, self.size), 0, -1)
 
-    def is_refractory(self, state: RecurrentState[State], dt: float) -> jax.Array:
-        return self.inner.is_refractory(state.inner, dt)
+    def presynaptic(self, x: jax.Array) -> jax.Array:
+        return x[..., self.pre]
 
-    def after_threshold(self, state: RecurrentState[State], jump: jax.Array,
-                        fired: jax.Array) -> RecurrentState[State]:
-        return state._replace(inner=self.inner.after_threshold(state.inner, jump, fired))
+    def postsynaptic(self, x: jax.Array) -> jax.Array:
+        return x[..., self.post]
 
+    def per_example(self, x: jax.Array) -> jax.Array:
+        return x[..., None]
 
 
 class HebbianRule[Trace](Protocol):
-    """How the Hebbian trace of a `PlasticRecurrentCell` changes over a step.
+    """How a recurrent layer's Hebbian trace changes over a step, on any `Wiring`.
 
-    A rule keeps a `Trace` of what it has seen, `init_trace(shape, dtype)`
-    at the start of a sequence for outputs of `shape` `[..., F]`, and
-    `hebb(trace)` is the `[..., F, F]` matrix the cell scales by `alpha`.
-    `update(trace, pre, post, dt)` takes the output fed back this step
-    (`pre`, `[..., F]`) and the step's new output (`post`); the entry
-    `[..., i, j]` belongs to the connection from unit `i` to unit `j`.
+    A rule keeps a `Trace` of what it has seen, `init_trace(wiring, shape,
+    dtype)` at the start of a sequence for outputs of `shape` `[..., F]`,
+    and `hebb(trace)` is the value per connection that `FastWeights.alpha`
+    scales. `update(trace, wiring, pre, post, dt)` takes the output fed back
+    this step (`pre`, `[..., F]`) and the step's new output (`post`), and
+    reads them through the wiring's `presynaptic`, `postsynaptic` and
+    `per_example`.
     """
 
-    def init_trace(self, shape: tuple[int, ...], dtype: jnp.dtype) -> Trace: ...
+    def init_trace(self, wiring: Wiring, shape: tuple[int, ...], dtype: jnp.dtype) -> Trace: ...
 
     def hebb(self, trace: Trace) -> jax.Array: ...
 
-    def update(self, trace: Trace, pre: jax.Array, post: jax.Array, dt: float) -> Trace: ...
+    def update(self, trace: Trace, wiring: Wiring, pre: jax.Array, post: jax.Array, dt: float) -> Trace: ...
 
 
-def _coactivity(pre: jax.Array, post: jax.Array) -> jax.Array:
-    """`pre[..., i] * post[..., j]`, `[..., F, F]`."""
-    return pre[..., :, None] * post[..., None, :]
+def _coactivity(wiring: Wiring, pre: jax.Array, post: jax.Array) -> jax.Array:
+    """`pre` at each connection's presynaptic unit times `post` at its postsynaptic unit."""
+    return wiring.presynaptic(pre) * wiring.postsynaptic(post)
 
 
-def _connections(shape: tuple[int, ...], dtype: jnp.dtype) -> jax.Array:
-    """Zeros, one per connection among outputs of `shape`: `[..., F, F]`, at least float32."""
-    return jnp.zeros((*shape, shape[-1]), membrane_dtype(dtype))
+def _connections(wiring: Wiring, shape: tuple[int, ...], dtype: jnp.dtype) -> jax.Array:
+    """Zeros, one per connection of `wiring` for outputs of `shape`, at least float32."""
+    return jnp.zeros(wiring.connections(shape), membrane_dtype(dtype))
 
 
 def _modulation(post: jax.Array, modulator: jax.Array, bias: jax.Array | float) -> jax.Array:
@@ -548,15 +545,16 @@ class DecayingHebb:
 
     eta: jax.Array | float
 
-    def init_trace(self, shape: tuple[int, ...], dtype: jnp.dtype) -> jax.Array:
-        return _connections(shape, dtype)
+    def init_trace(self, wiring: Wiring, shape: tuple[int, ...], dtype: jnp.dtype) -> jax.Array:
+        return _connections(wiring, shape, dtype)
 
     def hebb(self, trace: jax.Array) -> jax.Array:
         return trace
 
-    def update(self, trace: jax.Array, pre: jax.Array, post: jax.Array, dt: float) -> jax.Array:
+    def update(self, trace: jax.Array, wiring: Wiring, pre: jax.Array, post: jax.Array,
+               dt: float) -> jax.Array:
         keep = (1 - self.eta) ** dt
-        return keep * trace + (1 - keep) * _coactivity(pre, post)
+        return keep * trace + (1 - keep) * _coactivity(wiring, pre, post)
 
 
 @struct.dataclass
@@ -572,15 +570,16 @@ class OjaHebb:
 
     eta: jax.Array | float
 
-    def init_trace(self, shape: tuple[int, ...], dtype: jnp.dtype) -> jax.Array:
-        return _connections(shape, dtype)
+    def init_trace(self, wiring: Wiring, shape: tuple[int, ...], dtype: jnp.dtype) -> jax.Array:
+        return _connections(wiring, shape, dtype)
 
     def hebb(self, trace: jax.Array) -> jax.Array:
         return trace
 
-    def update(self, trace: jax.Array, pre: jax.Array, post: jax.Array, dt: float) -> jax.Array:
-        target = post[..., None, :]
-        return trace + dt * self.eta * target * (pre[..., :, None] - target * trace)
+    def update(self, trace: jax.Array, wiring: Wiring, pre: jax.Array, post: jax.Array,
+               dt: float) -> jax.Array:
+        target = wiring.postsynaptic(post)
+        return trace + dt * self.eta * target * (wiring.presynaptic(pre) - target * trace)
 
 
 @struct.dataclass
@@ -605,23 +604,25 @@ class ModulatedHebb:
     fanout_bias: jax.Array | float
     clip: float = struct.field(pytree_node=False, default=2.0)
 
-    def init_trace(self, shape: tuple[int, ...], dtype: jnp.dtype) -> jax.Array:
-        return _connections(shape, dtype)
+    def init_trace(self, wiring: Wiring, shape: tuple[int, ...], dtype: jnp.dtype) -> jax.Array:
+        return _connections(wiring, shape, dtype)
 
     def hebb(self, trace: jax.Array) -> jax.Array:
         return trace
 
-    def update(self, trace: jax.Array, pre: jax.Array, post: jax.Array, dt: float) -> jax.Array:
+    def update(self, trace: jax.Array, wiring: Wiring, pre: jax.Array, post: jax.Array,
+               dt: float) -> jax.Array:
         level = _modulation(post, self.modulator, self.modulator_bias)
         eta = level[..., None] * self.fanout + self.fanout_bias
-        return jnp.clip(trace + dt * eta[..., None, :] * _coactivity(pre, post), -self.clip, self.clip)
+        change = dt * wiring.postsynaptic(eta) * _coactivity(wiring, pre, post)
+        return jnp.clip(trace + change, -self.clip, self.clip)
 
 
 class EligibleHebb(NamedTuple):
     hebb: jax.Array
-    """The plastic part of the weights, `[..., F, F]`, which the modulator writes."""
+    """The plastic part of the weights, one value per connection, which the modulator writes."""
     eligibility: jax.Array
-    """The recent coactivity of each connection, `[..., F, F]`."""
+    """The recent coactivity of each connection."""
 
 
 @struct.dataclass
@@ -646,80 +647,113 @@ class RetroactiveHebb:
     eta: jax.Array | float
     clip: float = struct.field(pytree_node=False, default=1.0)
 
-    def init_trace(self, shape: tuple[int, ...], dtype: jnp.dtype) -> EligibleHebb:
-        return EligibleHebb(_connections(shape, dtype), _connections(shape, dtype))
+    def init_trace(self, wiring: Wiring, shape: tuple[int, ...], dtype: jnp.dtype) -> EligibleHebb:
+        return EligibleHebb(_connections(wiring, shape, dtype), _connections(wiring, shape, dtype))
 
     def hebb(self, trace: EligibleHebb) -> jax.Array:
         return trace.hebb
 
-    def update(self, trace: EligibleHebb, pre: jax.Array, post: jax.Array, dt: float) -> EligibleHebb:
-        level = _modulation(post, self.modulator, self.modulator_bias)[..., None, None]
+    def update(self, trace: EligibleHebb, wiring: Wiring, pre: jax.Array, post: jax.Array,
+               dt: float) -> EligibleHebb:
+        level = wiring.per_example(_modulation(post, self.modulator, self.modulator_bias))
         hebb = jnp.clip(trace.hebb + dt * level * trace.eligibility, -self.clip, self.clip)
         keep = (1 - self.eta) ** dt
-        return EligibleHebb(hebb, keep * trace.eligibility + (1 - keep) * _coactivity(pre, post))
-
-
-class PlasticState[State, Trace](NamedTuple):
-    inner: State
-    output: jax.Array
-    """The step's output, fed back in the next."""
-    trace: Trace
-    """What the rule keeps, one per example."""
+        return EligibleHebb(hebb, keep * trace.eligibility + (1 - keep) * _coactivity(wiring, pre, post))
 
 
 @struct.dataclass
-class PlasticRecurrentCell[State, Trace]:
-    """Feed a model's output back through fixed weights plus a Hebbian trace that changes as it runs.
+class FastWeights[Trace]:
+    """Fast weights on a wiring: `alpha` times the Hebbian trace that `rule` keeps, added to each weight.
 
-        output[t] = inner.step(x[t] + output[t-1] @ (weight + alpha * hebb[t-1]))
+    Differentiable plasticity (Miconi et al. 2018): `alpha` is how much of
+    its trace each connection adds, one per connection (`[F, F]` on a
+    `Dense` wiring, `[E]` on a `Sparse` one) or anything that broadcasts to
+    it (`[F]`, one per postsynaptic unit on a dense wiring, as in
+    Backpropamine's language models), learned by backpropagating through
+    the traces. Each example's trace starts at zero, so what the network
+    stores in it is what that sequence taught it. The rules are
+    `DecayingHebb` and `OjaHebb` (2018), `ModulatedHebb` and
+    `RetroactiveHebb` (Backpropamine, 2019), or any `HebbianRule`.
+    """
+
+    alpha: jax.Array | float
+    rule: HebbianRule[Trace]
+
+
+class RecurrentState[State, Trace](NamedTuple):
+    inner: State
+    output: jax.Array
+    """The step's output, fed back in the next."""
+    trace: Trace | None = None
+    """What the fast weights' rule keeps, one per example; None without fast weights."""
+
+
+@struct.dataclass
+class RecurrentCell[State, Trace]:
+    """Feed a model's output back to its own input through `wiring`, fixed or plastic.
+
+        output[t] = inner.step(x[t] + send(output[t-1], alpha * hebb[t-1]))
         hebb[t] = rule.update(hebb[t-1], output[t-1], output[t], dt)
 
-    Differentiable plasticity (Miconi et al. 2018): `weight` and `alpha`,
-    `[F, F]`, are each connection's fixed weight and how much of its trace
-    it adds, learned by backpropagating through the traces, and `alpha`
-    `[F]` gives one per postsynaptic unit (Backpropamine's language models).
-    Each example's trace starts at zero, so what the network stores in it
-    is what that sequence taught it. Wrapping `RateCell(0.0)`, a tanh unit
-    without leak, gives their networks, with the rule `DecayingHebb` or
-    `OjaHebb` (2018), `ModulatedHebb` or `RetroactiveHebb` (Backpropamine,
-    2019); a spiking model gives fast weights between spikes. The trace is
-    part of the state, so a stream fed in chunks carries it, and
-    backpropagating holds one per example per step, `T * B * F * F` values
-    for the Hebbian trace alone. `weight[i, j]` runs from unit `i` to unit
-    `j`, as in `RecurrentCell`; the product runs at `precision`.
+    The wiring is `Dense`, every unit to every unit, or `Sparse`, along a
+    list of edges such as a connectome's. With `fast_weights` (`FastWeights`),
+    a Hebbian trace each sequence writes adds fast weights to the wiring's;
+    without, the trace stays None and the weights fixed. Any model runs
+    inside: `ALIFCell` gives the recurrent adaptive network (LSNN) of Bellec
+    et al. (2020), `RateCell` FLYNN's recurrence (on a `Sparse` wiring, its
+    connectome), `RateCell(0.0)` with plasticity Miconi et al.'s networks,
+    and a spiking model fast weights between spikes. The trace is part of
+    the state, so a stream fed in chunks carries it, and backpropagating
+    through a plastic cell holds one per example per step. `cut_gradient`
+    stops the gradient at the fed-back output (the weights still receive
+    theirs), the gradient e-prop computes online (their `stop_z_gradients`).
     """
 
     inner: NeuronModel[State]
-    weight: jax.Array
-    alpha: jax.Array | float
-    rule: HebbianRule[Trace]
-    precision: PrecisionLike = struct.field(pytree_node=False, default=None)
+    wiring: Wiring
+    fast_weights: FastWeights[Trace] | None = None
+    cut_gradient: bool = struct.field(pytree_node=False, default=False)
 
     @property
     def graded(self) -> bool:
         return self.inner.graded
 
-    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> PlasticState[State, Trace]:
-        return PlasticState(self.inner.init_state(shape, dtype), jnp.zeros(shape, dtype),
-                            self.rule.init_trace(shape, dtype))
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> RecurrentState[State, Trace]:
+        self.wiring.connections(shape)
+        rule = None if self.fast_weights is None else self.fast_weights.rule
+        trace = None if rule is None else rule.init_trace(self.wiring, shape, dtype)
+        return RecurrentState(self.inner.init_state(shape, dtype), jnp.zeros(shape, dtype), trace)
 
-    def step(self, state: PlasticState[State, Trace], inputs: SynapticInput,
-             dt: float) -> tuple[PlasticState[State, Trace], Output]:
-        hebb = self.rule.hebb(state.trace)
-        pre = state.output.astype(hebb.dtype)
-        weights = self.weight + self.alpha * hebb
-        feedback = jnp.einsum("...i,...ij->...j", pre, weights, precision=self.precision)
+    def step(self, state: RecurrentState[State, Trace], inputs: SynapticInput,
+             dt: float) -> tuple[RecurrentState[State, Trace], Output]:
+        fed_back = jax.lax.stop_gradient(state.output) if self.cut_gradient else state.output
+        if self.fast_weights is None:
+            feedback = self.wiring.send(fed_back, None)
+        else:
+            assert state.trace is not None, "init_state gives a cell with fast weights its trace"
+            hebb = self.fast_weights.rule.hebb(state.trace)
+            feedback = self.wiring.send(fed_back.astype(hebb.dtype), self.fast_weights.alpha * hebb)
         fed = dataclasses.replace(inputs, jump=inputs.jump + feedback)
         inner, out = self.inner.step(state.inner, fed, dt)
+        # The feedback promotes the step's input, so the output is cast back
+        # to the dtype the carry started with, the input's.
         value = out.value.astype(state.output.dtype)
-        trace = self.rule.update(state.trace, pre, value.astype(hebb.dtype), dt)
-        # The weights promote the trace's update, so each part is cast back to the dtype it started in.
-        trace = jax.tree.map(lambda new, old: new.astype(old.dtype), trace, state.trace)
-        return PlasticState(inner, value, trace), Output(value, out.offset)
+        return RecurrentState(inner, value, self._learned(state, value, dt)), Output(value, out.offset)
 
-    def is_refractory(self, state: PlasticState[State, Trace], dt: float) -> jax.Array:
+    def _learned(self, state: RecurrentState[State, Trace], value: jax.Array, dt: float) -> Trace | None:
+        """The trace after the step that output `value`, in its dtypes; None without fast weights."""
+        if self.fast_weights is None:
+            return state.trace
+        assert state.trace is not None, "init_state gives a cell with fast weights its trace"
+        rule = self.fast_weights.rule
+        kept = rule.hebb(state.trace).dtype
+        trace = rule.update(state.trace, self.wiring, state.output.astype(kept), value.astype(kept), dt)
+        # The weights promote the update, so each part is cast back to the dtype it started in.
+        return jax.tree.map(lambda new, old: new.astype(old.dtype), trace, state.trace)
+
+    def is_refractory(self, state: RecurrentState[State, Trace], dt: float) -> jax.Array:
         return self.inner.is_refractory(state.inner, dt)
 
-    def after_threshold(self, state: PlasticState[State, Trace], jump: jax.Array,
-                        fired: jax.Array) -> PlasticState[State, Trace]:
+    def after_threshold(self, state: RecurrentState[State, Trace], jump: jax.Array,
+                        fired: jax.Array) -> RecurrentState[State, Trace]:
         return state._replace(inner=self.inner.after_threshold(state.inner, jump, fired))

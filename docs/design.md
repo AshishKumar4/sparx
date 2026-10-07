@@ -235,9 +235,9 @@ It compiles one chunk of the time loop, carries state between chunks, streams mo
 | Forward and online learning | forward-mode gradients through the `custom_jvp`; e-prop (Bellec et al. 2020) and OTTT (Xiao et al. 2022) as eligibility-trace updates every step, memory independent of `T` | `sparx.learn.online`, with a dew objective that updates every chunk |
 | Local plasticity | STDP, triplet STDP and reward-modulated STDP (Izhikevich 2007, NEST's `stdp_dopamine_synapse`) as state updates during simulation | `sparx.dynamics.plasticity` |
 | Reward-driven learning | REINFORCE (Williams 1992) for escape-noise neurons: an eligibility per synapse, `d log P(spikes) / dw`, weighed by the reward | `sparx.learn.reinforce` |
-| Fast weights | differentiable plasticity and Backpropamine (Miconi et al. 2018, 2019): Hebbian traces each sequence writes, their plasticity learned by BPTT | `sparx.dynamics.PlasticRecurrentCell`, `sparx.nn.Plastic` |
+| Fast weights | differentiable plasticity and Backpropamine (Miconi et al. 2018, 2019): Hebbian traces each sequence writes on a recurrent cell's dense or sparse wiring, their plasticity learned by BPTT | `sparx.dynamics.RecurrentCell` with `FastWeights`, `sparx.nn.Recurrent(rule=...)` |
 | Local energy minimization | predictive coding and PC-ALM (Seely and Gould 2026): hidden activity relaxed on a layered energy, each weight's update read from its own layer's error | `sparx.learn.predictive`, with a dew objective that hands the update to the trainer |
-| Trainable connectomes | FLYNN (Wang and Chen 2026): a rate unit per neuron, recurrent through the connectome's synapses, every weight, bias and class leak trained by BPTT | `sparx.graph.connectome.FLYNN`, `sparx.dynamics.SparseRecurrentCell` |
+| Trainable connectomes | FLYNN (Wang and Chen 2026): a rate unit per neuron, recurrent through the connectome's synapses (a `Sparse` wiring), every weight, bias and class leak trained by BPTT, fast weights optional | `sparx.graph.connectome.FLYNN` |
 | Fitting to recordings | gradient descent on network parameters against recorded spikes, rates or voltages, with spike-train distances (van Rossum 2001, Victor-Purpura 1996) and PSTH losses | `sparx.objectives.ActivityFitObjective` |
 | Conversion | trained ANN weights mapped to an IF network with threshold balancing | `sparx.learn.convert` |
 

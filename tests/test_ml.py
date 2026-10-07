@@ -7,16 +7,18 @@ import reference
 from sparx.dynamics import (
     ALIFCell,
     BernoulliCell,
+    DecayingHebb,
+    Dense,
+    FastWeights,
     Izhikevich,
     LICell,
     LIFCell,
     ModulatedHebb,
-    PlasticRecurrentCell,
     RateCell,
     RecurrentCell,
     RetroactiveHebb,
     Serial,
-    SparseRecurrentCell,
+    Sparse,
     SynapticInput,
     Term,
     run,
@@ -106,8 +108,8 @@ def test_a_recurrent_rate_cell_is_flynns_recurrence(activation):
     weight = rng.normal(0, 0.6, (F, F)).astype(np.float32)
     alpha = rng.uniform(0.3, 0.95, F).astype(np.float32)  # one leak per unit, as FLYNN's classes give them
     bias = rng.normal(0, 0.3, F).astype(np.float32)
-    model = RecurrentCell(RateCell(jnp.asarray(alpha), jnp.asarray(bias), activation), jnp.asarray(weight),
-                          jax.lax.Precision.HIGHEST)
+    model = RecurrentCell(RateCell(jnp.asarray(alpha), jnp.asarray(bias), activation),
+                          Dense(jnp.asarray(weight), jax.lax.Precision.HIGHEST))
     out, state = run(model, jnp.asarray(xs))
     expected = reference.flynn(*(a.astype(np.float64) for a in (xs, weight, alpha, bias)), activation)
     # Observed 1.2e-7 (tanh), 6.0e-8 (sigmoid), 1.5e-5 (relu, whose activity grows past 300).
@@ -133,7 +135,7 @@ def test_the_graded_models_say_so_and_the_spiking_ones_do_not():
     assert LICell(0.5).graded and RateCell(0.5).graded
     assert not LIFCell(0.5).graded and not ALIFCell(0.5, 0.9).graded
     assert Serial(LIFCell(0.5), LICell(0.5)).graded and not Serial(LICell(0.5), LIFCell(0.5)).graded
-    assert RecurrentCell(RateCell(0.5), jnp.eye(2)).graded
+    assert RecurrentCell(RateCell(0.5), Dense(jnp.eye(2))).graded
 
 
 @pytest.mark.parametrize("reset", ["subtract", "zero", "none"])
@@ -230,13 +232,15 @@ def test_izhikevich_regular_spiking_fires_tonically_at_the_published_rate():
 def test_recurrent_lif_matches_the_reference_loop():
     xs = currents(7, scale=0.6)
     weight = np.random.default_rng(8).normal(0, 0.3, (F, F)).astype(np.float32)
-    model = RecurrentCell(LIFCell(0.8), jnp.asarray(weight), jax.lax.Precision.HIGHEST)
+    model = RecurrentCell(LIFCell(0.8), Dense(jnp.asarray(weight), jax.lax.Precision.HIGHEST))
     spikes, _ = fired(model, jnp.asarray(xs))
     expected = reference.recurrent_lif(xs.astype(np.float64), weight.astype(np.float64), 0.8)
     np.testing.assert_array_equal(spikes, expected)
     without_feedback = reference.lif(xs.astype(np.float64), 0.8)[0]
     assert (expected != without_feedback).any()
 
+
+PRE, POST = [0, 1, 2, 3, 4, 5, 6, 2, 5], [1, 2, 3, 4, 5, 6, 0, 0, 3]  # a ring and two chords among F
 
 MODELS = {
     "lif": LIFCell(0.8),
@@ -247,24 +251,30 @@ MODELS = {
     "izhikevich": Izhikevich(),
     "recurrent_alif": RecurrentCell(
         ALIFCell(0.9, 0.95, beta=0.3),
-        jnp.asarray(np.random.default_rng(9).normal(0, 0.3, (F, F)), jnp.float32)),
+        Dense(jnp.asarray(np.random.default_rng(9).normal(0, 0.3, (F, F)), jnp.float32))),
     "recurrent_rate": RecurrentCell(
-        RateCell(0.8, 0.1), jnp.asarray(np.random.default_rng(9).normal(0, 0.5, (F, F)), jnp.float32)),
+        RateCell(0.8, 0.1), Dense(jnp.asarray(np.random.default_rng(9).normal(0, 0.5, (F, F)), jnp.float32))),
     "bernoulli": BernoulliCell(0.8, beta=3.0),
-    "plastic_rate": PlasticRecurrentCell(
-        RateCell(0.0), jnp.asarray(np.random.default_rng(9).normal(0, 0.5, (F, F)), jnp.float32),
-        jnp.asarray(np.random.default_rng(10).normal(0, 0.5, (F, F)), jnp.float32),
-        ModulatedHebb(jnp.full(F, 0.5), 0.1, jnp.linspace(-2.0, 2.0, F), 0.1)),
-    "sparse_rate": SparseRecurrentCell(
-        RateCell(jnp.linspace(0.2, 0.9, F), 0.1), jnp.asarray([0, 1, 2, 3, 4, 5, 6, 2, 5]),
-        jnp.asarray([1, 2, 3, 4, 5, 6, 0, 0, 3]), jnp.asarray(np.random.default_rng(11).normal(0, 0.8, 9)),
-        F),
-    "sparse_lif": SparseRecurrentCell(
-        LIFCell(0.8), jnp.asarray([0, 1, 2, 3, 4, 5, 6, 2, 5]), jnp.asarray([1, 2, 3, 4, 5, 6, 0, 0, 3]),
-        jnp.asarray(np.random.default_rng(12).normal(0, 0.5, 9), jnp.float32), F),
-    "plastic_lif": PlasticRecurrentCell(
-        LIFCell(0.8), jnp.asarray(np.random.default_rng(9).normal(0, 0.3, (F, F)), jnp.float32),
-        jnp.full(F, 0.5), RetroactiveHebb(jnp.full(F, 0.5), -0.2, 0.3)),
+    "plastic_rate": RecurrentCell(
+        RateCell(0.0), Dense(jnp.asarray(np.random.default_rng(9).normal(0, 0.5, (F, F)), jnp.float32)),
+        FastWeights(jnp.asarray(np.random.default_rng(10).normal(0, 0.5, (F, F)), jnp.float32),
+                    ModulatedHebb(jnp.full(F, 0.5), 0.1, jnp.linspace(-2.0, 2.0, F), 0.1))),
+    "sparse_rate": RecurrentCell(
+        RateCell(jnp.linspace(0.2, 0.9, F), 0.1),
+        Sparse(jnp.asarray(PRE), jnp.asarray(POST), jnp.asarray(np.random.default_rng(11).normal(0, 0.8, 9)),
+               F)),
+    "sparse_lif": RecurrentCell(
+        LIFCell(0.8),
+        Sparse(jnp.asarray(PRE), jnp.asarray(POST),
+               jnp.asarray(np.random.default_rng(12).normal(0, 0.5, 9), jnp.float32), F)),
+    "plastic_lif": RecurrentCell(
+        LIFCell(0.8), Dense(jnp.asarray(np.random.default_rng(9).normal(0, 0.3, (F, F)), jnp.float32)),
+        FastWeights(jnp.full(F, 0.5), RetroactiveHebb(jnp.full(F, 0.5), -0.2, 0.3))),
+    "plastic_sparse": RecurrentCell(
+        RateCell(0.3, 0.1),
+        Sparse(jnp.asarray(PRE), jnp.asarray(POST), jnp.asarray(np.random.default_rng(13).normal(0, 0.8, 9)),
+               F),
+        FastWeights(jnp.asarray(np.random.default_rng(14).normal(0, 0.5, 9)), DecayingHebb(0.3))),
 }
 
 
@@ -307,7 +317,7 @@ def test_bf16_inputs_give_bf16_spikes_over_a_float32_membrane():
 
 def test_recurrent_bf16_carry_keeps_its_dtype():
     xs = jnp.asarray(currents(13), jnp.bfloat16)
-    model = RecurrentCell(LIFCell(0.8), jnp.eye(F, dtype=jnp.float32) * 0.2)
+    model = RecurrentCell(LIFCell(0.8), Dense(jnp.eye(F, dtype=jnp.float32) * 0.2))
     spikes, state = fired(model, xs)
     assert spikes.dtype == jnp.bfloat16
     assert state.output.dtype == jnp.bfloat16
