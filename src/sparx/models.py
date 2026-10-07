@@ -16,13 +16,14 @@ layers, and a leaky integrator readout. With every synapse delayed it is the
 network of Hammouamri et al.'s SNN-delays (ICLR 2024).
 
 `neuron` is the template every neuron layer of a model copies, such as
-`sparx.nn.LIF(tau=2.0, detach_reset=True)`. It is a registered value, so a
-run's record holds it as `{"name": "lif", "fields": {...}}` and rebuilds the model. Each
-copy (`sparx.nn.adopt`) belongs to the block that uses it, so its parameters
-(a learned time constant) are that block's own.
+`sparx.nn.LIF(tau=2.0, detach_reset=True)`. A run's record holds it as dew
+records any class, `{"class": "sparx.nn.neurons:LIF", "fields": {...}}`, and
+rebuilds the model from it. Each copy (`sparx.nn.adopt`) belongs to the
+block that uses it, so its parameters (a learned time constant) are that
+block's own.
 
-Both models are registered in dew's model registry, `sew_resnet` and
-`spiking_mlp`, and take `train` as dew's objectives pass it.
+Both models take `train` as dew's objectives pass it, and a run names them
+by import path (`--model sparx.models:SpikingMLP`).
 
 Their synapses follow dew's precision fields, as dew's models do: `dtype`
 is the dtype the convolutions, dense and delayed synapses and batch norms
@@ -42,7 +43,6 @@ from typing import Literal
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-from dew.registry import models
 from flax.typing import Dtype, PrecisionLike
 
 from sparx.nn.delays import DelayedDense
@@ -106,7 +106,6 @@ class SEWBlock(nn.Module):
         return connect(shortcut, residual, self.connect)
 
 
-@models("sew_resnet")
 class SEWResNet(nn.Module):
     """A SEW ResNet over `[T, B, H, W, C]` inputs, returning per-step logits `[T, B, classes]`.
 
@@ -163,7 +162,6 @@ def sew_resnet34(classes: int, **kwargs) -> SEWResNet:
     return SEWResNet((3, 4, 6, 3), classes, **kwargs)
 
 
-@models("spiking_mlp")
 class SpikingMLP(nn.Module):
     """Dense spiking layers over `[T, B, ...]` with a leaky integrator readout `[T, B, classes]`.
 

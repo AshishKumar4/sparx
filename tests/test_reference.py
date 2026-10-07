@@ -325,25 +325,25 @@ def test_event_binning_reproduces_snn_delays_frames():
     assert np.flatnonzero(grid.sum(1)).max() >= steps
 
 
-def test_schedules_stepped_once_an_epoch_are_snn_delays_torch_schedulers():
-    from dew.training.optim import Cosine
+def test_dews_schedules_stepped_once_an_epoch_are_snn_delays_torch_schedulers():
+    from dew.training.optim import Cosine, Exponential, OneCycle
 
-    from sparx.optim import ExponentialDecay, OneCycle, stepped
     epochs, per_epoch = int(SNN_DELAYS["schedule/epochs"]), 3
     steps = np.arange(epochs) * per_epoch + 1  # a step inside each epoch
 
     def values(schedule):
-        return np.asarray(jax.vmap(stepped(schedule, epochs * per_epoch, per_epoch))(jnp.asarray(steps)))
+        return np.asarray(jax.vmap(schedule.schedule(epochs * per_epoch))(jnp.asarray(steps)))
 
     # OneCycleLR(max_lr=5e-3, total_steps=epochs) and its Adam momentum cycle.
-    np.testing.assert_allclose(values(OneCycle(peak=5e-3, start=2e-4, end=2e-8)), SNN_DELAYS["schedule/lr_w"],
-                               rtol=1e-5)  # observed 7.8e-6 relative
-    np.testing.assert_allclose(values(OneCycle(peak=0.85, start=0.95, end=0.95)), SNN_DELAYS["schedule/b1"],
-                               rtol=1e-6)  # observed 6.0e-8 relative
+    lr_w = OneCycle(peak=5e-3, init=2e-4, end=2e-8, every=per_epoch)
+    # Observed 7.8e-6 relative.
+    np.testing.assert_allclose(values(lr_w), SNN_DELAYS["schedule/lr_w"], rtol=1e-5)
+    b1 = OneCycle(peak=0.85, init=0.95, end=0.95, every=per_epoch)
+    np.testing.assert_allclose(values(b1), SNN_DELAYS["schedule/b1"], rtol=1e-6)  # observed 6.0e-8 relative
     # CosineAnnealingLR(T_max=epochs) on the positions' rate, 100 times the weights' 1e-3.
-    np.testing.assert_allclose(values(Cosine(peak=0.1, warmup_steps=0)), SNN_DELAYS["schedule/lr_pos"],
-                               rtol=1e-4, atol=1e-8)  # observed 9.6e-9
+    np.testing.assert_allclose(values(Cosine(peak=0.1, warmup_steps=0, every=per_epoch)),
+                               SNN_DELAYS["schedule/lr_pos"], rtol=1e-4, atol=1e-8)  # observed 9.6e-9
     # decrease_sig: DCLS's raw width from 12 to 0.23 over the first quarter; sparx's width adds 0.27.
-    width = ExponentialDecay(start=12.0, end=0.23, decay_steps=epochs // 4, offset=0.27)
+    width = Exponential(init=12.0, end=0.23, decay_steps=epochs // 4, offset=0.27, every=per_epoch)
     # Observed 4.1e-7 relative.
     np.testing.assert_allclose(values(width), SNN_DELAYS["schedule/sig"] + 0.27, rtol=1e-5)

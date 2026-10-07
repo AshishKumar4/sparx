@@ -54,7 +54,6 @@ from sparx.dynamics import (
     decay,
     run,
 )
-from sparx.registry import neurons
 from sparx.surrogate import ATan, Surrogate
 
 __all__ = [
@@ -183,7 +182,6 @@ def _decay(module: nn.Module, name: str, tau: float, learn: bool, features: int)
     return jax.nn.sigmoid(module.param(name, nn.initializers.constant(logit), (features,), jnp.float32))
 
 
-@neurons("lif")
 class LIF(Neuron):
     """Leaky integrate-and-fire (`sparx.dynamics.LIFCell`) with time constant `tau`.
 
@@ -202,7 +200,6 @@ class LIF(Neuron):
                        self.reset, self.surrogate, self.detach_reset)
 
 
-@neurons("if")
 class IF(Neuron):
     """Integrate-and-fire: LIF without leak."""
 
@@ -215,7 +212,6 @@ class IF(Neuron):
         return LIFCell(1.0, self.threshold, self.reset, self.surrogate, self.detach_reset)
 
 
-@neurons("li")
 class LI(Neuron):
     """A leaky integrator readout (`sparx.dynamics.LICell`); returns its membrane, `[T, ...]`."""
 
@@ -226,7 +222,6 @@ class LI(Neuron):
         return LICell(_decay(self, "decay", self.tau, self.learn_tau, x.shape[-1]))
 
 
-@neurons("rate")
 class Rate(Neuron):
     """A leaky rate unit (`sparx.dynamics.RateCell`), FLYNN's neuron; returns its activity, `[T, ...]`.
 
@@ -246,7 +241,6 @@ class Rate(Neuron):
         return RateCell(_decay(self, "decay", self.tau, self.learn_tau, features), bias, self.activation)
 
 
-@neurons("synaptic")
 class Synaptic(Neuron):
     """Current-based LIF, `Serial(LICell, LIFCell)`: synaptic time constant `tau_synapse`,
     membrane time constant `tau`."""
@@ -267,7 +261,6 @@ class Synaptic(Neuron):
                       LIFCell(membrane, self.threshold, self.reset, self.surrogate, self.detach_reset))
 
 
-@neurons("alif")
 class ALIF(Neuron):
     """Adaptive-threshold LIF (`sparx.dynamics.ALIFCell`).
 
@@ -295,7 +288,6 @@ class ALIF(Neuron):
             self.beta, self.threshold, self.reset, self.surrogate, self.detach_reset, self.refractory)
 
 
-@neurons("izhikevich")
 class Izhikevich(Neuron):
     """Izhikevich's neuron (`sparx.dynamics.Izhikevich`) on input currents; defaults are regular spiking.
 
@@ -357,7 +349,6 @@ class Dynamics(Neuron):
         return self.neuron
 
 
-@neurons("recurrent")
 class Recurrent(Neuron):
     """Feed `neuron`'s spikes back into its input through a learned `[F, F]` matrix.
 

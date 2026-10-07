@@ -7,7 +7,7 @@ Deep spiking networks:
 - `sparx.nn`: Flax layers over the neuron models, parallel spiking neurons and delayed synapses.
 - `sparx.models`: architectures built from them (`SEWResNet`, `SpikingMLP`).
 - `sparx.surrogate`: the spike and its surrogate gradients.
-- `sparx.encode`: the registered encoders that turn data into spike trains.
+- `sparx.encode`: the encoders that turn data into spike trains.
 - `sparx.losses` and `sparx.rates`: losses over time, firing-rate readouts and penalties.
 - `sparx.learn`: rules beyond backpropagation through time (e-prop, OTTT, EventProp, conversion).
 
@@ -22,13 +22,13 @@ Around them:
 
 - `sparx.objectives`: the objectives that train spiking networks under dew's `Trainer`, with
   `sparx.metrics` (their accuracy), `sparx.tasks` (the trained classifier `dew.pipeline` loads) and
-  `sparx.optim` (the schedules and per-group Adam SNN-delays needs).
+  `sparx.config` (`SNNRunConfig`, the run a recipe trains and `run.json` records).
 - `sparx.datasets`: spiking datasets as dew datasets (SHD).
 - `sparx.serve`: `StreamServer`, many streaming sessions in one batch.
 - `sparx.nir`: exchange through the Neuromorphic Intermediate Representation.
 
 `sparx.graph`, `sparx.learn`, `sparx.objectives`, `sparx.metrics`,
-`sparx.tasks`, `sparx.optim`, `sparx.datasets`, `sparx.serve` and
+`sparx.tasks`, `sparx.config`, `sparx.datasets`, `sparx.serve` and
 `sparx.nir` load on first access (`sparx.graph.Network` after `import
 sparx`). The graph, the objectives and the datasets import dew's trainer
 and data stack, about 0.9 s on a 4-core CPU, which a script that only
@@ -47,14 +47,14 @@ from sparx.rates import firing_rates, rate_penalty
 from sparx.surrogate import spike
 
 if TYPE_CHECKING:
-    from sparx import datasets, graph, learn, metrics, nir, objectives, optim, serve, tasks
+    from sparx import config, datasets, graph, learn, metrics, nir, objectives, serve, tasks
 
 __version__ = "0.1.0"
 
-_LAZY = ("datasets", "graph", "learn", "metrics", "nir", "objectives", "optim", "serve", "tasks")
+_LAZY = ("config", "datasets", "graph", "learn", "metrics", "nir", "objectives", "serve", "tasks")
 
-__all__ = ["__version__", "datasets", "dynamics", "encode", "firing_rates", "graph", "learn", "losses",
-           "metrics", "models", "nir", "nn", "objectives", "optim", "rate_penalty", "rates", "run", "serve",
+__all__ = ["__version__", "config", "datasets", "dynamics", "encode", "firing_rates", "graph", "learn",
+           "losses", "metrics", "models", "nir", "nn", "objectives", "rate_penalty", "rates", "run", "serve",
            "spike", "spiketrains", "surrogate", "tasks"]
 
 

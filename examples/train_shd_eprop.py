@@ -15,11 +15,10 @@ memory does not grow with the recording's length. `--rule bptt` trains the
 same network by backpropagation through time, for comparison. The class
 is the argmax of the readout averaged over time.
 
-`sparx.objectives.EPropObjective` is the dew objective. dew's trainer
-differentiates an objective's loss and has no hook for a gradient computed
-another way, so the objective's loss carries e-prop's gradient as its custom
-VJP; the trainer, its optimizer, checkpoints and evaluation are dew's as
-for any other objective. The test set is scored after each epoch, all 2264
+`sparx.objectives.EPropObjective` is the dew objective. Its loss hands
+e-prop's gradient to dew's trainer as the loss's own
+(`Objective.with_gradients`); the trainer, its optimizer, checkpoints and
+evaluation are dew's as for any other objective. The test set is scored after each epoch, all 2264
 recordings. `--smoke` trains a small layer for a few steps on synthetic
 recordings in SHD's layout and downloads nothing.
 """
@@ -34,7 +33,7 @@ import tyro
 from dew import Checkpoints, Field, Trainer
 from dew.data import Dataset, Loading
 
-from sparx.datasets import evaluation_pass, shd, write_synthetic_shd
+from sparx.datasets import shd, write_synthetic_shd
 from sparx.dynamics import ALIFCell, decay
 from sparx.metrics import Accuracy
 from sparx.objectives import EPropObjective
@@ -71,7 +70,7 @@ def main(config: Config) -> None:
         loading = Loading(workers=0, threads=1, read_buffer=1)
     train = shd("train", channels=config.channels, cache=config.cache)
     test = shd("test", channels=config.channels, cache=config.cache)
-    data = Dataset.from_records(train, batch=config.batch, seed=config.seed, loading=loading)
+    data = Dataset.from_records(train, batch=config.batch, seed=config.seed, validation=test, loading=loading)
     per_epoch = data.steps_per_epoch
     assert per_epoch is not None  # records held in memory have a count
     # Time in ms, in steps of 14 ms: membrane 20 ms, adaptation 200 ms and
@@ -84,7 +83,7 @@ def main(config: Config) -> None:
     trainer = Trainer(objective, optax.adam(config.learning_rate), key=jax.random.key(config.seed),
                       checkpoints=Checkpoints(str(config.out)))
     trainer.fit(data, steps=config.epochs * per_epoch, log_every=per_epoch, eval_every=per_epoch,
-                metrics=[Accuracy()], validation={"test": evaluation_pass(test, config.batch)})
+                metrics=[Accuracy()], validation={"test": data.val})
 
 
 if __name__ == "__main__":

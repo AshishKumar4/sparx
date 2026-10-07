@@ -4,8 +4,8 @@ The state of sparx and its dew work as of 6 October 2026: what exists, what is o
 
 ## State
 
-- `main` passes the full suite: 478 tests, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`) are clean. CI runs the same gate.
-- sparx pins dew at `306b2bf` on dew's `integration/all` (`pyproject.toml`).
+- The suite passes: 479 tests, plus the two whole-brain tests, which run when their data is present. ruff, pyright and the prose checker (`tools/lint_slop.py`) are clean. CI runs the same gate.
+- sparx pins dew at `6329435` on dew's `main` (`pyproject.toml`), which holds everything `integration/all` had.
 - Every commit is authored by Ashish Kumar Singh <ashishkmr472@gmail.com>.
 
 ### What sparx does
@@ -31,31 +31,34 @@ The state of sparx and its dew work as of 6 October 2026: what exists, what is o
 
 - **SHD, Hammouamri et al.'s recipe, 20 epochs, matched on one machine:** sparx 91.87%, against their official code's 93.59% at the last epoch and 94.03% at the best. A training step's gradients agree with theirs to 6e-7. The README lists the differences that remain.
 - **FlyWire whole brain:** 1.9 ms per 0.1 ms step on a 4-core CPU.
-- **No GPU or TPU numbers exist yet.**
-
-## dew: the bedrock
+- **No GPU or TPU n## dew: the bedrock
 
 The owner's rule: dew is the foundation wherever it has the concept, and sparx dogfoods it. Changes to dew go only through issues and pull requests from branches. Never merge them, and never push to dew's shared branches; the owner merges.
 
-| dew | Status | What sparx does when it merges |
-|---|---|---|
-| #30 | open issue | Extension points for plugins; its comment proposes a stateful `Server` (`sparx.serve.StreamServer` would become dew's server) |
-| #32 | merged | `Objective.pipeline -> Task \| SavedTask`; sparx already uses it |
-| #34 | open PR | Public `to_json`: switch `_to_json` imports in `objectives`, the recipe and `test_encode` |
-| #37 | open PR | Schedules, per-epoch `every`, param-group schedules, momentum, bounds, coupled Adam decay (#36): delete `sparx.optim` and the objective's `optimizer` override; the recipe and example use `OptimConfig` param groups |
-| #38 | open PR | `Checkpoints.save_tree`/`restore_tree` (#35): replace the placeholder `TrainState` in `graph/simulate.py` |
-| #39 | open PR | Exported names, `Objective.pipeline_variables`: rename the `_pipeline_weights` call |
-| #40 | open PR | Scoring the last partial validation batch: delete `WEIGHT`, `whole_batches` and `evaluation_pass` in `sparx.datasets` |
-| #41 | open PR | Nested records through function members: delete the connectome special case in `graph/models.py` |
-| #42 | open PR | Refusing a precision setting the model has no field for: sparx models already declare the fields |
-| #43 | open issue | A gradient hook on `Objective`, which `EPropObjective` would use instead of its `custom_vjp` |
-| #44 | open issue | Export `dtype_name` and `ScheduleSpec` |
-| #45 | open issue | A CLI form for a mapping of records (the recipe's `schedules`) |
-| #46 | open issue | `lint_slop.py` taking a package argument, so sparx can drop its copy; NumPy object dtype false positive |
+On 7 October 2026 sparx moved from `integration/all` at `306b2bf` to dew's `main` at `6329435`. Every change sparx's stopgaps waited for had landed there, some in the owner's own form, and every stopgap is gone:
 
-Every stopgap in sparx carries a comment `Remove when AshishKumar4/dew#NN merges: ...`. Grep for `dew#` to find them. After a merge, move the pin in `pyproject.toml` to the new `integration/all` commit, delete the stopgaps, and run the full suite.
+- Records name classes by import path, and dew has no plugin registry (`6ac0bac2`). Sparx registers nothing; `sparx.registry` keeps two `Aliases` tables its own code reads (`spike_encoders`, `networks`), and a run loads with `trust=("sparx",)`.
+- Recipes are run classes: `sparx.config.SNNRunConfig` builds the run in `prepare`, and `dew train run.json --trust sparx` rebuilds it.
+- #37's schedules and parameter groups (`OneCycle`, `Exponential`, `every`, `ParamGroup` with schedule, `b1` and bounds): `sparx.optim` and the objective's `optimizer` override are deleted.
+- #38's mapping checkpoints: `simulate` saves `{"state", "key"}`.
+- #40's whole validation pass with `VALID_ROWS`: `WEIGHT`, `whole_batches` and `evaluation_pass` are deleted, and the objectives count rows through `Objective.row_mean`.
+- #41's nested records and #34's public record writer (`dew.registry.to_record`).
+- #43's gradient hook: `EPropObjective` hands e-prop's gradient over through `Objective.with_gradients`, with the memory the `custom_vjp` had (0.56 MB at T=100, 1.20 MB at T=1000, against 7.3 MB for BPTT at T=1000).
+- #44's exports and #45's one JSON flag for a mapping of records (`--objective.schedules`).
+- #46: dew's `tools/lint_slop.py` takes `--root` and `--package`, and adds SLOP010.
 
-A second batch of open work in dew's issue #36: item 5 (extra validation splits in `RunConfig.train`), and `val/loss` over the filled last batch, which #40 leaves out.
+This session had no GitHub API access to dew (read-only git), so the issues' and pull requests' own states were not read; the list above is what dew `main`'s code and commit messages show.
+
+Open in dew, for sparx:
+
+| What | Where it helps |
+|---|---|
+| #30, stateful serving | `sparx.serve.StreamServer` becomes dew's server |
+| Export `OMITTED` and `Omitted` from `dew.objectives.base` | an objective's `build_task` override needs the sentinel; sparx imports it outside `__all__` |
+| Export `Artifact` from `dew.artifacts` | a metric's `__call__` takes it, as `dew.objectives.base.Metric` declares; sparx imports it outside `__all__` |
+| A constructor for a validation reader alone | `Dataset.from_records(records, batch=..., validation=split).val` builds a training stream too, and refuses a source smaller than one batch, so the SNN-delays example pairs its holdout with the training records |
+
+ich #40 leaves out.
 
 ## Open work, in suggested order
 

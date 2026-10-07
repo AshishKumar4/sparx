@@ -2,10 +2,10 @@
 
 An encoder is a frozen dataclass called as `encoder(key, x)` on a batch
 field `[B, ...]`. The same object encodes in a plain JAX loop and inside
-`sparx.objectives.SpikingClassifierObjective`, and it is registered
-(`sparx.registry.spike_encoders`), so a run's record holds it as
-`{"name": "rate", "fields": {"steps": 8}}` and rebuilds it in another
-process.
+`sparx.objectives.SpikingClassifierObjective`, and a run's record holds it
+as dew records any class, `{"class": "sparx.encode:Rate", "fields": {"steps":
+8}}`, which rebuilds it in another process. Each has a short name in
+`sparx.registry.spike_encoders` (`rate`), for the recipe's command line.
 
 Encoders of static data (`Direct`, `Rate`, `Latency`) add a leading time
 axis of `steps`: an image batch `[B, H, W, C]` becomes `[steps, B, H, W, C]`.
@@ -32,8 +32,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.typing import ArrayLike
-
-from sparx.registry import spike_encoders
 
 __all__ = ["Delta", "Direct", "Events", "Latency", "Rate", "SpikeEncoder"]
 
@@ -78,7 +76,6 @@ def _intensities(x: ArrayLike) -> jax.Array:
     return x.astype(jnp.float32)
 
 
-@spike_encoders("direct")
 @dataclass(frozen=True)
 class Direct(SpikeEncoder):
     """The values themselves as the input current at each of `steps` steps, as a broadcast."""
@@ -90,7 +87,6 @@ class Direct(SpikeEncoder):
         return jnp.broadcast_to(x, (self.steps, *x.shape))
 
 
-@spike_encoders("rate")
 @dataclass(frozen=True)
 class Rate(SpikeEncoder):
     """Bernoulli spikes that fire with probability `x` at each of `steps` steps, independently.
@@ -108,7 +104,6 @@ class Rate(SpikeEncoder):
         return jax.random.bernoulli(key, p, (self.steps, *p.shape)).astype(jnp.float32)
 
 
-@spike_encoders("latency")
 @dataclass(frozen=True)
 class Latency(SpikeEncoder):
     """One spike per value over `steps` steps, earlier for larger values: time-to-first-spike coding.
@@ -134,7 +129,6 @@ def _time_major(x: jax.Array, time_axis: int) -> jax.Array:
     return jnp.moveaxis(x, time_axis + 1, 0)
 
 
-@spike_encoders("delta")
 @dataclass(frozen=True)
 class Delta(SpikeEncoder):
     """Spike where a signal rises by at least `threshold` from the step before.
@@ -158,7 +152,6 @@ class Delta(SpikeEncoder):
         return out
 
 
-@spike_encoders("events")
 @dataclass(frozen=True)
 class Events(SpikeEncoder):
     """Data that already holds spikes or currents over time, on axis `time_axis` of each record.

@@ -1,15 +1,14 @@
 """Trained spiking networks as inference tasks, which `dew.pipeline` loads from a run.
 
-`SpikingClassification` is what a `spiking_classifier` run loads as
-(`SpikingClassifierObjective.saved_task`). It follows dew's `SavedTask`
-protocol, so `dew.pipeline(run_dir)` builds it in a fresh process from the
-run's record and checkpoint, and `objective.pipeline(state)` builds it
+`SpikingClassification` is what a run of `SpikingClassifierObjective` loads
+as (its `saved_task`). It follows dew's `SavedTask` protocol, so
+`dew.pipeline(run_dir, trust=("sparx",))` builds it in a fresh process from
+the run's record and checkpoint, and `objective.pipeline(state)` builds it
 from a state still in memory.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import functools
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -19,12 +18,11 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from dew.objectives.base import Variables, thaw
-from dew.registry import dtype_name, schedules
+from dew.registry import dtype_name, from_record
+from dew.training.optim import ScheduleBase
 
 from sparx.encode import SpikeEncoder
 from sparx.losses import READOUTS, Readout, readout_logits
-from sparx.optim import stepped
-from sparx.registry import spike_encoders
 
 if TYPE_CHECKING:
     from dew.training.distributed import Layout, MeshSpec
@@ -84,7 +82,7 @@ class SpikingClassification:
                  mesh: MeshSpec | None = None, layout: Layout | None = None,
                  dtype: DTypeLike | None = None,
                  param_dtype: DTypeLike | None = None) -> SpikingClassification:
-        """Load the classifier a `spiking_classifier` run in `directory` saved.
+        """Load the classifier a run of `SpikingClassifierObjective` in `directory` saved.
 
         The model is the one its record names, over the selected checkpoint's
         weights (the average when the run kept one, unless `ema` is False),
@@ -93,25 +91,20 @@ class SpikingClassification:
         """
         from dew.checkpoints import Checkpoints
         from dew.config import ModelConfig
-
-        # Remove when AshishKumar4/dew#39 merges: `run_record` in dew.inference.tasks's `__all__`.
-        from dew.inference.tasks import run_record
         from dew.records import record as named_fields
 
-        record = run_record(directory, step)
-        config = ModelConfig.from_dict(named_fields(record["model"], "model"))
-        if dtype is not None:
-            config = dataclasses.replace(config, dtype=dtype_name(dtype))
-        variables = Checkpoints(directory).variables(ema=ema, step=step, mesh=mesh, layout=layout,
-                                                     param_dtype=param_dtype)
-        encoder = spike_encoders.from_record(named_fields(record["encoder"], "encoder"))
+        checkpoints = Checkpoints(directory)
+        record = named_fields(checkpoints.artifact(step), "checkpoint artifact")
+        config = ModelConfig.from_dict(named_fields(record["model"], "model")).with_dtype(dtype_name(dtype))
+        variables = checkpoints.variables(ema=ema, step=step, mesh=mesh, layout=layout,
+                                          param_dtype=param_dtype)
+        encoder = from_record(SpikeEncoder, named_fields(record["encoder"], "encoder"))
         steps = record.get("schedule_steps")
-        every = record.get("schedule_every", 1)
         call: dict[str, float] = {}
-        if isinstance(steps, int) and isinstance(every, int):
+        if isinstance(steps, int):
             for name, value in named_fields(record["schedules"], "schedules").items():
-                schedule = schedules.from_record(named_fields(value, name))
-                call[name] = float(jnp.asarray(stepped(schedule, steps, every)(steps)))
+                schedule = from_record(ScheduleBase, named_fields(value, name))
+                call[name] = float(jnp.asarray(schedule.schedule(steps)(steps)))
         deployed = record.get("deployed") or {}
         for name, value in named_fields(deployed, "deployed").items():
             if isinstance(value, bool) or not isinstance(value, (int, float)):

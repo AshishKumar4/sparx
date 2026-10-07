@@ -6,12 +6,11 @@ IEEE TNNLS 2020): spoken digits 0-9 in English and German, 20 classes,
 rendered as spikes on 700 cochlear channels. Each record becomes a
 `[steps, channels]` array of spike counts, batch-major as dew's loaders
 expect; `sparx.encode.Events()` moves the time axis to the front. `SHD` is the
-same data as a registered dew dataset spec (`datasets["shd"]`), which a
-recipe names on its command line (`data:shd`). `write_synthetic_shd` writes
-small files in SHD's layout, which smoke runs and tests read in its place.
+same data as a dew dataset spec, which a run's `data` holds (`--data.channels
+140` on the recipe's command line). `write_synthetic_shd` writes small files
+in SHD's layout, which smoke runs and tests read in its place.
 
-`holdout`, `whole_batches` and `evaluation_pass` split records and score
-every record of a split under dew's `Trainer`.
+`holdout` splits records into a part to train on and a part to validate on.
 
 Reading the files needs h5py (`pip install "sparxml[datasets]"`).
 """
@@ -28,14 +27,10 @@ from typing import Literal
 
 import numpy as np
 from dew.data import Dataset, DatasetSpec
-
-# Remove when AshishKumar4/dew#39 merges: `Reader` and `Tokenize` in dew.data.dataset's `__all__`.
-from dew.data.dataset import Reader, Tokenize
-from dew.registry import datasets
+from dew.data.dataset import Tokenize
 from numpy.typing import ArrayLike
 
-__all__ = ["SHD", "SHD_URL", "WEIGHT", "Binning", "bin_events", "evaluation_pass", "holdout", "shd",
-           "whole_batches", "write_synthetic_shd"]
+__all__ = ["SHD", "SHD_URL", "Binning", "bin_events", "holdout", "shd", "write_synthetic_shd"]
 
 SHD_URL = "https://zenkelab.org/datasets/shd/{split}.h5.gz"
 _CHANNELS = 700
@@ -146,7 +141,6 @@ def shd(split: Literal["train", "test"], steps: int = 100, max_time: float = 1.4
         return {"spikes": spikes, "label": np.asarray(labels, np.int32)}
 
 
-@datasets("shd")
 @dataclass(frozen=True)
 class SHD(DatasetSpec):
     """The Spiking Heidelberg Digits as a dew dataset: the train split to train on, the test
@@ -168,8 +162,6 @@ class SHD(DatasetSpec):
         self.uncaptioned(tokenize)
         train = shd("train", self.steps, self.max_time, self.channels, self.cache, binning=self.binning)
         test = shd("test", self.steps, self.max_time, self.channels, self.cache, binning=self.binning)
-        # Until AshishKumar4/dew#40 merges, dew scores the test split in whole batches and leaves out
-        # the last partial one; `evaluation_pass` scores every record meanwhile.
         return Dataset.from_records(train, batch=batch, seed=self.seed, validation=test, loading=self.loading)
 
 
@@ -219,40 +211,3 @@ def holdout(records: Mapping[str, np.ndarray], fraction: float,
     kept, out = np.sort(order[held:]), np.sort(order[:held])
     return ({name: column[kept] for name, column in records.items()},
             {name: column[out] for name, column in records.items()})
-
-
-# Remove when AshishKumar4/dew#40 merges: `validation_pass` fills the last batch itself and marks
-# each row in `dew.data.dataset.COUNTED`, so `WEIGHT`, `whole_batches` and `evaluation_pass` go.
-WEIGHT = "weight"
-"""The batch field evaluation weighs each example by, when a batch holds it.
-
-`whole_batches` writes it: 1 for a record, 0 for the copies that fill the
-last batch, so a split of any size is scored over exactly its records."""
-
-
-def whole_batches(records: Mapping[str, np.ndarray], batch: int) -> dict[str, np.ndarray]:
-    """`records` filled to whole batches with copies of its first record, weighted under `WEIGHT`.
-
-    dew scores a split in whole batches only, so the records past the last
-    whole one would go unscored. Each record has weight 1 and each copy 0,
-    which `SpikingClassifierObjective`'s evaluation and `sparx.metrics.Accuracy`
-    honor.
-    """
-    total = len(next(iter(records.values())))
-    fill = -total % batch
-    padded = {name: np.concatenate([column, np.repeat(column[:1], fill, axis=0)])
-              for name, column in records.items()}
-    padded[WEIGHT] = np.concatenate([np.ones(total, np.float32), np.zeros(fill, np.float32)])
-    return padded
-
-
-def evaluation_pass(records: Mapping[str, np.ndarray], batch: int) -> Reader:
-    """One pass over every record, in order, for `Trainer.fit(validation={...})`.
-
-    The records are filled to whole batches first (`whole_batches`), so a
-    split such as SHD's 2264 test recordings is scored over all of them.
-    """
-    padded = whole_batches(records, batch)
-    reader = Dataset.from_records(padded, batch=batch, validation=padded).val
-    assert reader is not None  # from_records reads a validation split it is given
-    return reader

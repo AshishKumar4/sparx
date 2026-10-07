@@ -230,7 +230,7 @@ def test_a_checkpoint_refuses_a_run_with_another_key(tmp_path):
 
 
 def test_a_network_record_rebuilds_its_network():
-    record = {"name": "brunel", "fields": {"order": 50, "g": 4.5, "eta": 0.9}}
+    record = {"class": "brunel", "fields": {"order": 50, "g": 4.5, "eta": 0.9}}
     built, expected = from_record(record), brunel(50, g=4.5, eta=0.9)
     jax.tree.map(np.testing.assert_array_equal, built.init(jax.random.key(0)),
                  expected.init(jax.random.key(0)))

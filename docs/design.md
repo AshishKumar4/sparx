@@ -17,7 +17,7 @@ Non-goals: a second trainer, a second checkpoint format, a runtime unit system, 
 
 Sparx inherits dew's six rules unchanged (`dew/docs/design/api.md`):
 
-1. Everything extensible has one `Registry`; sparx registers into dew's registries rather than keeping its own.
+1. A record names a class or function by its import path; sparx's classes are recorded the same way as dew's, with nothing registered, and sparx keeps short names only where its own code reads them (`sparx.registry`).
 2. Values that cross `jit` are `flax.struct.dataclass`es; configuration is a frozen dataclass; interchangeable implementations are a `Protocol`.
 3. Randomness is a `key` argument.
 4. Effects live in capabilities handed to the trainer or simulator (`Checkpoints`, `Tracker`).
@@ -36,8 +36,8 @@ It adds six of its own:
 ## 3. Architecture
 
 ```
-dew (platform)    Trainer . MeshSpec/Layout . Checkpoints . Dataset/Grain . Tracker . Profiler . registry . recipes/CLI/launch . pipeline . Server
-                    ^ objectives, datasets, models, tasks register here
+dew (platform)    Trainer . MeshSpec/Layout . Checkpoints . Dataset/Grain . Tracker . Profiler . records . run classes/CLI/launch . pipeline . Server
+                    ^ objectives, datasets, models, tasks and run classes recorded by import path
 sparx.objectives  objectives (classification, sequence, activity fitting, online learning), with metrics, tasks, dataset specs, recipes
 sparx.learn       exact event gradients (EventProp) . online rules (e-prop, OTTT) . conversion
 sparx.graph       Population . Projection . Connectivity . Network (a Flax module) . builders (random, spatial, connectome)
@@ -241,7 +241,7 @@ The recurrent gradient explosion measured on SHD (the `Recurrent` docstring) is 
 
 ## 8. Models
 
-Models are Flax modules registered in dew's model registry:
+Models are Flax modules that a run's record names by import path:
 
 - `sparx.nn` layer stacks: MLP and convolutional SNNs, SEW-ResNet (today), spiking self-attention (Spikformer, Zhou et al. 2023), recurrent and delayed networks for temporal data (today).
 - `Network` graphs: canonical circuits and connectomes, configured by record (`{"connectome": "malecns-1.0", "model": "shiu2024", ...}`) so a run rebuilds them.
@@ -257,18 +257,18 @@ Models are Flax modules registered in dew's model registry:
 | `MeshSpec`, `Layout`, logical axes | data, fsdp and tensor parallel training of layers; neuron-partitioned simulation |
 | `Checkpoints` (Orbax), preemption handling | training and long simulation runs |
 | `Dataset`, Grain sources and transforms | neuromorphic datasets as dew dataset specs, with event-level augmentation as Grain transforms and resumable, sharded reading |
-| registry, recipes, `RunConfig`, `dew` CLI, `dew launch` | `recipes/snn/*.py`, launched on GPUs and TPU pods the same way as dew's |
+| records, `RunConfig` run classes, `dew` CLI, `dew launch` | `sparx.config.SNNRunConfig` and `recipes/snn/train.py`, launched on GPUs and TPU pods the same way as dew's |
 | trackers, `Profiler`, telemetry | firing rates and sparsity as metrics; XProf for kernel work |
 | `dew.pipeline`, `Server` | loading trained spiking models and serving streaming sessions |
 
-Sparx takes dew as a required dependency. Objectives live in `sparx.objectives`, metrics in `sparx.metrics`, tasks in `sparx.tasks` and dataset specs in `sparx.datasets`, each registered in dew's tables.
+Sparx takes dew as a required dependency. Objectives live in `sparx.objectives`, metrics in `sparx.metrics`, tasks in `sparx.tasks`, dataset specs in `sparx.datasets` and the run class in `sparx.config`, each named in a run's record by its import path; a run of sparx loads in a fresh process once the reader trusts the package (`trust=("sparx",)`).
 
 ### 9.2 Changes dew needs
 
 These are small, general extension points, each useful to dew beyond sparx:
 
-1. **Registry plugins.** dew's registry finds members by scanning dew's own sources, so a `run.json` naming a sparx model cannot be rebuilt in a process that has not imported sparx. Add discovery through a `dew.plugins` entry-point group: a package names a module that imports everything it registers, and a lookup dew's own index misses imports it. (Done: dew's rework of PR #31, with saved tasks declared by each objective and `Registry.share()` as the one writer of shared kinds.)
-2. **Open artifact types.** `Artifact` is a closed union. Spiking evaluation needs activity artifacts (rasters, rates, traces) that metrics read. Make it a registered protocol.
+1. **Registry plugins.** dew's registry finds members by scanning dew's own sources, so a `run.json` naming a sparx model cannot be rebuilt in a process that has not imported sparx. Add discovery through a `dew.plugins` entry-point group: a package names a module that imports everything it registers, and a lookup dew's own index misses imports it. (Done, then replaced: dew's records now name every class by import path, so nothing registers, and a reader trusts the packages a record may import.)
+2. **Open artifact types.** `Artifact` was a closed union. Spiking evaluation needs activity artifacts (rasters, rates, traces) that metrics read. (Done: an `Artifact` is any dataclass, which a metric reads by type.)
 3. **Open inference tasks and stateful serving.** dew's `Server` keeps per-slot KV caches for token generation. A spiking session keeps per-slot neuron state and advances by input chunks. Generalize the slot to "state the task declares", with KV caches as one implementation, so sparx's streaming task reuses admission, batching and mesh placement.
 4. **Layout rules from plugins.** Let a plugin contribute logical-axis rules (`neurons`, `edges`, `trials`) to `DEFAULT_RULES`, or confirm that passing `Layout(rules=...)` covers it (to verify).
 
@@ -321,8 +321,6 @@ Sparx's networks are compared with Brian2 or NEST on the Brette et al. (2007) be
 | Today | Becomes |
 | --- | --- |
 | `sparx.objectives`: `SpikingClassifierObjective`, `ActivityFitObjective`, `EPropObjective`, with `sparx.metrics.Accuracy` and `sparx.tasks.SpikingClassification` | sequence and online-learning objectives beside them |
-| `sparx.optim`: the one-cycle and exponential schedules and `GroupAdam` that SNN-delays needs | dew's schedule records and parameter groups (AshishKumar4/dew#37), and the module goes |
-| `sparx.datasets.whole_batches` and `evaluation_pass`, which score a split's last partial batch | dew's validation pass, which scores it (AshishKumar4/dew#40) |
 | `sparx.datasets.SHD`, both splits held in memory | a Grain dataset spec |
 | `sparx.nn` layers and `sparx.graph.Network` without logical axes | layers with logical axes for dew's `Layout` |
 | `docs/performance.md` CPU numbers | extended with accelerator numbers before any accelerator-specific path ships |
@@ -333,7 +331,7 @@ Each phase ends with its acceptance tests passing, on the hardware they name.
 
 | Phase | Work | Accepted when |
 | --- | --- | --- |
-| 0. Platform | dew registry plugins and layout rules from plugins (dew PRs); sparx takes dew as a required dependency; registrations; SHD as a Grain dataset spec; `recipes/snn/train.py` | a sparx run written by the recipe is rebuilt by `dew.pipeline(run_dir)` in a fresh process, and trains on a simulated 8-device mesh with parity to one device |
+| 0. Platform | dew records that load in a fresh process and layout rules from plugins (dew PRs); sparx takes dew as a required dependency; SHD as a Grain dataset spec; `recipes/snn/train.py` | a sparx run written by the recipe is rebuilt by `dew.pipeline(run_dir, trust=("sparx",))` in a fresh process, and trains on a simulated 8-device mesh with parity to one device |
 | 1. Fidelity of what exists | `docs/fidelity.md`; fixtures for snnTorch `Synaptic` and `Leaky`, Bellec's ALIF, Izhikevich's code, DCLS-Delays, SpikingJelly's SEW-ResNet weights | every row of the ledger has a test; differences fixed or named |
 | 2. Dynamics | `sparx.dynamics` with `dt`, units and integrators; synapses split from neurons; AdEx, HH, conductance-based LIF, STP, STDP | ground-truth tests per model; Izhikevich 2004 pattern set; Brian2 parity on single neurons |
 | 3. Graph and simulation | `Population`, `Projection`, `Network`, connectivity kernels, delay buffers, `simulate`, monitors | Brunel regimes and the COBA and CUBA benchmarks agree with Brian2; layer stacks give the same result through `Network` and `sparx.nn` |
@@ -349,7 +347,7 @@ Status (October 2026): phases 0 to 6 are implemented and their acceptance tests 
 ## 14. Decisions to confirm
 
 1. Sparx takes dew as a required dependency, with Python 3.12 and dew's JAX pin. (Recommended.)
-2. Spiking objectives, dataset specs and tasks live in sparx and register into dew, rather than living in dew. (Recommended: dew stays modality-neutral at its core, as with its own objectives per modality.)
+2. Spiking objectives, dataset specs and tasks live in sparx and dew records them by import path, rather than living in dew. (Recommended: dew stays modality-neutral at its core, as with its own objectives per modality.)
 3. The four dew changes in 9.2 go into dew as their own PRs.
 4. Units are a convention checked at construction, not a runtime unit system.
 5. The first connectome target is MaleCNS v1.0 or FlyWire. FlyWire has the Shiu et al. model to validate against; MaleCNS is newer and larger. (Recommended: FlyWire first for validation, MaleCNS second with the same builder.)

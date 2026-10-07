@@ -10,8 +10,8 @@ trained on the cross entropy of its time-averaged membrane
 (`SpikingClassifierObjective`, readout `mean`). The test set is scored
 after every epoch, every one of its 10,000 images, and at the end the
 trained classifier (`objective.pipeline(state)`) predicts a few test
-images. The model is registered, so `dew.pipeline("runs/mnist")` loads the
-same classifier in another process. `--smoke` trains on 256 random images
+images. `dew.pipeline("runs/mnist", trust=("sparx",))` loads the same
+classifier in another process. `--smoke` trains on 256 random images
 for a few steps instead, and downloads nothing.
 """
 
@@ -28,7 +28,6 @@ from dew import Checkpoints, Field, Trainer
 from dew.data import Dataset, Loading
 
 import sparx
-from sparx.datasets import evaluation_pass
 from sparx.metrics import Accuracy
 from sparx.models import SpikingMLP
 from sparx.objectives import SpikingClassifierObjective
@@ -81,7 +80,7 @@ def main(config: Config) -> None:
     else:
         train, test = load("train"), load("test")
         loading = Loading()
-    data = Dataset.from_records(train, batch=config.batch, loading=loading)
+    data = Dataset.from_records(train, batch=config.batch, validation=test, loading=loading)
     per_epoch = data.steps_per_epoch
     assert per_epoch is not None  # records held in memory have a count
     net = SpikingMLP(hidden=(config.hidden, config.hidden), classes=10,
@@ -91,7 +90,7 @@ def main(config: Config) -> None:
                       checkpoints=Checkpoints(str(config.out)))
     state = trainer.fit(data, steps=config.epochs * per_epoch, log_every=min(100, per_epoch),
                         eval_every=per_epoch, metrics=[Accuracy()],
-                        validation={"test": evaluation_pass(test, config.batch)})
+                        validation={"test": data.val})
     classifier = objective.pipeline(state)
     print(f"predicted {np.asarray(classifier(test['image'][:10])).tolist()} "
           f"for labels {test['label'][:10].tolist()}")

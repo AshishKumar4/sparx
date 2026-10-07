@@ -45,18 +45,25 @@ def firing_rates(sown: Sown) -> dict[str, jax.Array]:
     return {name: jnp.mean(rate) for name, rate in _rates(sown).items()}
 
 
-def rate_penalty(sown: Sown, lower: float = 0.0, upper: float = 1.0) -> jax.Array:
+def rate_penalty(sown: Sown, lower: float = 0.0, upper: float = 1.0,
+                 rows: jax.Array | None = None) -> jax.Array:
     """The squared distance of each neuron's rate outside `[lower, upper]`, averaged over neurons.
 
     A neuron's rate is its time-averaged spikes averaged over the batch (the
-    leading axis of each sown array). Silent neurons below `lower` receive
-    gradient to fire and saturated ones above `upper` to stop, the role of
-    the activity regularizers of Zenke and Vogels (Neural Computation 2021).
-    Every neuron of every layer weighs the same.
+    leading axis of each sown array), each example weighed by `rows` when
+    given, `[B]`, so a batch's repeated rows can weigh nothing. Silent
+    neurons below `lower` receive gradient to fire and saturated ones above
+    `upper` to stop, the role of the activity regularizers of Zenke and
+    Vogels (Neural Computation 2021). Every neuron of every layer weighs the
+    same.
     """
     total, count = jnp.zeros((), jnp.float32), 0
     for rate in _rates(sown).values():
-        per_neuron = jnp.mean(rate, axis=0)
+        if rows is None:
+            per_neuron = jnp.mean(rate, axis=0)
+        else:
+            weights = jnp.reshape(rows, (-1, *(1,) * (rate.ndim - 1)))
+            per_neuron = jnp.sum(rate * weights, axis=0) / jnp.sum(rows)
         total = total + jnp.sum(jax.nn.relu(per_neuron - upper) ** 2 + jax.nn.relu(lower - per_neuron) ** 2)
         count += per_neuron.size
     if count == 0:

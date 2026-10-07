@@ -25,11 +25,13 @@ the same scope; a value whose type arrives from another module is not narrowed
 by this checker and is not reported. SLOP006 walks the handler body it can see,
 so an exception handed to a function that re-raises elsewhere reads as reported.
 
-This is dew's `tools/lint_slop.py` at the commit sparx pins (306b2bf), with the
-package root and name changed from `src/dew` and `dew.` to `src/sparx` and
-`sparx.`, and `benchmarks` added to the roots. The sanctioned `Variables` and
-`Batch` aliases stay dew's, so sparx imports them instead of declaring its own.
-The copy goes once dew's checker takes the package as an argument.
+This is dew's `tools/lint_slop.py` at commit 306b2bf, with the package root
+and name changed from `src/dew` and `dew.` to `src/sparx` and `sparx.`, and
+`benchmarks` added to the roots. The sanctioned `Variables` and `Batch`
+aliases stay dew's, so sparx imports them instead of declaring its own.
+Dew's checker at the commit sparx pins takes the package as an argument and
+adds SLOP010, which `sparx.nir` and `sparx.learn.convert` do not pass yet;
+the copy becomes dew's own once they do.
 """
 
 from __future__ import annotations

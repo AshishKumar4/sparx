@@ -44,7 +44,8 @@ ICLR 2024; their `best_config_SHD.py`), which reaches about 95%:
 - Adam with an L2 weight decay of 1e-5 on the weights, torch's one-cycle
   schedule to 5e-3 and its momentum cycle; Adam on the delays at 0.1 on a
   cosine, clamped to the kernel; batch norm on the weights' schedule without
-  decay; all stepped once an epoch, as their schedulers are;
+  decay; all stepped once an epoch, as their schedulers are (dew's
+  `OptimConfig` with a `ParamGroup` each);
 - the Gaussian width shrinks exponentially from 12.27 to 0.5 steps over the
   first quarter of the epochs (`decrease_sig`), and every evaluation rounds
   the delays (`sigma=0`), as their `eval_model` does;
@@ -89,16 +90,16 @@ import numpy as np
 import optax
 import tyro
 from dew import Best, Checkpoints, Field, LocalTracker, Trainer
+from dew.config import OptimConfig
 from dew.data import Dataset, Loading
-from dew.training.optim import Cosine, Linear
+from dew.training.optim import Cosine, Exponential, Linear, OneCycle, ParamGroup
 
 import sparx
-from sparx.datasets import evaluation_pass, holdout, shd, write_synthetic_shd
+from sparx.datasets import holdout, shd, write_synthetic_shd
 from sparx.encode import Events
 from sparx.metrics import Accuracy
 from sparx.models import SpikingMLP
 from sparx.objectives import RateBand, SpikingClassifierObjective
-from sparx.optim import ExponentialDecay, GroupAdam, OneCycle
 
 STEPS_MS = 10
 STEPS = 124  # the longest recording of either split at 10 ms steps opened at events
@@ -168,7 +169,8 @@ def alif(config: Config) -> None:
     batch = config.batch or 64
     train = shd("train", channels=config.channels, cache=config.cache)
     test = shd("test", channels=config.channels, cache=config.cache)
-    data = Dataset.from_records(train, batch=batch, seed=config.seed, loading=loading(config))
+    data = Dataset.from_records(train, batch=batch, seed=config.seed, validation=test,
+                                loading=loading(config))
     surrogate = sparx.surrogate.ATan() if config.surrogate == "atan" else sparx.surrogate.FastSigmoid(100.0)
     neuron = sparx.nn.ALIF(tau=config.tau, tau_adapt=config.tau_adapt, beta=0.2, learn_tau=True,
                            detach_reset=True, surrogate=surrogate)
@@ -186,7 +188,7 @@ def alif(config: Config) -> None:
                       checkpoints=Checkpoints(str(config.out or "runs/shd")))
     evaluations = config.steps // 2 if config.smoke else 500
     state = trainer.fit(data, steps=config.steps, log_every=min(100, config.steps), eval_every=evaluations,
-                        metrics=[Accuracy()], validation={"test": evaluation_pass(test, batch)})
+                        metrics=[Accuracy()], validation={"test": data.val})
     classifier = objective.pipeline(state)
     predictions = np.concatenate([np.asarray(classifier(test["spikes"][i:i + 256]))
                                   for i in range(0, len(test["label"]), 256)])
@@ -198,12 +200,17 @@ def snn_delays(config: Config) -> None:
     batch = config.batch or 256
     binned = {"steps": STEPS, "max_time": STEPS * STEPS_MS / 1000, "channels": 140, "binning": "events"}
     train, test = shd("train", cache=config.cache, **binned), shd("test", cache=config.cache, **binned)
-    splits = {}
     if config.validation:
         train, val = holdout(train, config.validation, seed=config.seed)
-        splits["val"] = evaluation_pass(val, batch)
-    splits["test"] = evaluation_pass(test, batch)
-    data = Dataset.from_records(train, batch=batch, seed=config.seed, loading=loading(config))
+    data = Dataset.from_records(train, batch=batch, seed=config.seed, validation=test,
+                                loading=loading(config))
+    splits = {"test": data.val}
+    if config.validation:
+        # dew reads a validation split beside the records it trains on; this pair's reader scores the
+        # holdout.
+        held = Dataset.from_records(train, batch=batch, seed=config.seed, validation=val,
+                                    loading=loading(config))
+        splits = {"val": held.val, **splits}
     per_epoch = data.steps_per_epoch
     assert per_epoch is not None  # records held in memory have a count
     steps = config.epochs * per_epoch
@@ -216,26 +223,28 @@ def snn_delays(config: Config) -> None:
                      delays=(MAX_DELAY,) * 3, extend=True, batch_norm=True, use_bias=False,
                      weight_init="kaiming_uniform", dropout=0.4, dropout_mask="sequence", readout_tau=tau)
     # torch's OneCycleLR(max_lr=5e-3) starts at max_lr / 25 and ends 1e4 times lower, cycling Adam's
-    # beta1 between 0.95 and 0.85.
-    rate = OneCycle(peak=5e-3, start=5e-3 / 25, end=5e-3 / 25 / 1e4)
-    momentum = OneCycle(peak=0.85, start=0.95, end=0.95)
-    groups = {
-        "delays": GroupAdam(("*/delay",), Cosine(peak=0.1, warmup_steps=0), bounds=(0.0, float(MAX_DELAY))),
-        "weights": GroupAdam(("*/kernel",), rate, b1=momentum, weight_decay=1e-5),
-        "norms": GroupAdam(("*",), rate, b1=momentum),
-    }
+    # beta1 between 0.95 and 0.85. Every schedule steps once an epoch.
+    rate = OneCycle(peak=5e-3, every=per_epoch)
+    momentum = OneCycle(peak=0.85, init=0.95, end=0.95, every=per_epoch)
+    groups = (
+        ParamGroup("delays", ("*/delay",), schedule=Cosine(peak=0.1, warmup_steps=0, every=per_epoch),
+                   bounds=(0.0, float(MAX_DELAY))),
+        ParamGroup("weights", ("*/kernel",), schedule=rate, b1=momentum, weight_decay=1e-5),
+        ParamGroup("norms", ("*",), schedule=rate, b1=momentum),
+    )
+    # Built over the whole schedule, so --stop-after ends the run partway through it.
+    optimizer = OptimConfig(optimizer="adam", param_groups=groups).build(steps)
     # DCLS's raw width falls from 25 // 2 to 0.23 over the first quarter; its effective width adds 0.27.
-    width = ExponentialDecay(start=float((MAX_DELAY + 1) // 2), end=0.23, decay_steps=config.epochs // 4,
-                             offset=0.27)
+    width = Exponential(init=float((MAX_DELAY + 1) // 2), end=0.23, decay_steps=config.epochs // 4,
+                        offset=0.27, every=per_epoch)
     objective = SpikingClassifierObjective(
         net, Field("spikes", (STEPS, 140)), Events(), readout="softmax_sum", schedules={"sigma": width},
-        schedule_steps=steps, schedule_every=per_epoch, deployed={"sigma": 0}, groups=groups)
+        schedule_steps=steps, deployed={"sigma": 0})
     run = config.out or Path("runs/shd-snn-delays")
     journal = LocalTracker(run / "tracking")
     checkpoints = Checkpoints(str(run))
-    # Every parameter belongs to a group, so the trainer's own optimizer updates nothing.
-    trainer = Trainer(objective, optax.set_to_zero(), key=jax.random.key(config.seed),
-                      checkpoints=checkpoints, tracker=journal)
+    trainer = Trainer(objective, optimizer, key=jax.random.key(config.seed), checkpoints=checkpoints,
+                      tracker=journal)
     print(f"snn-delays: {len(train['label'])} training recordings in {per_epoch} steps of {batch} an epoch, "
           f"{config.epochs} epochs; scoring {', '.join(splits)} after each")
     trained = (config.stop_after or config.epochs) * per_epoch

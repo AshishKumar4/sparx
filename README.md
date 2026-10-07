@@ -6,7 +6,7 @@ Sparx builds spiking networks out of ordinary Flax linen layers and a small set 
 
 Sparx also simulates circuits as neuroscience states them: neuron models in physical units (LIF, AdEx, Izhikevich, Hodgkin-Huxley), receptor kinetics and plasticity (`sparx.dynamics`), wired into populations and projections with delays (`sparx.graph`). These match NEST and Brian2, spike for spike where the models are deterministic and statistically where they are chaotic.
 
-`import sparx` reaches every part: `sparx.nn`, `sparx.models`, `sparx.dynamics` and the other modules a network is built from load with it, and `sparx.graph`, `sparx.learn`, `sparx.objectives`, `sparx.metrics`, `sparx.tasks`, `sparx.optim`, `sparx.datasets`, `sparx.serve` and `sparx.nir` load the first time they are used.
+`import sparx` reaches every part: `sparx.nn`, `sparx.models`, `sparx.dynamics` and the other modules a network is built from load with it, and `sparx.graph`, `sparx.learn`, `sparx.objectives`, `sparx.metrics`, `sparx.tasks`, `sparx.config`, `sparx.datasets`, `sparx.serve` and `sparx.nir` load the first time they are used.
 
 APIs can change before 1.0.
 
@@ -138,7 +138,7 @@ logits = net.apply(variables, frames, train=False)   # frames [T, B, 32, 32, 3] 
 
 ## Encoding, losses and firing rates
 
-`sparx.encode` turns a batch field `[B, ...]` into time-major input `[T, B, ...]`. An encoder is a registered frozen dataclass called as `encoder(key, x)`, where `key` is a JAX PRNG key such as `jax.random.key(0)`, never an int seed; the entry points called from outside JAX (dew's `Trainer`, `SpikingClassification.logits`) take an int seed, as dew's do. The encoders are `Rate(steps)` (Bernoulli spikes at the value's probability), `Latency(steps)` (one spike, earlier for larger values), `Direct(steps)` (the values as a constant input current, direct encoding), `Delta(threshold)` (spikes on changes of a signal over each record's time axis) and `Events()` (records that already hold spikes over time). The first four read uint8 fields as `x / 255`; `Events` passes spike counts unscaled.
+`sparx.encode` turns a batch field `[B, ...]` into time-major input `[T, B, ...]`. An encoder is a frozen dataclass called as `encoder(key, x)`, where `key` is a JAX PRNG key such as `jax.random.key(0)`, never an int seed; the entry points called from outside JAX (dew's `Trainer`, `SpikingClassification.logits`) take an int seed, as dew's do. The encoders are `Rate(steps)` (Bernoulli spikes at the value's probability), `Latency(steps)` (one spike, earlier for larger values), `Direct(steps)` (the values as a constant input current, direct encoding), `Delta(threshold)` (spikes on changes of a signal over each record's time axis) and `Events()` (records that already hold spikes over time). The first four read uint8 fields as `x / 255`; `Events` passes spike counts unscaled.
 
 `sparx.losses` has losses over the whole output sequence, one value per example: `per_step_cross_entropy` asks every time step to classify (Deng et al. 2022) and `rate_mse` pulls each output neuron's firing rate toward a target. For a loss on one readout, reduce time first and use optax: `jnp.max(v, axis=0)` of an `LI` membrane, its mean, or the spike count.
 
@@ -190,7 +190,7 @@ import optax
 from dew import Checkpoints, Field, Trainer
 from dew.data import Dataset
 
-from sparx.datasets import evaluation_pass, shd
+from sparx.datasets import shd
 from sparx.encode import Events
 from sparx.metrics import Accuracy
 from sparx.models import SpikingMLP
@@ -204,40 +204,41 @@ objective = SpikingClassifierObjective(
     readout="max",                                # each class's peak membrane
     rates=RateBand(lower=0.01, upper=0.3),        # keep neurons in a firing band
 )
+data = Dataset.from_records(train, batch=64, validation=test)
 trainer = Trainer(objective, optax.adamw(2e-3), key=0, checkpoints=Checkpoints("runs/shd"))
-state = trainer.fit(Dataset.from_records(train, batch=64), steps=3000, eval_every=500,
-                    metrics=[Accuracy()], validation={"test": evaluation_pass(test, 64)})
+state = trainer.fit(data, steps=3000, eval_every=500, metrics=[Accuracy()], validation={"test": data.val})
 classifier = objective.pipeline(state)            # the trained classifier, as dew.pipeline loads it
 ```
 
-The encoder is any of `sparx.encode`'s, the same objects a plain JAX loop calls. The readout is one of `sparx.losses.Readout`: `"mean"`, `"max"`, `"sum"`, `"softmax_sum"` (the softmax of every step summed over time, SNN-delays' loss) or `"per_step"`. `schedules` names model keyword arguments that follow one of dew's schedules over `schedule_steps`, such as `schedules={"sigma": Linear(peak=7.5, end=0.5)}` for a `DelayedDense`; `schedule_every` advances them once every that many steps, as a torch scheduler stepped once an epoch does, and `deployed={"sigma": 0}` evaluates with every delay rounded. `groups` gives parameters their own optimizers by path pattern, each a `sparx.optim.GroupAdam` with its own schedules, L2 weight decay and bounds, under `optax.multi_transform`; the trainer's optimizer updates the rest. `sparx.optim` holds these until dew's own schedules and parameter groups cover them:
+The encoder is any of `sparx.encode`'s, the same objects a plain JAX loop calls. The readout is one of `sparx.losses.Readout`: `"mean"`, `"max"`, `"sum"`, `"softmax_sum"` (the softmax of every step summed over time, SNN-delays' loss) or `"per_step"`. `schedules` names model keyword arguments that follow one of dew's schedules over `schedule_steps`, such as `schedules={"sigma": Linear(peak=7.5, end=0.5)}` for a `DelayedDense`; a schedule's `every` advances it once every that many steps, as a torch scheduler stepped once an epoch does, and `deployed={"sigma": 0}` evaluates with every delay rounded. Parameters train with optimizers of their own through dew's `OptimConfig`, one `ParamGroup` each, matched by path pattern, with its own schedule, momentum schedule, weight decay (torch's L2 under `optimizer="adam"`) and bounds:
 
 ```python
-from dew.training.optim import Cosine
-from sparx.optim import GroupAdam, OneCycle
+from dew.config import OptimConfig
+from dew.training.optim import Cosine, OneCycle, ParamGroup
 
-groups = {"delays": GroupAdam(("*/delay",), Cosine(peak=0.1, warmup_steps=0), bounds=(0.0, 24.0)),
-          "weights": GroupAdam(("*",), OneCycle(peak=5e-3, start=2e-4, end=2e-8), weight_decay=1e-5)}
+optimizer = OptimConfig(optimizer="adam", param_groups=(
+    ParamGroup("delays", ("*/delay",), schedule=Cosine(peak=0.1, warmup_steps=0), bounds=(0.0, 24.0)),
+    ParamGroup("weights", ("*",), schedule=OneCycle(peak=5e-3), weight_decay=1e-5)))
 ```
 
-`evaluation_pass` scores every record of a split, filling the last batch with copies that weigh nothing; a split passed as `Dataset.from_records(..., validation=test)` is scored in whole batches only, which leaves out the last partial one. SHD has no validation split, and `sparx.datasets.holdout(train, 0.1)` holds out part of the training set to select on. The objective logs the batch accuracy and every spiking layer's firing rate (`rate/<layer>`), updates BatchNorm statistics, passes dropout keys, and evaluates to dew's `TokenScores`, which `sparx.metrics.Accuracy` reads. `Accuracy` is registered in dew's metrics table as `spike_accuracy`, and it works with dew's `Best` to keep the checkpoint of best validation accuracy. [`examples/train_shd.py`](examples/train_shd.py) is the full script; `--recipe snn-delays` runs Hammouamri et al.'s SHD recipe, and its docstring lists what still differs from their code. `sparx.objectives.EPropObjective` trains a recurrent layer with e-prop's gradients under the same trainer ([`examples/train_shd_eprop.py`](examples/train_shd_eprop.py)). Every example takes `--smoke`, which trains a small network for a few steps on synthetic data and downloads nothing.
+Dew's validation pass scores every record of a split: it fills the split's last batch with repeats, which the objectives' losses (`Objective.row_mean`) and the metrics count for nothing. SHD has no validation split, and `sparx.datasets.holdout(train, 0.1)` holds out part of the training set to select on. The objective logs the batch accuracy and every spiking layer's firing rate (`rate/<layer>`), updates BatchNorm statistics, passes dropout keys, and evaluates to dew's `TokenScores`, which `sparx.metrics.Accuracy` reads. `Accuracy` works with dew's `Best` to keep the checkpoint of best validation accuracy. [`examples/train_shd.py`](examples/train_shd.py) is the full script; `--recipe snn-delays` runs Hammouamri et al.'s SHD recipe, and its docstring lists what still differs from their code. `sparx.objectives.EPropObjective` trains a recurrent layer with e-prop's gradients under the same trainer, handing them to it as its loss's own (`Objective.with_gradients`) ([`examples/train_shd_eprop.py`](examples/train_shd_eprop.py)). Every example takes `--smoke`, which trains a small network for a few steps on synthetic data and downloads nothing.
 
-Sparx is a dew plugin. Its models, neurons, surrogates, encoders, objective and datasets are registered in dew's registry, so a run's `run.json` records a spiking model the way it records a transformer, and `dew.pipeline(run_dir)` loads a trained classifier back in a fresh process as a `SpikingClassification`. A model of your own trains without registering, but reloads only once its class carries `@dew.registry.models("name")`, as `SpikingMLP` does:
+A run's record names each of sparx's classes by its import path, as dew records any class: `run.json` holds a spiking model as `{"class": "sparx.models:SpikingMLP", "fields": {...}}`, its neuron as `{"class": "sparx.nn.neurons:ALIF", ...}`, the way it holds a transformer, and nothing is registered. `dew.pipeline(run_dir, trust=("sparx",))` loads a trained classifier back in a fresh process as a `SpikingClassification`; `trust` lets the record import sparx, as `trust_remote_code` does in transformers. A model of your own reloads the same way once it is defined at the top level of an importable module:
 
 ```python
 import dew
 
-classifier = dew.pipeline("runs/shd")
+classifier = dew.pipeline("runs/shd", trust=("sparx",))
 predictions = classifier(test_spikes)              # [B]
 ```
 
-[`recipes/snn/train.py`](recipes/snn/train.py) is a dew recipe: every setting is a typed flag, the dataset and the encoder are subcommands over their registries (`data:shd`, `encoder:rate`), the model's settings and the schedules are `{"name": ..., "fields": {...}}` records of registered members, and `--model.dtype` reaches the synapses. `--smoke` runs it for a few seconds on synthetic recordings:
+[`recipes/snn/train.py`](recipes/snn/train.py) runs `sparx.config.SNNRunConfig`, dew's `RunConfig` for a spiking classifier on SHD. Every setting is a typed flag: each field of the model (`--model.hidden 128`, `--model.dtype bfloat16`), each keyword argument of the objective (`--objective.readout max`), the encoder as a subcommand (`encoder:rate --encoder.steps 8`), and a nested record as JSON. `run.json` names the run's class, so `dew train runs/shd/run.json --trust sparx --set trainer.steps=6000` rebuilds the run from it and trains on from its latest checkpoint. `--smoke` runs it for a few seconds on synthetic recordings:
 
 ```bash
-python recipes/snn/train.py data:shd --data.channels 140 --trainer.batch-size 64 --trainer.steps 3000 \
-    --trainer.checkpoint-dir runs --trainer.name shd \
-    --model.config '{"hidden": [128], "classes": 20, "delays": 15, "neuron": {"name": "alif", "fields": {"tau": 5.0}}}' \
-    --schedules '{"sigma": {"name": "linear", "fields": {"peak": 7.5, "end": 0.5}}}'
+python recipes/snn/train.py --data.channels 140 --trainer.batch-size 64 --trainer.steps 3000 \
+    --trainer.checkpoint-dir runs --trainer.name shd --model.hidden 128 --model.delays 15 \
+    --model.neuron '{"class": "sparx.nn.neurons:ALIF", "fields": {"tau": 5.0}}' \
+    --objective.schedules '{"sigma": {"class": "linear", "fields": {"peak": 7.5, "end": 0.5}}}'
 JAX_PLATFORMS=cpu python recipes/snn/train.py --smoke --trainer.checkpoint-dir /tmp/snn-smoke
 ```
 
@@ -285,7 +286,7 @@ A step runs in NEST's order: synapses deliver what is due, membranes integrate (
 
 A population holds any neuron model of `sparx.dynamics`, and its synapses reach the model through the neuron protocol: each model says where it is refractory (`is_refractory`) and how a voltage jump that lands after the threshold test changes it (`after_threshold`), and each synapse model says where its arrivals land (`lands`: into its own state, or as a jump before or after the threshold test).
 
-The builders are registered in `sparx.registry.networks`, so a network is a record that rebuilds in another process: `sparx.graph.from_record({"name": "brunel", "fields": {"order": 2500, "g": 5.0}})`, or for a model on a connectome, `{"name": "shiu2024", "fields": {"connectome": {"name": "flywire", "fields": {"completeness": ..., "connectivity": ...}}, "stimuli": ...}}`, which names the reader of its tables (`sparx.registry.connectomes`).
+The builders have short names in `sparx.registry.networks`, so a network is a record that rebuilds in another process: `sparx.graph.from_record({"class": "brunel", "fields": {"order": 2500, "g": 5.0}})`, or for a model on a connectome, `{"class": "shiu2024", "fields": {"connectome": {"class": "sparx.graph.connectome:Connectome.from_shiu", "fields": {"completeness": ..., "connectivity": ...}}, "stimuli": ...}}`, which names the reader of its tables by import path.
 
 ### Graded signalling
 
@@ -398,7 +399,7 @@ The design keeps the sequential part of a spiking network small: synapses run ov
 
 ## Installation
 
-Sparx needs Python 3.12 or later and installs dew, which it trains, distributes, checkpoints and serves through; until dew's plugin registry reaches its main branch, the dependency pins the integration commit that carries it. It has been tested with JAX 0.11.2, Flax 0.12.10 and optax 0.2.8 on CPU.
+Sparx needs Python 3.12 or later and installs dew, which it trains, distributes, checkpoints and serves through, pinned at a commit of dew's main branch. It has been tested with JAX 0.11.2, Flax 0.12.10 and optax 0.2.8 on CPU.
 
 ```bash
 git clone https://github.com/AshishKumar4/sparx.git

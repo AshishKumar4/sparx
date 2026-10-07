@@ -64,8 +64,9 @@ def test_a_model_on_a_connectome_rebuilds_from_its_record(tmp_path):
              "Excitatory x Connectivity": [5, -3, 8, 2]}
     pyarrow.parquet.write_table(pa.table(edges), tmp_path / "connectivity.parquet")
     completeness, connectivity = str(tmp_path / "completeness.csv"), str(tmp_path / "connectivity.parquet")
-    reader = {"name": "flywire", "fields": {"completeness": completeness, "connectivity": connectivity}}
-    record = {"name": "shiu2024",
+    reader = {"class": "sparx.graph.connectome:Connectome.from_shiu",
+              "fields": {"completeness": completeness, "connectivity": connectivity}}
+    record = {"class": "shiu2024",
               "fields": {"connectome": reader, "stimuli": [[[0, 2], 150.0]], "silenced": [3], "w_syn": 0.2}}
     built = from_record(record)
     expected = shiu2024(Connectome.from_shiu(completeness, connectivity), stimuli=[([0, 2], 150.0)],

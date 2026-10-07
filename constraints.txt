@@ -2,7 +2,7 @@
 #
 #     pip install -e '.[datasets,test]' -c constraints.txt
 #
-# dew's constraints.txt at the commit sparx pins (306b2bf) names jax 0.11.2
+# dew's constraints.txt at the commit sparx pins (6329435) names jax 0.11.2
 # with the multi-process cache-key fix (AshishKumar4/jax branch
 # v0.11.2-cache-key-pool-fingerprints, reported as jax-ml/jax#40940), which no
 # release has yet. Sparx installs the same build, so its tests run on the jax

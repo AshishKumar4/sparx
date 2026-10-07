@@ -32,8 +32,7 @@ from dew.checkpoints import Checkpoints
 from dew.nn.sharding import DATA_AXIS, FSDP_AXIS, LogicalAxes, LogicalAxisRules, logical_spec
 from dew.objectives.base import Variables
 from dew.training.distributed import Layout, MeshSpec
-from dew.training.state import TrainState
-from jax.sharding import Mesh, NamedSharding, SingleDeviceSharding
+from jax.sharding import Mesh, NamedSharding, Sharding, SingleDeviceSharding
 
 from sparx.graph.network import Drive, Monitor, Network, whole_steps
 
@@ -220,19 +219,13 @@ def _placement(network: Network, mesh: Mesh, layout: Layout, trials: int | None)
 
 def _save(checkpoints: Checkpoints, step: int, state: Variables, key: jax.Array, dt: float,
           trials: int | None) -> None:
-    """Write the state after `step` steps as a dew checkpoint.
+    """Write the state after `step` steps and the run's key as a dew checkpoint of a mapping.
 
-    Dew's checkpoints hold a `TrainState`; a simulation's has its state as
-    the variables, its step count as the step and its key, and no
-    optimizer, average or loss scale.
+    A simulation has no optimizer, average or loss scale, so its checkpoint
+    is the mapping dew writes in place of a train state, with the step as
+    the checkpoint's step and `dt` and the trials as its control record.
     """
-    # Remove when AshishKumar4/dew#38 merges: `checkpoints.save_tree(step, {"state": state, "key": key},
-    # control=...)` and `restore_tree` hold the plain tree, without this placeholder `TrainState`.
-    zero = jnp.zeros((), jnp.int32)
-    held = TrainState(step=jnp.asarray(step, jnp.int32), microstep=zero, updates=zero,
-                      variables={"state": state}, opt_state=(), ema=None, key=key, scale=None,
-                      window_size=jnp.ones((), jnp.int32))
-    checkpoints.save(step, held, None, control={"dt": dt, "trials": trials})
+    checkpoints.save(step, {"state": state, "key": key}, control={"dt": dt, "trials": trials})
 
 
 def _resumed(checkpoints: Checkpoints, network: Network, state: Variables, key: jax.Array,
@@ -252,12 +245,14 @@ def _resumed(checkpoints: Checkpoints, network: Network, state: Variables, key: 
                          f"past this run's {steps}")
     device = SingleDeviceSharding(jax.devices()[0])
     shardings = place(state) if place is not None else jax.tree.map(lambda _: device, state)
-    template = {"variables": {"state": jax.tree.map(
-                    lambda leaf, where: jax.ShapeDtypeStruct(jnp.shape(leaf), leaf.dtype, sharding=where),
-                    state, shardings)},
+
+    def placed(leaf: jax.Array, where: Sharding) -> jax.ShapeDtypeStruct:
+        return jax.ShapeDtypeStruct(jnp.shape(leaf), leaf.dtype, sharding=where)
+
+    template = {"state": jax.tree.map(placed, state, shardings),
                 "key": jax.ShapeDtypeStruct(key.shape, key.dtype, sharding=device)}
     restored, _ = checkpoints.restore(template, latest)
     if not np.array_equal(jax.random.key_data(restored["key"]), jax.random.key_data(key)):
         raise ValueError(f"the checkpoint at {checkpoints.path(latest)} was written by a run with another "
                          f"key; resume it with the key it ran with")
-    return latest, restored["variables"]["state"]
+    return latest, restored["state"]

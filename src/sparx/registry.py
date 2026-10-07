@@ -1,33 +1,26 @@
-"""The kinds sparx adds to dew's registry.
+"""Short names for the sparx classes and builders that sparx's own code reads by name.
 
-Dew's registry names everything a run is made of, so a run's record can be
-rebuilt in another process. Sparx registers its models, objectives and
-datasets into dew's own tables (`dew.registry.models`, `objectives`,
-`datasets`), and adds five kinds dew does not have:
+Dew's records name a class or function by its import path,
+`{"class": "sparx.nn.neurons:ALIF", "fields": {...}}`, so a run's record
+rebuilds a spiking model, neuron, surrogate or encoder with nothing
+registered: a field typed `Neuron` takes the record of any class derived
+from it. A run of sparx loads in a fresh process once the reader trusts the
+package, `dew.pipeline(run_dir, trust=("sparx",))` or `--trust sparx`.
 
-- `surrogates`: the derivatives spikes train through (`sparx.surrogate`).
-- `neurons`: neuron layers (`sparx.nn`), which a model holds as a field.
-- `spike_encoders`: how a batch field becomes a spike train (`sparx.encode`).
+Two kinds also have short names, each a dew `Aliases` table, for the places
+where a person writes the record:
+
+- `spike_encoders`: how a batch field becomes a spike train
+  (`sparx.encode`), the recipe's `encoder:rate` subcommand.
 - `networks`: the builders of `sparx.graph.Network`s, canonical circuits
-  and models on connectomes (`sparx.graph.models`, `sparx.graph.connectome`).
-- `connectomes`: the readers of connectome tables (`sparx.graph.connectome`),
-  which a network built on a connectome names in its record.
+  and models on connectomes (`sparx.graph.models`, `sparx.graph.connectome`),
+  which `sparx.graph.from_record` reads: `{"class": "brunel", "fields":
+  {"order": 2500, "g": 5.0}}`.
 
-A network's record names its builder and the builder's arguments,
-`{"name": "brunel", "fields": {"order": 2500, "g": 5.0}}`; a model on a
-connectome names the reader of its tables in the field `connectome`,
-`{"name": "shiu2024", "fields": {"connectome": {"name": "flywire",
-"fields": {...}}, ...}}` (design.md section 8). `sparx.graph.from_record`
-rebuilds the network.
-
-Each table records a member as dew records every registered member,
-`{"name": name, "fields": {...}}`, and is shared with dew
-(`Registry.share`), so a model field declared as `Surrogate` or `Neuron`
-rebuilds from its record and writes back by name. Sparx names
-itself a dew plugin: `[project.entry-points."dew.plugins"]` in
-`pyproject.toml` names `sparx.plugin`, which dew imports when a lookup
-misses its own index, so a run naming sparx's members loads in a process
-that never imported sparx.
+A record nested in another names its class or function by import path, as
+every dew record does: a model on a connectome names the reader of its
+tables, `{"class": "shiu2024", "fields": {"connectome": {"class":
+"sparx.graph.connectome:Connectome.from_shiu", "fields": {...}}}}`.
 """
 
 from __future__ import annotations
@@ -35,19 +28,24 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from dew.registry import Registry
+from dew.registry import Aliases
 
 if TYPE_CHECKING:
     from sparx.encode import SpikeEncoder
-    from sparx.graph.connectome import Connectome
     from sparx.graph.network import Network
-    from sparx.nn.neurons import Neuron
-    from sparx.surrogate import Surrogate
 
-__all__ = ["connectomes", "networks", "neurons", "spike_encoders", "surrogates"]
+__all__ = ["networks", "spike_encoders"]
 
-surrogates: Registry[type[Surrogate], Surrogate] = Registry("surrogate").share()
-neurons: Registry[type[Neuron], Neuron] = Registry("neuron").share()
-spike_encoders: Registry[type[SpikeEncoder], SpikeEncoder] = Registry("spike_encoder").share()
-networks: Registry[Callable[..., Network], Network] = Registry("network").share()
-connectomes: Registry[Callable[..., Connectome], Connectome] = Registry("connectome").share()
+spike_encoders: Aliases[type[SpikeEncoder], SpikeEncoder] = Aliases("spike_encoder", {
+    "delta": "sparx.encode:Delta",
+    "direct": "sparx.encode:Direct",
+    "events": "sparx.encode:Events",
+    "latency": "sparx.encode:Latency",
+    "rate": "sparx.encode:Rate",
+}, base="sparx.encode:SpikeEncoder")
+networks: Aliases[Callable[..., Network], Network] = Aliases("network", {
+    "brunel": "sparx.graph.models:brunel",
+    "coba": "sparx.graph.models:coba",
+    "cuba": "sparx.graph.models:cuba",
+    "shiu2024": "sparx.graph.connectome:shiu2024",
+}, base="sparx.graph.network:Network")

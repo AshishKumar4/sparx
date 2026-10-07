@@ -10,11 +10,11 @@ A `Connectome` is a neuron table and an edge list with signed synapse
 counts: the sign is the presynaptic neuron's predicted transmitter's
 (acetylcholine excitatory; GABA and glutamate inhibitory, as Shiu et al.
 assign them for the fly), the count is how many synapses join the pair.
-Reading the tables needs the `connectome` extra (pyarrow). The readers
-are registered in `sparx.registry.connectomes` (`flywire` for Shiu et
-al.'s tables, `malecns` for Janelia's) and `shiu2024` in
-`sparx.registry.networks`, so `sparx.graph.from_record` rebuilds a model on
-a connectome from its record.
+Reading the tables needs the `connectome` extra (pyarrow). `shiu2024` has
+the short name `shiu2024` in `sparx.registry.networks`, and its record names
+the reader of its tables by import path (`Connectome.from_shiu` for Shiu et
+al.'s tables, `Connectome.from_malecns` for Janelia's), so
+`sparx.graph.from_record` rebuilds a model on a connectome from its record.
 """
 
 from __future__ import annotations
@@ -30,7 +30,6 @@ from sparx.dynamics.neurons import LIF
 from sparx.dynamics.synapses import Delta, Exponential, Receptor
 from sparx.graph.connectivity import FromEdges
 from sparx.graph.network import Network, PoissonInput, Population, Projection
-from sparx.registry import connectomes, networks
 
 __all__ = ["FLYWIRE_630_MEDIAN_INPUTS", "SIGNS", "Connectome", "matched_w_syn", "shiu2024"]
 
@@ -154,9 +153,6 @@ class Connectome:
         return cls(ids, pre, post, counts * sign[pre])
 
 
-connectomes("flywire")(Connectome.from_shiu)
-connectomes("malecns")(Connectome.from_malecns)
-
 FLYWIRE_630_MEDIAN_INPUTS = 206.0
 """The median neuron's input synapses in FlyWire v630, the connectome Shiu et al. fit `w_syn` on."""
 
@@ -176,7 +172,6 @@ def matched_w_syn(connectome: Connectome, *, w_syn: float = 0.275,
     return w_syn * reference / float(np.median(connectome.inputs()))
 
 
-@networks("shiu2024")
 def shiu2024(connectome: Connectome, *, stimuli: Sequence[tuple[Sequence[int], float]] = (),
              silenced: Sequence[int] = (), dt: float = 0.1, capacity: int = 4096,
              w_syn: float = 0.275, stimulus_scale: float = 250.0) -> Network:

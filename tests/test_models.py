@@ -151,18 +151,18 @@ def test_dropout_masks_a_step_or_holds_one_mask_over_the_sequence(mask):
     assert held.all() if mask == "sequence" else held.mean() < 0.01
 
 
-@pytest.mark.parametrize("architecture", ["spiking_mlp", "sew_resnet"])
+@pytest.mark.parametrize("architecture", ["SpikingMLP", "SEWResNet"])
 def test_a_runs_precision_settings_reach_the_synapses(architecture):
     from dew.config import ModelConfig
 
     fields = ({"hidden": [8], "classes": 3, "delays": [2, 0], "batch_norm": True}
-              if architecture == "spiking_mlp" else {"stages": [1, 1, 1, 1], "classes": 3, "width": 4,
-                                                     "stem": "small"})
+              if architecture == "SpikingMLP" else {"stages": [1, 1, 1, 1], "classes": 3, "width": 4,
+                                                    "stem": "small"})
     x = frames(2, (3, 2, 8, 8, 1))
-    first = "delayed_0" if architecture == "spiking_mlp" else "Conv_0"
+    first = "delayed_0" if architecture == "SpikingMLP" else "Conv_0"
     for dtype in ("float32", "bfloat16"):
-        model = ModelConfig(architecture, fields, dtype=dtype, param_dtype="bfloat16",
-                            matmul_precision="highest").build()
+        settings = {"dtype": dtype, "param_dtype": "bfloat16", "precision": "highest"}
+        model = ModelConfig(f"sparx.models:{architecture}", {**fields, **settings}).build()
         assert model.dtype == jnp.dtype(dtype) and model.precision == "highest"
         variables = model.init(jax.random.key(0), x, train=False)
         _, captured = model.apply(variables, x, train=False, capture_intermediates=True,
@@ -175,6 +175,5 @@ def test_a_runs_precision_settings_reach_the_synapses(architecture):
         # The delays stay float32 whatever the synapses store.
         assert stored.get("delay", jnp.float32) == jnp.float32
         # The run's record reads the settings back from the built model.
-        recorded = ModelConfig.from_model(model)
-        settings = (recorded.dtype, recorded.param_dtype, recorded.matmul_precision)
-        assert settings == (dtype, "bfloat16", "highest")
+        recorded = ModelConfig.from_model(model).fields
+        assert {name: recorded[name] for name in settings} == settings

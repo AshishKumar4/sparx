@@ -15,19 +15,13 @@ license = "MIT"
 dependencies = [
     # Dew is the platform sparx trains, distributes, checkpoints and serves
     # through (docs/design.md). It is not on PyPI, so the dependency names its
-    # repository, at the integration commit that carries its plugin registry
-    # (the rework of AshishKumar4/dew#31) until that reaches main.
-    "dewml @ git+https://github.com/AshishKumar4/dew@306b2bfbd24306a51387d8bf77004dfe0da87f44",
+    # repository at a commit of its main branch.
+    "dewml @ git+https://github.com/AshishKumar4/dew@6329435e18ec71feaf72a1713442fbf9a393185f",
     "jax",
     "flax",
     "optax",
     "numpy",
 ]
-
-# Dew's registry reads sparx's registrations without importing it first, so a
-# run recorded with a sparx model loads in a fresh process.
-[project.entry-points."dew.plugins"]
-sparx = "sparx.plugin"
 
 [project.optional-dependencies]
 # sparx.datasets reads the published HDF5 files.

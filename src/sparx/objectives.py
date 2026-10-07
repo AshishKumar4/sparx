@@ -23,14 +23,16 @@ objectives:
     state = trainer.fit(Dataset.from_records({"image": x, "label": y}, batch=128),
                         steps=2000, metrics=[Accuracy()])
 
-Each is registered in dew's `objectives` table under the method's name, as
-dew's objectives are.
+A run's record names each by import path, `sparx.objectives:EPropObjective`,
+as dew records any objective. Each counts a batch's rows through
+`Objective.row_mean`, so the repeats that fill a validation split's last
+batch count for nothing in the loss.
 """
 
 from __future__ import annotations
 
 import functools
-from collections.abc import Callable, Hashable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -40,29 +42,42 @@ import jax.numpy as jnp
 import optax
 from dew.artifacts import TokenScores
 from dew.inputs import Field, InputSpec
-from dew.objectives.base import Aux, Batch, EMASpec, Objective, Ratio, Shown, Step, Variables, thaw
-from dew.records import JSON
-from dew.registry import objectives
-from dew.training.optim import ParamGroup, ScheduleBase
+from dew.objectives.base import (
+    OMITTED,
+    VALID_ROWS,
+    Aux,
+    Batch,
+    EMASpec,
+    Objective,
+    Omitted,
+    Ratio,
+    Shown,
+    Step,
+    Variables,
+    thaw,
+)
+from dew.registry import to_record
+from dew.training.optim import ScheduleBase
 
-from sparx.datasets import WEIGHT
 from sparx.dynamics import NeuronModel
 from sparx.encode import SpikeEncoder
 from sparx.learn import EPropParams, bptt_loss, eprop, eprop_forward
 from sparx.losses import READOUTS, Readout, readout_logits, readout_losses, van_rossum
 from sparx.nn import RATES
-from sparx.optim import GroupAdam, stepped
 from sparx.rates import firing_rates, rate_penalty
 from sparx.tasks import SpikingClassification, bound_call
 
 if TYPE_CHECKING:
-    from dew.training.state import TrainState
+    from dew.inference.tasks import Processor
+    from dew.records import JSON
 
 __all__ = ["ActivityFitObjective", "EPropObjective", "RateBand", "SpikingClassifierObjective"]
 
 
-_TRAINERS = "trainer"
-"""The group of the parameters no `GroupAdam` matches, which the trainer's optimizer updates."""
+def _row_weights(batch: Batch, rows: int) -> jax.Array:
+    """1 for each real row of `batch` and 0 for each repeat (`VALID_ROWS`); all 1 in training."""
+    valid = batch.get(VALID_ROWS)
+    return jnp.ones(rows, jnp.float32) if valid is None else jnp.asarray(valid, jnp.float32)
 
 
 @dataclass(frozen=True)
@@ -74,7 +89,6 @@ class RateBand:
     weight: float = 1.0
 
 
-@objectives("spiking_classifier")
 class SpikingClassifierObjective(Objective[Ratio]):
     """Classify a batch field with a spiking network.
 
@@ -90,40 +104,34 @@ class SpikingClassifierObjective(Objective[Ratio]):
     keeps an exponential moving average of the parameters, which `evaluate`
     scores when the trainer passes it.
 
-    The loss is the mean cross entropy of the `readout` over the batch, plus
-    the `rates` penalty when given. Metrics report the batch accuracy, each
-    spiking layer's mean firing rate (`rate/<layer>`) and the penalty.
-    Evaluation returns `TokenScores` with one row per example (loss, weight,
-    whether the argmax is the label), which `sparx.metrics.Accuracy` reads.
+    The loss is the mean cross entropy of the `readout` over the batch's
+    rows, plus the `rates` penalty when given. Metrics report the batch
+    accuracy, each spiking layer's mean firing rate (`rate/<layer>`) and the
+    penalty. Evaluation returns `TokenScores` with one row per example (loss,
+    weight, whether the argmax is the label), which `sparx.metrics.Accuracy`
+    reads.
 
-    `schedules` names model keyword arguments that follow a schedule over
-    `schedule_steps` steps, as dew's learning-rate schedules do:
+    `schedules` names model keyword arguments that follow one of dew's
+    schedules over `schedule_steps` steps, as a learning rate does:
     `{"sigma": Linear(peak=7.5, end=0.5)}` anneals a
     `sparx.nn.DelayedDense`, `{"masking": ...}` a `MaskedPSN`. The value is
     read at `Step.step`, the count of accepted microbatches, in the loss and
-    in evaluation alike. `schedule_every` advances every schedule, these and
-    the groups' learning rates, once every that many steps
-    (`sparx.optim.stepped`); the steps of an epoch reproduce a torch
-    scheduler stepped once an epoch. `deployed` holds model keyword
-    arguments that evaluation and the trained classifier run with in place
-    of the schedules' values, such as `{"sigma": 0}` to score every delay
-    rounded to a whole step, the network as deployed and as SNN-delays
-    evaluates it.
+    in evaluation alike, and a schedule's `every` holds each value for that
+    many steps, as a torch scheduler stepped once an epoch does. `deployed`
+    holds model keyword arguments that evaluation and the trained classifier
+    run with in place of the schedules' values, such as `{"sigma": 0}` to
+    score every delay rounded to a whole step, the network as deployed and
+    as SNN-delays evaluates it.
 
-    `groups` gives parameter groups their own optimizers, by name: each
-    `sparx.optim.GroupAdam` updates the parameters its patterns match, the
-    first matching group winning, over `schedule_steps` updates. The
-    trainer's optimizer updates the rest, under `optax.multi_transform`
-    (`optimizer`). Delay positions learn at their own rate this way.
+    Parameter groups with optimizers of their own, as SNN-delays trains its
+    delay positions, are the trainer's: `OptimConfig(param_groups=...)`,
+    each a dew `ParamGroup` with its own schedule, momentum, weight decay
+    and bounds.
 
-    Evaluation weighs each example by the batch's `sparx.datasets.WEIGHT`
-    field when it has one (`sparx.datasets.whole_batches`), so the loss and
-    `Accuracy` cover a split of any size exactly.
-
-    The objective records the model, encoder, readout, schedules and
-    deployed arguments with every checkpoint (`inference_record`), and loads
-    back as a `sparx.tasks.SpikingClassification`
-    (`SpikingClassification.from_run`, or `pipeline(state)` after training).
+    Every checkpoint records the model, encoder, readout, schedules and
+    deployed arguments (`task_record`), and the run loads back as a
+    `sparx.tasks.SpikingClassification` (`dew.pipeline(run_dir,
+    trust=("sparx",))`, or `pipeline(state)` after training).
     """
 
     artifact = TokenScores
@@ -133,17 +141,12 @@ class SpikingClassifierObjective(Objective[Ratio]):
     def __init__(self, model: nn.Module, sample: Field, encoder: SpikeEncoder, *, labels: str = "label",
                  readout: Readout = "mean", rates: RateBand | None = None, ema_decay: float | None = None,
                  schedules: Mapping[str, ScheduleBase] | None = None, schedule_steps: int | None = None,
-                 schedule_every: int = 1, deployed: Mapping[str, float] | None = None,
-                 groups: Mapping[str, GroupAdam] | None = None):
+                 deployed: Mapping[str, float] | None = None):
         if readout not in READOUTS:
             raise ValueError(f"readout must be one of {', '.join(READOUTS)}, not {readout!r}")
-        if (schedules or groups) and schedule_steps is None:
-            raise ValueError("schedules and groups run over schedule_steps steps; give it")
-        if schedule_every < 1:
-            raise ValueError(f"schedules advance every 1 or more steps, not {schedule_every}")
-        if groups and _TRAINERS in groups:
-            raise ValueError(f"{_TRAINERS!r} names the parameters no group matches; name the group otherwise")
-        self.model = model
+        if schedules and schedule_steps is None:
+            raise ValueError("schedules run over schedule_steps steps; give it")
+        self.model = self.bind_model(model)
         self.sample = sample
         self.encoder = encoder
         self.labels = labels
@@ -151,16 +154,14 @@ class SpikingClassifierObjective(Objective[Ratio]):
         self.rates = rates
         self.schedules = dict(schedules or {})
         self.schedule_steps = schedule_steps
-        self.schedule_every = schedule_every
         self.deployed = {name: float(value) for name, value in (deployed or {}).items()}
-        self.groups = dict(groups or {})
         self.inputs = InputSpec(sample=sample)
-        self.ema = None if ema_decay is None else EMASpec(decay=optax.constant_schedule(ema_decay))
+        self.ema = EMASpec.constant(ema_decay)
 
     def _scheduled(self, step: jax.Array) -> dict[str, jax.Array]:
         if self.schedule_steps is None:
             return {}
-        return {name: jnp.asarray(stepped(schedule, self.schedule_steps, self.schedule_every)(step))
+        return {name: jnp.asarray(schedule.schedule(self.schedule_steps)(step))
                 for name, schedule in self.schedules.items()}
 
     def _method(self, step: jax.Array, *, train: bool) -> functools.partial[jax.Array]:
@@ -173,25 +174,7 @@ class SpikingClassifierObjective(Objective[Ratio]):
             kwargs |= self.deployed
         return bound_call(self.model, train=train, kwargs=kwargs)
 
-    def optimizer(self, tx: optax.GradientTransformation, *,
-                  accumulation: int) -> optax.GradientTransformation:
-        """`tx` for the parameters no group matches and each group's `GroupAdam` for its own."""
-        # Remove when AshishKumar4/dew#37 merges: `OptimConfig.param_groups` with per-group schedules,
-        # b1 and bounds, so the trainer's optimizer covers every group and this override goes.
-        if not self.groups:
-            return tx
-        assert self.schedule_steps is not None  # __init__ refuses groups without it
-        solvers: dict[Hashable, optax.GradientTransformation] = {
-            name: group.build(self.schedule_steps, self.schedule_every)
-            for name, group in self.groups.items()}
-        solvers[_TRAINERS] = tx
-        # Remove when AshishKumar4/dew#39 merges: `param_labels` in dew.training.optim's `__all__`.
-        from dew.training.optim import param_labels
-        labels = param_labels([*(ParamGroup(name, group.patterns) for name, group in self.groups.items()),
-                               ParamGroup(_TRAINERS, ("*",))])
-        return optax.multi_transform(solvers, labels)
-
-    def init(self, key: jax.Array, variables: Variables | None = None) -> Variables:
+    def fresh_variables(self, key: jax.Array, held: Variables | None) -> Variables:
         encode_key, init_key = jax.random.split(key)
         x = self.encoder(encode_key, jnp.zeros((1, *self.sample.shape), jnp.float32))
         return dict(self.model.init(init_key, x, method=self._method(jnp.zeros((), jnp.int32), train=False)))
@@ -207,74 +190,66 @@ class SpikingClassifierObjective(Objective[Ratio]):
         # With mutable collections, apply returns the outputs and the collections.
         assert isinstance(applied, tuple)
         outputs, updated = applied
-        losses = readout_losses(self.readout, outputs, labels)
-        total = jnp.sum(losses)
-        metrics = {"accuracy": jnp.mean(jnp.argmax(readout_logits(self.readout, outputs), -1) == labels)}
+        stats = self.row_mean(readout_losses(self.readout, outputs, labels), batch)
+        correct = jnp.argmax(readout_logits(self.readout, outputs), -1) == labels
+        metrics = {"accuracy": self.accuracy(correct.astype(jnp.float32), batch).mean()[0]}
         metrics |= {f"rate/{name}": rate for name, rate in firing_rates(updated).items()}
         if self.rates is not None:
-            penalty = rate_penalty(updated, self.rates.lower, self.rates.upper)
+            penalty = rate_penalty(updated, self.rates.lower, self.rates.upper,
+                                   rows=_row_weights(batch, labels.shape[0]))
             metrics["rate_penalty"] = penalty
-            total = total + self.rates.weight * penalty * labels.shape[0]
+            stats = Ratio(stats.total + self.rates.weight * penalty * stats.mass, stats.mass)
         kept = {name: value for name, value in updated.items() if name != RATES}
-        stats = Ratio(total, jnp.asarray(labels.shape[0], jnp.float32))
         return stats, Aux(metrics=metrics, variables=kept or None)
 
     @functools.cached_property
     def _scores(self):
-        def scores(variables: Variables, field: jax.Array, labels: jax.Array, weights: jax.Array,
-                   key: jax.Array, step: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
+        def scores(variables: Variables, field: jax.Array, labels: jax.Array, key: jax.Array,
+                   step: jax.Array) -> tuple[jax.Array, jax.Array]:
             x = self.encoder(key, field)
             outputs = self.model.apply(variables, x, method=self._method(step, train=False))
             # `mutable` is unset, so apply returns the outputs alone, not a pair.
             assert not isinstance(outputs, tuple)
             losses = readout_losses(self.readout, outputs, labels)
             correct = jnp.argmax(readout_logits(self.readout, outputs), -1) == labels
-            return losses[:, None], weights[:, None], correct[:, None]
+            return losses[:, None], correct[:, None]
 
         return jax.jit(scores)
 
     def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
-        variables = params if step.ema is None else step.ema
         field, labels = jnp.asarray(batch[self.sample.key]), jnp.asarray(batch[self.labels])
-        weights = (jnp.asarray(batch[WEIGHT], jnp.float32) if WEIGHT in batch
-                   else jnp.ones(labels.shape, jnp.float32))
-        losses, weights, correct = self._scores(variables, field, labels, weights, step.key, step.step)
-        return TokenScores(losses=losses, weights=weights, correct=correct)
+        losses, correct = self._scores(self.evaluation_variables(params, step), field, labels, step.key,
+                                       step.step)
+        return TokenScores(losses=losses, weights=jnp.ones_like(losses), correct=correct)
 
-    def inference_record(self) -> JSON:
-        """The model, encoder, readout, schedules and deployed arguments of the classifier."""
-        # Remove when AshishKumar4/dew#34 merges: dew.config.to_json, the same function made public.
-        from dew.config import ModelConfig, _to_json
-        if not any(member is type(self) for member in objectives.values()):
-            return None
+    def task_record(self) -> Mapping[str, JSON]:
+        """The encoder, readout, schedules and deployed arguments of the classifier."""
         return {
-            "objective": objectives.name_of(type(self)),
-            "model": _to_json(ModelConfig.from_model(self.model), ModelConfig),
             "sample": {"key": self.sample.key, "shape": list(self.sample.shape)},
-            "encoder": _to_json(self.encoder, SpikeEncoder),
+            "encoder": to_record(self.encoder, SpikeEncoder),
             "readout": self.readout,
             "labels": self.labels,
-            "schedules": {name: _to_json(schedule, ScheduleBase)
+            "schedules": {name: to_record(schedule, ScheduleBase)
                           for name, schedule in self.schedules.items()},
             "schedule_steps": self.schedule_steps,
-            "schedule_every": self.schedule_every,
             "deployed": dict(self.deployed),
         }
 
-    def pipeline(self, state: TrainState, *, ema: bool | None = None) -> SpikingClassification:
-        """The trained classifier over `state`'s weights.
+    def build_task(self, variables: Variables, *,
+                   processor: Processor | None | Omitted = OMITTED) -> SpikingClassification:
+        """The trained classifier over `variables`.
 
         The schedules stand at their final values, with the deployed
-        arguments over them.
+        arguments over them. A spiking classifier reads no text, so it takes
+        no `processor`.
         """
-        # Remove when AshishKumar4/dew#39 merges: `Objective.pipeline_variables(state, ema=ema)`.
-        variables = self._pipeline_weights(state, ema)
+        if processor is not OMITTED:
+            raise TypeError("a spiking classifier reads no text, so it takes no processor")
         final = jnp.asarray(self.schedule_steps or 0)
         call = {name: float(value) for name, value in self._scheduled(final).items()} | self.deployed
         return SpikingClassification(self.model, thaw(variables), self.encoder, self.readout, call)
 
 
-@objectives("activity_fit")
 class ActivityFitObjective(Objective[Ratio]):
     """Fit a network's spiking to recorded spike trains: model fitting to recordings.
 
@@ -289,9 +264,10 @@ class ActivityFitObjective(Objective[Ratio]):
     moves spikes toward their recorded times. `loss="psth"` takes the
     squared difference of the trial-averaged rates over the batch, smoothed
     over `window` steps, for recordings repeated over trials where only the
-    rate is reproducible. The loss is reported per example; metrics give the
-    model's and the recording's mean rates (spikes per step). Evaluation
-    returns one `TokenScores` row per example, its loss.
+    rate is reproducible, over the batch's real rows. The loss is reported
+    per example; metrics give the model's and the recording's mean rates
+    (spikes per step). Evaluation returns one `TokenScores` row per example,
+    its loss.
     """
 
     artifact = TokenScores
@@ -302,14 +278,14 @@ class ActivityFitObjective(Objective[Ratio]):
                  window: int = 10):
         if loss not in ("van_rossum", "psth"):
             raise ValueError(f"loss must be van_rossum or psth, not {loss!r}")
-        self.model = model
+        self.model = self.bind_model(model)
         self.stimulus = stimulus
         self.recording = recording
         self.kind = loss
         self.tau, self.dt, self.window = tau, dt, window
         self.inputs = InputSpec(sample=stimulus)
 
-    def init(self, key: jax.Array, variables: Variables | None = None) -> Variables:
+    def fresh_variables(self, key: jax.Array, held: Variables | None) -> Variables:
         x = jnp.zeros((self.stimulus.shape[0], 1, *self.stimulus.shape[1:]), jnp.float32)
         return dict(self.model.init(key, x))
 
@@ -327,27 +303,26 @@ class ActivityFitObjective(Objective[Ratio]):
             def smooth(train: jax.Array) -> jax.Array:
                 return jnp.convolve(train, kernel, mode="same")
 
+            weights = _row_weights(batch, spikes.shape[1])
+
             def psth(trains: jax.Array) -> jax.Array:  # [T, B, N] -> [T, N]
-                return jax.vmap(smooth, in_axes=1, out_axes=1)(trains.mean(1))
+                mean = jnp.einsum("tbn,b->tn", trains, weights) / jnp.sum(weights)
+                return jax.vmap(smooth, in_axes=1, out_axes=1)(mean)
 
             error = jnp.sum((psth(spikes) - psth(target)) ** 2)
-            per_example = jnp.full(spikes.shape[1], error / spikes.shape[1])
+            per_example = jnp.full(spikes.shape[1], error / jnp.sum(weights))
         return per_example, spikes, target
 
     def loss(self, variables: Variables, batch: Batch, step: Step) -> tuple[Ratio, Aux]:
         per_example, spikes, target = self._distances(variables, batch)
-        metrics = {"distance": jnp.mean(per_example), "rate": jnp.mean(spikes),
-                   "recorded_rate": jnp.mean(target)}
-        stats = Ratio(jnp.sum(per_example), jnp.asarray(per_example.shape[0], jnp.float32))
+        stats = self.row_mean(per_example, batch)
+        metrics = {"distance": stats.mean()[0], "rate": jnp.mean(spikes), "recorded_rate": jnp.mean(target)}
         return stats, Aux(metrics=metrics)
 
     def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
-        per_example, _, _ = self._distances(params if step.ema is None else step.ema, batch)
+        per_example, _, _ = self._distances(self.evaluation_variables(params, step), batch)
         ones = jnp.ones_like(per_example)[:, None]
         return TokenScores(losses=per_example[:, None], weights=ones, correct=jnp.zeros_like(ones, bool))
-
-    def inference_record(self) -> JSON:
-        return None
 
 
 type EPropRule = Literal["eprop", "random", "bptt"]
@@ -359,7 +334,6 @@ type EPropRule = Literal["eprop", "random", "bptt"]
 """
 
 
-@objectives("eprop")
 class EPropObjective(Objective[Ratio]):
     """Classify recordings with a recurrent spiking layer whose gradients are e-prop's.
 
@@ -368,14 +342,13 @@ class EPropObjective(Objective[Ratio]):
     a leaky readout of time constant `tau` with `classes` outputs, all
     stepped at `dt`. Each step's cross entropy, divided by the steps, is
     summed over time, so the loss is the per-step mean, averaged over the
-    batch. The class is the argmax of the readout averaged over time.
+    batch's rows. The class is the argmax of the readout averaged over time.
 
-    Dew's trainer differentiates the loss, and an objective has no hook to
-    hand it a gradient of its own. The loss therefore carries e-prop's
-    gradient as its custom VJP (`jax.custom_vjp`): the forward pass of a
-    differentiated loss runs `sparx.learn.eprop`, which computes the
+    The loss runs `sparx.learn.eprop`, which computes the loss and its
     gradients online in memory that does not grow with the recording, and
-    the backward pass scales them by the cotangent. `rule="bptt"`
+    hands the gradients to dew's trainer as the loss's own
+    (`Objective.with_gradients`), so the trainer's one gradient path applies
+    them with its accumulation, sharding and logging. `rule="bptt"`
     differentiates `sparx.learn.bptt_loss` instead. With `rule="random"`
     the feedback weights are drawn once by `init` and kept in the
     `feedback` collection, which no update touches.
@@ -402,7 +375,7 @@ class EPropObjective(Objective[Ratio]):
         self.rule: EPropRule = rule
         self.inputs = InputSpec(sample=sample)
 
-    def init(self, key: jax.Array, variables: Variables | None = None) -> Variables:
+    def fresh_variables(self, key: jax.Array, held: Variables | None) -> Variables:
         channels = self.sample.shape[1]
         w_in, w_rec, w_out, feedback = jax.random.split(key, 4)
         h, c = self.hidden, self.classes
@@ -429,50 +402,32 @@ class EPropObjective(Objective[Ratio]):
         params, inputs, labels = self._network(variables, batch)
         steps = inputs.shape[0]
         targets = jnp.broadcast_to(labels, (steps, *labels.shape))
+        weights = _row_weights(batch, labels.shape[0])
 
         def step_loss(y: jax.Array, label: jax.Array) -> jax.Array:
-            return jnp.sum(optax.softmax_cross_entropy_with_integer_labels(y, label)) / steps
+            return jnp.sum(weights * optax.softmax_cross_entropy_with_integer_labels(y, label)) / steps
 
         if self.rule == "bptt":
             total = bptt_loss(self.cell, params, inputs, targets, step_loss, tau=self.tau, dt=self.dt)
-        else:
-            feedback = variables["feedback"]["weight"] if self.rule == "random" else None
-            total = self._online(params, inputs, targets, step_loss, feedback)
-        stats = Ratio(total, jnp.asarray(labels.shape[0], jnp.float32))
-        return stats, Aux(metrics={})
-
-    def _online(self, params: EPropParams, inputs: jax.Array, targets: jax.Array,
-                step_loss: Callable[[jax.Array, jax.Array], jax.Array],
-                feedback: jax.Array | None) -> jax.Array:
-        """The summed loss, whose gradient by `params` is e-prop's."""
-        cell, tau, dt = self.cell, self.tau, self.dt
+            return Ratio(total, jnp.sum(weights)), Aux(metrics={})
+        feedback = variables["feedback"]["weight"] if self.rule == "random" else None
+        # The trainer's gradient reaches the parameters through `with_gradients` alone, so it never
+        # linearizes e-prop's scan, whose memory would then grow with the recording.
+        total, grads = eprop(self.cell, jax.lax.stop_gradient(params), inputs, targets, step_loss,
+                             tau=self.tau, dt=self.dt, feedback=feedback)
         no_self = 1 - jnp.eye(self.hidden)
-
-        @jax.custom_vjp
-        def summed(params: EPropParams, inputs: jax.Array, targets: jax.Array,
-                   feedback: jax.Array | None) -> jax.Array:
-            return bptt_loss(cell, params, inputs, targets, step_loss, tau=tau, dt=dt)
-
-        def forward(params: EPropParams, inputs: jax.Array, targets: jax.Array,
-                    feedback: jax.Array | None) -> tuple[jax.Array, EPropParams]:
-            return eprop(cell, params, inputs, targets, step_loss, tau=tau, dt=dt, feedback=feedback)
-
-        def backward(grads: EPropParams, cotangent: jax.Array) -> tuple[EPropParams, None, None, None]:
-            # The data and the fixed feedback weights take no gradient.
-            grads = grads._replace(w_rec=grads.w_rec * no_self)
-            return jax.tree.map(lambda grad: cotangent * grad, grads), None, None, None
-
-        summed.defvjp(forward, backward)
-        return summed(params, inputs, targets, feedback)
+        rule = {"w_in": grads.w_in, "w_rec": grads.w_rec * no_self, "w_out": grads.w_out,
+                "b_out": grads.b_out}
+        stats = Ratio(total, jnp.sum(weights))
+        # The rule mirrors the statistics' tree: the total's gradient, and none for the row count.
+        gradients = jax.tree.unflatten(jax.tree.structure(stats), [rule, None])
+        return self.with_gradients(stats, gradients, variables["params"]), Aux(metrics={})
 
     def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
-        network, inputs, labels = self._network(params if step.ema is None else step.ema, batch)
+        network, inputs, labels = self._network(self.evaluation_variables(params, step), batch)
         outputs, _ = eprop_forward(self.cell, network, inputs, tau=self.tau, dt=self.dt)
         logits = jnp.mean(outputs, axis=0)
         losses = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
         ones = jnp.ones_like(losses)[:, None]
         return TokenScores(losses=losses[:, None], weights=ones,
                            correct=(jnp.argmax(logits, -1) == labels)[:, None])
-
-    def inference_record(self) -> JSON:
-        return None
