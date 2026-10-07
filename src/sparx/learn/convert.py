@@ -58,7 +58,7 @@ from flax import struct
 
 from sparx.dynamics import Output, Reset, SynapticInput
 from sparx.dynamics.core import membrane_dtype
-from sparx.nn import IF, STATE, Flatten, Neuron
+from sparx.nn import IF, STATE, Flattens, Neuron
 
 __all__ = ["SpikingMaxPool", "convert", "fold_batch_norm", "normalize", "run_converted"]
 
@@ -231,7 +231,7 @@ def _spiking(layers: list[Callable[..., jax.Array]], k: int, last: int,
     if pool is not None:
         kind, window, strides = pool
         return [SpikingMaxPool(window=window, strides=strides) if kind == "max" else layer]
-    if isinstance(layer, Flatten):
+    if isinstance(layer, Flattens):
         return [layer]
     if isinstance(layer, nn.BatchNorm):
         raise ValueError("fold batch norm into the layer before it (fold_batch_norm) before converting")

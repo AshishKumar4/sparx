@@ -73,8 +73,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from sparx.dynamics import decay
-from sparx.nn import IF, LIF, Flatten, Recurrent
+from sparx.dynamics import LIFCell, NeuronModel, RecurrentCell, decay
+from sparx.nn import IF, LIF, Flatten, Flattens, Modelled, Recurrent
 
 if TYPE_CHECKING:
     import nir
@@ -136,26 +136,23 @@ def _output_shape(layer: nn.Module, params: LayerParams, shape: tuple[int, ...])
     return tuple(out.shape[2:])
 
 
-def _export_lif(layer: nn.Module, shape: tuple[int, ...], dt: float,
-                discretization: Discretization) -> nir.LIF:
+def _export_neuron(cell: NeuronModel, step: float, shape: tuple[int, ...], dt: float,
+                   discretization: Discretization) -> nir.LIF | nir.IF:
+    """The NIR node of a layer's model, a `LIFCell` stepped at `step` in the unit of its decay:
+    `IF` when it does not leak, else `LIF`."""
     import nir
 
-    if not isinstance(layer, LIF) or layer.reset != "zero" or layer.learn_tau:
-        raise NotImplementedError("NIR's LIF resets to v_reset: "
-                                  "export LIF(reset='zero') with a fixed tau")
-    tau, r = _continuous(decay(layer.tau, layer.dt), dt, discretization)
+    if not isinstance(cell, LIFCell):
+        raise NotImplementedError(f"NIR has no neuron for a {type(cell).__name__}: LIF and IF export")
+    if cell.reset != "zero" or np.ndim(cell.decay) or np.ndim(cell.threshold):
+        raise NotImplementedError("NIR's LIF and IF reset to v_reset and hold one time constant and "
+                                  "threshold: export reset='zero' with a fixed tau")
     ones = np.ones(_to_nir_shape(shape))
-    return nir.LIF(tau=tau * ones, r=r * ones, v_leak=0 * ones,
-                   v_threshold=layer.threshold * ones, v_reset=0 * ones)
-
-
-def _export_if(layer: IF, shape: tuple[int, ...], dt: float) -> nir.IF:
-    import nir
-
-    if layer.reset != "zero":
-        raise NotImplementedError("NIR's IF resets to v_reset: export IF(reset='zero')")
-    ones = np.ones(_to_nir_shape(shape))
-    return nir.IF(r=ones / dt, v_threshold=layer.threshold * ones, v_reset=0 * ones)
+    threshold = float(cell.threshold) * ones
+    if cell.decay == 1.0:
+        return nir.IF(r=ones / dt, v_threshold=threshold, v_reset=0 * ones)
+    tau, r = _continuous(float(cell.decay) ** step, dt, discretization)
+    return nir.LIF(tau=tau * ones, r=r * ones, v_leak=0 * ones, v_threshold=threshold, v_reset=0 * ones)
 
 
 def _export_dense(params: LayerParams, shape: tuple[int, ...]) -> nir.Affine:
@@ -203,10 +200,10 @@ def _export_conv(layer: nn.Conv, params: LayerParams, shape: tuple[int, ...]) ->
                       groups=layer.feature_group_count, bias=bias)
 
 
-def _export_flatten(layer: Flatten, shape: tuple[int, ...]) -> nir.Flatten:
+def _export_flatten(layer: Flattens, shape: tuple[int, ...]) -> nir.Flatten:
     import nir
 
-    if layer.ndim != len(shape):
+    if layer.flattened_axes() != len(shape):
         raise NotImplementedError("a Flatten exports when it flattens each example's whole shape")
     return nir.Flatten(input_type={"input": np.array(_to_nir_shape(shape))}, start_dim=0, end_dim=-1)
 
@@ -216,25 +213,27 @@ def _export_layer(layer: nn.Module, params: LayerParams, name: str, shape: tuple
     """The NIR nodes of one layer, the edges among them, and the node its input and output use."""
     import nir
 
-    if isinstance(layer, Recurrent):
+    if isinstance(layer, Modelled):
+        x = jnp.zeros((1, 1, *shape), jnp.float32)
+        cell = layer.apply({"params": params}, x, method="model")
+        # `mutable` is unset, so apply returns the model alone, not a pair.
+        assert not isinstance(cell, tuple)
+        if not isinstance(cell, RecurrentCell):
+            return {name: _export_neuron(cell, layer.dt, shape, dt, discretization)}, [], name
         if len(shape) != 1:
             raise NotImplementedError("a Recurrent layer exports on flat inputs")
         lif, w_rec = f"{name}.lif", f"{name}.w_rec"
         nodes: dict[str, nir.NIRNode] = {
-            lif: _export_lif(layer.neuron, shape, dt, discretization),
-            w_rec: nir.Linear(weight=np.asarray(params["recurrent"]).T),
+            lif: _export_neuron(cell.inner, layer.dt, shape, dt, discretization),
+            w_rec: nir.Linear(weight=np.asarray(cell.weight).T),
         }
         return nodes, [(lif, w_rec), (w_rec, lif)], lif
     if isinstance(layer, nn.Dense):
         node: nir.NIRNode = _export_dense(params, shape)
     elif isinstance(layer, nn.Conv):
         node = _export_conv(layer, params, shape)
-    elif isinstance(layer, Flatten):
+    elif isinstance(layer, Flattens):
         node = _export_flatten(layer, shape)
-    elif isinstance(layer, LIF):
-        node = _export_lif(layer, shape, dt, discretization)
-    elif isinstance(layer, IF):
-        node = _export_if(layer, shape, dt)
     else:
         raise NotImplementedError(f"cannot export {type(layer).__name__} to NIR")
     return {name: node}, [], name

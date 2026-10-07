@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from typing import Literal
+from typing import Literal, Protocol, runtime_checkable
 
 import flax.linen as nn
 import jax
@@ -65,6 +65,7 @@ __all__ = [
     "STATE",
     "Dynamics",
     "Izhikevich",
+    "Modelled",
     "Neuron",
     "Rate",
     "Recurrent",
@@ -78,6 +79,22 @@ STATE = "state"
 """The collection a layer carries its neurons' state in across `apply` calls."""
 RATES = "spike_rates"
 """The collection spiking layers sow their per-example, per-neuron firing rates into."""
+
+
+@runtime_checkable
+class Modelled(Protocol):
+    """A layer that runs a `sparx.dynamics` model over time, stepped at `dt`.
+
+    `model(x)` builds the model with the layer's parameters for inputs like
+    `x`, called through `apply(variables, x, method="model")`. A consumer
+    that maps layers to another library's (NIR's `LIF`) reads the model it
+    gets, a `LIFCell` or a `RecurrentCell`, and does not ask for the layer's
+    class. Every `Neuron` is one.
+    """
+
+    dt: float
+
+    def model(self, x: jax.Array) -> NeuronModel: ...
 
 
 class Neuron(nn.Module):

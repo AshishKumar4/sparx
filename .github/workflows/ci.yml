@@ -38,7 +38,12 @@ jobs:
     - name: Lint
       run: |
         uvx ruff@0.14.3 check src tests tools benchmarks examples recipes
-        python tools/lint_slop.py
+        python tools/lint_slop.py --package sparx src/sparx tests tools recipes examples benchmarks
+    - name: The prose checker is dew's
+      # tools/lint_slop.py is dew's file as it is at the commit pyproject.toml pins.
+      run: |
+        pin=$(sed -n 's|.*AshishKumar4/dew@\([0-9a-f]*\).*|\1|p' pyproject.toml)
+        curl -fsSL "https://raw.githubusercontent.com/AshishKumar4/dew/$pin/tools/lint_slop.py" | diff - tools/lint_slop.py
     - name: Type check
       run: uvx pyright@1.1.406 --pythonpath "$(which python)" src/sparx
     - name: Test

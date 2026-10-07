@@ -10,6 +10,7 @@ from .neurons import (
     STATE,
     Dynamics,
     Izhikevich,
+    Modelled,
     Neuron,
     Rate,
     Recurrent,
@@ -19,7 +20,7 @@ from .neurons import (
     record_rates,
 )
 from .parallel import PSN, MaskedPSN, SlidingPSN, band_mask
-from .reshape import Flatten
+from .reshape import Flatten, Flattens
 
 __all__ = [
     "ALIF",
@@ -32,8 +33,10 @@ __all__ = [
     "DelayedDense",
     "Dynamics",
     "Flatten",
+    "Flattens",
     "Izhikevich",
     "MaskedPSN",
+    "Modelled",
     "Neuron",
     "Rate",
     "Recurrent",

@@ -9,33 +9,36 @@ Python's version of each is below. No dependency, one output format,
 
 Scope is per rule, because the rules are not all about the same thing:
 
-- `src/sparx` is the published contract, so every rule runs there.
-- `tests`, `tools`, `recipes`, `examples` and `benchmarks` are scripts and proofs. Their
+- `src/dew` is the published contract, so every rule runs there. A plugin
+  package checks itself with `--root` (its checkout) and `--package` (its
+  name, so `src/<package>` is the contract and its own modules are the ones
+  SLOP008 will not see patched).
+- `tests`, `tools`, `recipes` and `examples` are scripts and proofs. Their
   names and annotations are local, so the contract rules (SLOP001, SLOP002,
   SLOP004, SLOP005) do not run there. A swallowed exception, a narration
   comment and an unsplittable function are defects anywhere, so those do.
 - SLOP008 is about the suite only.
+- SLOP010 is about the contract's consumers of its models, so it runs in
+  `src/<package>`, against an index of the whole package.
 
 Every rule fails the gate, and none has a per-finding suppression.
 
 Analysis boundaries, stated the way anti-slop states its own: this reads one
-file's AST, with no imported definitions and no inference across calls.
+file's AST, with no imported definitions and no inference across calls, but
+for SLOP010, which reads the whole package's imports, re-exports, aliases and
+class bases, and Flax's Module from its installed source (never importing
+it), to know which classes are models. It sees what Python spells, not what
+dynamic dispatch reaches; behaviour across models is the capability matrix's
+proof (tests/test_capability_matrix.py).
 SLOP004's isinstance half fires only when the annotation it needs is written in
 the same scope; a value whose type arrives from another module is not narrowed
 by this checker and is not reported. SLOP006 walks the handler body it can see,
 so an exception handed to a function that re-raises elsewhere reads as reported.
-
-This is dew's `tools/lint_slop.py` at commit 306b2bf, with the package root
-and name changed from `src/dew` and `dew.` to `src/sparx` and `sparx.`, and
-`benchmarks` added to the roots. The sanctioned `Variables` and `Batch`
-aliases stay dew's, so sparx imports them instead of declaring its own.
-Dew's checker at the commit sparx pins takes the package as an argument and
-adds SLOP010, which `sparx.nir` and `sparx.learn.convert` do not pass yet;
-the copy becomes dew's own once they do.
 """
 
 from __future__ import annotations
 
+import argparse
 import ast
 import io
 import re
@@ -117,6 +120,7 @@ class Module:
     relative: str
     source: str
     tree: ast.Module
+    package: str = "dew"
 
     @property
     def lines(self) -> list[str]:
@@ -124,7 +128,7 @@ class Module:
 
     @property
     def is_source(self) -> bool:
-        return self.relative.startswith("src/sparx/")
+        return self.relative.startswith(f"src/{self.package}/")
 
 
 def _named(node: ast.expr | None) -> str:
@@ -217,13 +221,27 @@ def _alias_value(node: ast.stmt) -> tuple[str, ast.expr] | None:
     if (isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
             and _named(node.annotation).rsplit(".", 1)[-1] == "TypeAlias" and node.value):
         return node.target.id, node.value
+    generic = isinstance(node, ast.Assign) and isinstance(node.value, ast.Subscript) and isinstance(
+        node.value.value, ast.Name | ast.Attribute)
     if (isinstance(node, ast.Assign) and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
-            and isinstance(node.value, ast.Subscript | ast.BinOp)
+            and (isinstance(node.value, ast.BinOp) or generic)
             and any(_named(name).rsplit(".", 1)[-1] in {"Any", "object"}
-                    for name in ast.walk(node.value) if isinstance(name, ast.Name | ast.Attribute))):
+                    for name in _outside_calls(node.value))):
         return node.targets[0].id, node.value
     return None
+
+
+def _outside_calls(node: ast.AST) -> Iterator[ast.Name | ast.Attribute]:
+    """The names an expression spells outside any call's arguments: in
+    `np.asarray(rows, object)[keep]`, `object` is NumPy's object dtype, not
+    a type in an alias."""
+    if isinstance(node, ast.Call):
+        return
+    if isinstance(node, ast.Name | ast.Attribute):
+        yield node
+    for child in ast.iter_child_nodes(node):
+        yield from _outside_calls(child)
 
 
 def contracts(module: Module) -> Iterator[Finding]:
@@ -511,9 +529,9 @@ def mocks(module: Module) -> Iterator[Finding]:
         elif name.endswith("monkeypatch.setattr"):
             target = (node.args[0].value if isinstance(node.args[0], ast.Constant)
                       else _named(node.args[0]))
-        if not isinstance(target, str) or not target.startswith(("sparx.", "sparx")):
+        if not isinstance(target, str) or not target.startswith(f"{module.package}."):
             continue
-        if not target.startswith("sparx.") or any(seam in target.lower() for seam in SEAMS):
+        if any(seam in target.lower() for seam in SEAMS):
             continue
         yield Finding(module.relative, node.lineno, node.col_offset + 1, "SLOP008",
                       f"patches {target}; the fix is a seam the test can pass a double to")
@@ -534,35 +552,265 @@ def size(module: Module) -> Iterator[Finding]:
                           f"{node.name} is {length} lines; name its parts")
 
 
+def _module_name(module: Module) -> str:
+    """`src/dew/nn/transformer.py` as `dew.nn.transformer`, a package as its `__init__`'s."""
+    parts = module.relative.removeprefix("src/").removesuffix(".py").split("/")
+    return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+
+
+def _imports(tree: ast.Module, name: str, package: bool) -> dict[str, str]:
+    """What each name a module imports stands for, as a dotted path: every
+    import in it, those inside functions and type-checking blocks included."""
+    bound: dict[str, str] = {}
+    parent = name.split(".") if package else name.split(".")[:-1]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                head = alias.name.split(".")[0]
+                bound[alias.asname or head] = alias.name if alias.asname else head
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            if node.level:
+                base = ".".join([*parent[:len(parent) - node.level + 1], *([base] if base else [])])
+            for alias in node.names:
+                if alias.name != "*":
+                    bound[alias.asname or alias.name] = f"{base}.{alias.name}"
+    return bound
+
+
+def _aliased(node: ast.stmt) -> tuple[str, ast.expr] | None:
+    """A module-level name bound to other names: `Decoders = A | B`, a tuple of them, a type alias."""
+    if isinstance(node, ast.TypeAlias) and isinstance(node.name, ast.Name):
+        return node.name.id, node.value
+    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value:
+        return node.target.id, node.value
+    if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+        return node.targets[0].id, node.value
+    return None
+
+
+def _members(body: Sequence[ast.stmt]) -> set[str]:
+    """The private names a class body declares: its methods, its class-level
+    fields (type-checking blocks included) and what its methods set on self."""
+    declared: set[str] = set()
+    for statement in body:
+        if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
+            declared.add(statement.name)
+            declared |= {node.attr for node in ast.walk(statement) if isinstance(node, ast.Attribute)
+                         and isinstance(node.ctx, ast.Store) and _named(node.value) == "self"}
+        elif not isinstance(statement, ast.ClassDef):
+            declared |= {node.id for node in [statement, *_own(statement)]
+                         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)}
+    return {name for name in declared if name.startswith("_") and not name.startswith("__") and name != "_"}
+
+
+@dataclass
+class ModelIndex:
+    """SLOP010's view of a package: which of its classes are Flax models.
+
+    A model class is found, never listed: a class whose bases reach Flax's
+    own Module, through the package's imports, re-exports and subclasses. It
+    may be asked for by identity only in the module that defines it, and the
+    private members model classes declare, Flax's own among them, only by
+    the modules that declare them.
+    """
+
+    imports: dict[str, dict[str, str]]
+    aliases: dict[str, dict[str, ast.expr]]
+    bases: dict[str, list[tuple[str, ast.expr]]]
+    defined: dict[str, str]
+    models: set[str]
+    private: dict[str, set[str]]
+
+    @classmethod
+    def build(cls, modules: Sequence[Module]) -> ModelIndex:
+        index = cls({}, {}, {}, {}, set(), {})
+        bodies: dict[str, list[ast.stmt]] = {}
+        for module in modules:
+            name = _module_name(module)
+            index.imports[name] = _imports(module.tree, name, module.path.name == "__init__.py")
+            index.aliases[name] = {}
+            for node in module.tree.body:
+                if isinstance(node, ast.ClassDef):
+                    index.bases[f"{name}.{node.name}"] = [(name, base) for base in node.bases]
+                    index.defined[f"{name}.{node.name}"] = module.relative
+                    bodies[f"{name}.{node.name}"] = node.body
+                elif (aliased := _aliased(node)) is not None:
+                    index.aliases[name][aliased[0]] = aliased[1]
+        roots = {f"flax.{kind}.Module" for kind in ("linen", "nnx")} | {
+            f"flax.{kind}.module.Module" for kind in ("linen", "nnx")}
+        grown = True
+        while grown:
+            reached = {name for name, bases in index.bases.items() if name not in index.models and any(
+                index._symbol(module, base) & (roots | index.models) for module, base in bases)}
+            index.models |= reached
+            grown = bool(reached)
+        for name in index.models:
+            for member in _members(bodies[name]):
+                index.private.setdefault(member, set()).add(index.defined[name])
+        for member in _flax_members():
+            index.private.setdefault(member, set())
+        return index
+
+    def _symbol(self, module: str, node: ast.expr, seen: frozenset[str] = frozenset()) -> set[str]:
+        """The classes and dotted paths `node`, read in `module`, stands for:
+        one name, or every member of a tuple, a union or an alias of them."""
+        if isinstance(node, ast.Tuple | ast.List | ast.Set):
+            return set().union(*(self._symbol(module, element, seen) for element in node.elts))
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            return self._symbol(module, node.left, seen) | self._symbol(module, node.right, seen)
+        if isinstance(node, ast.Subscript) and _named(node.value).rsplit(".", 1)[-1] in {"Union", "Optional"}:
+            return self._symbol(module, node.slice, seen)
+        spelled = _named(node)
+        if not spelled:
+            return set()
+        head, _, rest = spelled.partition(".")
+        if not rest and head in self.aliases.get(module, {}) and f"{module}.{head}" not in seen:
+            return self._symbol(module, self.aliases[module][head], seen | {f"{module}.{head}"})
+        if f"{module}.{head}" in self.defined:
+            dotted = f"{module}.{spelled}"
+        else:
+            dotted = f"{self.imports.get(module, {}).get(head, head)}{'.' + rest if rest else ''}"
+        return self._canonical(dotted, seen)
+
+    def _canonical(self, dotted: str, seen: frozenset[str]) -> set[str]:
+        """Where `dotted` is defined: through a package's re-export or a
+        module's alias, to the class itself."""
+        if dotted in self.defined or dotted in seen:
+            return {dotted}
+        parts = dotted.split(".")
+        for cut in range(len(parts) - 1, 0, -1):
+            owner = ".".join(parts[:cut])
+            if owner in self.imports:
+                rest: ast.expr = ast.Name(parts[cut])
+                for part in parts[cut + 1:]:
+                    rest = ast.Attribute(rest, part)
+                return self._symbol(owner, rest, seen | {dotted})
+        return {dotted}
+
+    def classes(self, module: str, node: ast.expr) -> set[str]:
+        """The model classes `node` names in `module`."""
+        return self._symbol(module, node) & self.models
+
+
+def _flax_members() -> set[str]:
+    """The private members of Flax's Module and the bases it declares beside
+    it, read from Flax's installed source, never imported: `_try_setup`,
+    `_state` and every other one a release has."""
+    for entry in sys.path:
+        source = Path(entry or ".") / "flax" / "linen" / "module.py"
+        if source.is_file():
+            tree = ast.parse(source.read_text())
+            return set().union(*(_members(node.body) for node in tree.body
+                                 if isinstance(node, ast.ClassDef) and node.name in {"Module", "ModuleBase"}))
+    raise SystemExit("SLOP010 reads Flax's Module from its installed source; install flax")
+
+
+def _identity(node: ast.AST) -> ast.expr | None:
+    """The class an identity test names: `isinstance(x, C)`, `issubclass(x, C)`,
+    `type(x) is C`, `x.__class__ == C`, `type(x) in (C, D)`, `case C()`."""
+    if (isinstance(node, ast.Call) and _named(node.func) in {"isinstance", "issubclass"}
+            and len(node.args) == 2):
+        return node.args[1]
+    if isinstance(node, ast.MatchClass):
+        return node.cls
+    if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(
+            node.ops[0], ast.Is | ast.IsNot | ast.Eq | ast.NotEq | ast.In | ast.NotIn):
+        left, right = node.left, node.comparators[0]
+        for subject, other in ((left, right), (right, left)):
+            if (isinstance(subject, ast.Call) and _named(subject.func) == "type") or (
+                    isinstance(subject, ast.Attribute) and subject.attr == "__class__"):
+                return other
+    return None
+
+
+def _named_class(node: ast.AST) -> list[str]:
+    """The class names a `type(x).__name__ == "Name"` test spells as strings."""
+    if not (isinstance(node, ast.Compare) and len(node.ops) == 1):
+        return []
+    for subject, other in ((node.left, node.comparators[0]), (node.comparators[0], node.left)):
+        if isinstance(subject, ast.Attribute) and subject.attr in {"__name__", "__qualname__"}:
+            constants = other.elts if isinstance(other, ast.Tuple | ast.List | ast.Set) else [other]
+            return [constant.value for constant in constants
+                    if isinstance(constant, ast.Constant) and isinstance(constant.value, str)]
+    return []
+
+
+def boundaries(module: Module, models: ModelIndex) -> Iterator[Finding]:
+    """SLOP010: a consumer asks a model what it can do, never which one it is.
+
+    An identity test on a model class, by isinstance, issubclass, type or a
+    class pattern, alias, tuple and union spellings included, and a read of
+    a model's private member, are refused everywhere but the module that
+    defines the class or declares the member. The way through is a
+    capability (`dew.nn.protocols`): what any model may define, and a
+    caller checks for and calls."""
+    name = _module_name(module)
+    simple = {model.rsplit(".", 1)[-1]: model for model in models.models}
+    for node in ast.walk(module.tree):
+        if not isinstance(node, ast.expr | ast.pattern):
+            continue
+        named = _identity(node)
+        found = models.classes(name, named) if named is not None else set()
+        found |= {simple[spelled] for spelled in _named_class(node) if spelled in simple}
+        for model in sorted(found):
+            if models.defined[model] != module.relative:
+                yield Finding(module.relative, node.lineno, node.col_offset + 1, "SLOP010",
+                              f"asks whether a model is {model.rsplit('.', 1)[-1]} "
+                              f"({models.defined[model]}); ask for the capability instead")
+        member, receiver = None, None
+        if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+            member, receiver = node.attr, node.value
+        elif (isinstance(node, ast.Call) and _named(node.func) in {"getattr", "hasattr", "setattr"}
+                and len(node.args) >= 2 and isinstance(node.args[1], ast.Constant)):
+            member, receiver = node.args[1].value, node.args[0]
+        if (isinstance(member, str) and member in models.private
+                and module.relative not in models.private[member]
+                and _named(receiver) not in {"self", "cls"}
+                and not (isinstance(receiver, ast.Call) and _named(receiver.func) == "super")):
+            yield Finding(module.relative, node.lineno, node.col_offset + 1, "SLOP010",
+                          f"reads {member}, private to a model; ask for a public capability instead")
+
+
 CONTRACT_RULES = (contracts, suppressions, probes, names)
 UNIVERSAL_RULES = (swallowed, comments, size)
 
 
-def check(module: Module) -> Iterator[Finding]:
-    """Every rule that applies to this file, in code order."""
+def check(module: Module, models: ModelIndex | None = None) -> Iterator[Finding]:
+    """Every rule that applies to this file, in code order. SLOP010 reads
+    `models`, the package's index, or this file's own without one."""
     rules = (*CONTRACT_RULES, *UNIVERSAL_RULES) if module.is_source else UNIVERSAL_RULES
     if module.relative.startswith("tests/"):
         rules = (*rules, mocks)
     findings = [finding for rule in rules for finding in rule(module)]
+    if module.is_source:
+        findings += boundaries(module, models or ModelIndex.build([module]))
     yield from sorted(findings, key=lambda finding: (finding.line, finding.col, finding.code))
 
 
-def collect(roots: Sequence[str]) -> Iterator[Module]:
-    """Every Python file under the named roots, skipping stub-only trees."""
+def collect(roots: Sequence[str], checkout: Path = ROOT, package: str = "dew") -> Iterator[Module]:
+    """Every Python file under the named roots of `checkout`, skipping stub-only trees."""
     for root in roots:
-        for path in sorted((ROOT / root).rglob("*.py")):
-            relative = path.relative_to(ROOT).as_posix()
+        for path in sorted((checkout / root).rglob("*.py")):
+            relative = path.relative_to(checkout).as_posix()
             if "/stubs/" in f"/{relative}":
                 continue
-            yield Module(path, relative, path.read_text(), ast.parse(path.read_text()))
+            yield Module(path, relative, path.read_text(), ast.parse(path.read_text()), package)
 
 
-def main() -> int:
-    roots = sys.argv[1:] or ["src/sparx", "tests", "tools", "recipes", "examples", "benchmarks"]
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Report low-evidence Python, `path:line:col: SLOPxxx`.")
+    parser.add_argument("roots", nargs="*", help="directories under the checkout; by default the package's "
+                        "source, tests, tools, recipes and examples")
+    parser.add_argument("--root", type=Path, default=ROOT, help="the checkout (default: Dew's)")
+    parser.add_argument("--package", default="dew", help="the package under src/ (default: dew)")
+    args = parser.parse_args(argv)
+    roots = args.roots or [f"src/{args.package}", "tests", "tools", "recipes", "examples"]
     counts: dict[str, int] = {}
     files: dict[str, set[str]] = {}
-    for module in collect(roots):
-        for finding in check(module):
+    models = ModelIndex.build(list(collect([f"src/{args.package}"], args.root.resolve(), args.package)))
+    for module in collect(roots, args.root.resolve(), args.package):
+        for finding in check(module, models):
             print(finding)
             counts[finding.code] = counts.get(finding.code, 0) + 1
             files.setdefault(finding.code, set()).add(finding.path)

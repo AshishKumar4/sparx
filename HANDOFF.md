@@ -104,7 +104,7 @@ ich #40 leaves out.
 
   ```
   uvx ruff@0.14.3 check src tests tools benchmarks examples recipes
-  python tools/lint_slop.py
+  python tools/lint_slop.py --package sparx src/sparx tests tools recipes examples benchmarks
   uvx pyright@1.1.406 src/sparx
   JAX_PLATFORMS=cpu pytest tests -q
   ```

@@ -2,11 +2,27 @@
 
 from __future__ import annotations
 
+from typing import Protocol, runtime_checkable
+
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
-__all__ = ["Flatten"]
+__all__ = ["Flatten", "Flattens"]
+
+
+@runtime_checkable
+class Flattens(Protocol):
+    """A layer that flattens each example's trailing axes into one feature axis in PyTorch's order,
+    channels first, and changes nothing else: `flattened_axes()` is how many trailing axes.
+
+    A consumer that maps layers to another library's (NIR's `Flatten`) or
+    passes them through a conversion asks a layer for this, not for its class.
+    """
+
+    def flattened_axes(self) -> int: ...
+
+    def __call__(self, x: jax.Array) -> jax.Array: ...
 
 
 class Flatten(nn.Module):
@@ -23,6 +39,10 @@ class Flatten(nn.Module):
     """
 
     ndim: int = 3
+
+    def flattened_axes(self) -> int:
+        """`ndim`, the trailing axes this layer flattens (`Flattens`)."""
+        return self.ndim
 
     def __call__(self, x: jax.Array) -> jax.Array:
         if not 1 <= self.ndim <= x.ndim:

@@ -56,8 +56,8 @@ select = [
 allowed-confusables = ["×", "γ", "σ", "τ", "θ", "β", "α", "ρ"]
 
 [tool.ruff.lint.per-file-ignores]
-# dew's checker, copied with only its package root and name changed; its two
-# rule walkers are as complex as dew's own limit of 25 allows.
+# dew's checker, verbatim at the commit sparx pins (CI checks it); its rule
+# walkers are as complex as dew's own limit of 25 allows.
 "tools/lint_slop.py" = ["C901"]
 
 [tool.ruff.lint.pylint]

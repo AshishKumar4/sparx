@@ -8,8 +8,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from sparx.dynamics import LIFCell, decay
 from sparx.nir import from_nir, to_nir
-from sparx.nn import LIF, Flatten, Recurrent
+from sparx.nn import LIF, Flatten, Neuron, Recurrent
 
 nir = pytest.importorskip("nir")
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -192,6 +193,27 @@ def test_a_sparx_conv_and_recurrent_stack_round_trips_exactly(tmp_path):
     expected = np.asarray(model.apply(variables, x))
     np.testing.assert_array_equal(np.asarray(back.apply(back_variables, x)), expected)
     assert expected.sum() > 30
+
+
+class HardLIF(Neuron):
+    """A layer of one's own, not sparx's LIF, whose model is a hard-reset `LIFCell`."""
+
+    def build(self, x):
+        return LIFCell(decay(4.0), threshold=1.0, reset="zero")
+
+
+def test_a_layer_exports_as_the_model_it_builds():
+    # NIR export reads a layer's model (`sparx.nn.Modelled`), not its class, so a layer of one's own
+    # that builds a LIFCell exports as LIF(tau=4.0) does.
+    x = jnp.ones((2, 1, 3))
+    graphs = []
+    for neuron in (HardLIF(), LIF(tau=4.0, reset="zero")):
+        model = nn.Sequential([nn.Dense(2), neuron])
+        graphs.append(to_nir(model, model.init(jax.random.key(0), x), dt=1e-3))
+    ours, theirs = (graph.nodes["1"] for graph in graphs)
+    assert type(ours) is type(theirs)
+    for field in ("tau", "r", "v_threshold", "v_reset"):
+        np.testing.assert_array_equal(getattr(ours, field), getattr(theirs, field))
 
 
 def test_unsupported_layers_are_refused():
