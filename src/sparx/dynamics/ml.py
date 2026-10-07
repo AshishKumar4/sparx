@@ -77,6 +77,7 @@ __all__ = [
     "RecurrentState",
     "RetroactiveHebb",
     "Serial",
+    "SparseRecurrentCell",
 ]
 
 
@@ -437,6 +438,55 @@ class RecurrentCell[State]:
         inner, out = self.inner.step(state.inner, fed, dt)
         # The feedback promotes the step's input, so the output is cast back
         # to the dtype the carry started with, the input's.
+        value = out.value.astype(state.output.dtype)
+        return RecurrentState(inner, value), Output(value, out.offset)
+
+    def is_refractory(self, state: RecurrentState[State], dt: float) -> jax.Array:
+        return self.inner.is_refractory(state.inner, dt)
+
+    def after_threshold(self, state: RecurrentState[State], jump: jax.Array,
+                        fired: jax.Array) -> RecurrentState[State]:
+        return state._replace(inner=self.inner.after_threshold(state.inner, jump, fired))
+
+
+@struct.dataclass
+class SparseRecurrentCell[State]:
+    """Feed a model's output back to its own input through a list of weighted edges, `pre -> post`.
+
+        output[t] = inner.step(x[t] + sum_e weight[e] output[t-1][pre[e]] at post[e])
+
+    The sparse counterpart of `RecurrentCell`, for a wiring diagram whose
+    edges are a small part of all pairs: a connectome, where FLYNN (Wang and
+    Chen, arXiv 2607.00025) trains `weight` on the whole fly brain's 5.3
+    million edges among 139 thousand neurons. Each step gathers the
+    presynaptic outputs and sums them at their postsynaptic neurons, in time
+    and memory proportional to the edges. `size` is the number of neurons,
+    the last axis of the input; `pre` and `post` index it, and `weight` is
+    one value per edge, a leaf that trains like a dense matrix's entries.
+    """
+
+    inner: NeuronModel[State]
+    pre: jax.Array
+    post: jax.Array
+    weight: jax.Array
+    size: int = struct.field(pytree_node=False)
+
+    @property
+    def graded(self) -> bool:
+        return self.inner.graded
+
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> RecurrentState[State]:
+        if shape[-1] != self.size:
+            raise ValueError(f"the cell's {self.size} neurons read inputs of {self.size} features, "
+                             f"not {shape[-1]}")
+        return RecurrentState(self.inner.init_state(shape, dtype), jnp.zeros(shape, dtype))
+
+    def step(self, state: RecurrentState[State], inputs: SynapticInput,
+             dt: float) -> tuple[RecurrentState[State], Output]:
+        sent = state.output.astype(self.weight.dtype)[..., self.pre] * self.weight
+        feedback = jnp.moveaxis(jax.ops.segment_sum(jnp.moveaxis(sent, -1, 0), self.post, self.size), 0, -1)
+        fed = dataclasses.replace(inputs, jump=inputs.jump + feedback)
+        inner, out = self.inner.step(state.inner, fed, dt)
         value = out.value.astype(state.output.dtype)
         return RecurrentState(inner, value), Output(value, out.offset)
 

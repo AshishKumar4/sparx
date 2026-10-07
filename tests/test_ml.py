@@ -16,6 +16,7 @@ from sparx.dynamics import (
     RecurrentCell,
     RetroactiveHebb,
     Serial,
+    SparseRecurrentCell,
     SynapticInput,
     Term,
     run,
@@ -254,6 +255,13 @@ MODELS = {
         RateCell(0.0), jnp.asarray(np.random.default_rng(9).normal(0, 0.5, (F, F)), jnp.float32),
         jnp.asarray(np.random.default_rng(10).normal(0, 0.5, (F, F)), jnp.float32),
         ModulatedHebb(jnp.full(F, 0.5), 0.1, jnp.linspace(-2.0, 2.0, F), 0.1)),
+    "sparse_rate": SparseRecurrentCell(
+        RateCell(jnp.linspace(0.2, 0.9, F), 0.1), jnp.asarray([0, 1, 2, 3, 4, 5, 6, 2, 5]),
+        jnp.asarray([1, 2, 3, 4, 5, 6, 0, 0, 3]), jnp.asarray(np.random.default_rng(11).normal(0, 0.8, 9)),
+        F),
+    "sparse_lif": SparseRecurrentCell(
+        LIFCell(0.8), jnp.asarray([0, 1, 2, 3, 4, 5, 6, 2, 5]), jnp.asarray([1, 2, 3, 4, 5, 6, 0, 0, 3]),
+        jnp.asarray(np.random.default_rng(12).normal(0, 0.5, 9), jnp.float32), F),
     "plastic_lif": PlasticRecurrentCell(
         LIFCell(0.8), jnp.asarray(np.random.default_rng(9).normal(0, 0.3, (F, F)), jnp.float32),
         jnp.full(F, 0.5), RetroactiveHebb(jnp.full(F, 0.5), -0.2, 0.3)),

@@ -41,6 +41,7 @@ from sparx.dynamics.ml import (
     RecurrentState,
     RetroactiveHebb,
     Serial,
+    SparseRecurrentCell,
 )
 from sparx.dynamics.neurons import (
     IZHIKEVICH_2003,
@@ -144,6 +145,7 @@ __all__ = [
     "RetroactiveHebb",
     "STDPTraces",
     "Serial",
+    "SparseRecurrentCell",
     "StochasticRelease",
     "SynapseModel",
     "SynapticInput",

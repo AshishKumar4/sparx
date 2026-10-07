@@ -15,23 +15,36 @@ the short name `shiu2024` in `sparx.registry.networks`, and its record names
 the reader of its tables by import path (`Connectome.from_shiu` for Shiu et
 al.'s tables, `Connectome.from_malecns` for Janelia's), so
 `sparx.graph.from_record` rebuilds a model on a connectome from its record.
+
+`FLYNN` is Wang and Chen's trainable fly connectome network (arXiv
+2607.00025): a leaky tanh unit per neuron, recurrent through the synapses
+(`sparx.dynamics.SparseRecurrentCell`), with every weight, bias and cell
+class's leak trained by gradient descent, a Flax layer for dew's trainer.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
+import flax.linen as nn
+import jax
 import jax.numpy as jnp
 import numpy as np
 
+from sparx.dynamics import RateCell, SparseRecurrentCell, SynapticInput
 from sparx.dynamics.neurons import LIF
 from sparx.dynamics.synapses import Delta, Exponential, Receptor
 from sparx.graph.connectivity import FromEdges
 from sparx.graph.network import Network, PoissonInput, Population, Projection
+from sparx.nn.neurons import Neuron
 
-__all__ = ["FLYWIRE_630_MEDIAN_INPUTS", "SIGNS", "Connectome", "matched_w_syn", "shiu2024"]
+__all__ = ["FLYNN", "FLYWIRE_630_MEDIAN_INPUTS", "SIGNS", "Connectome", "matched_w_syn", "shiu2024",
+           "spectral_radius"]
 
 SIGNS: dict[str, int] = {"acetylcholine": 1, "gaba": -1, "glutamate": -1, "histamine": -1, "dopamine": 1,
                          "serotonin": 1, "octopamine": 1, "unclear": 1}
@@ -210,3 +223,89 @@ def shiu2024(connectome: Connectome, *, stimuli: Sequence[tuple[Sequence[int], f
     inputs = tuple(PoissonInput("brain", rate=rate, weight=stimulus_scale * w_syn, receptor="stimulus",
                                 neurons=tuple(int(i) for i in neurons)) for neurons, rate in stimuli)
     return Network((brain,), (synapses,), inputs, dt=dt)
+
+def spectral_radius(connectome: Connectome) -> float:
+    """The spectral radius of `connectome`'s signed synapse-count matrix: its eigenvalues' largest magnitude.
+
+    Computed exactly for up to 2,000 neurons, and above that by ARPACK's
+    Arnoldi iteration (`scipy.sparse.linalg.eigs`), which finds a complex
+    dominant pair as well as a real one. FLYNN's code estimates it by power
+    iteration from a random vector and the Rayleigh quotient
+    (`spectral_radius_power_iter` in their `core/utils.py`), which settles
+    only when the dominant eigenvalue is real and alone on the spectrum's
+    rim. A signed connectome's is often a complex pair: on a random
+    connectome of 40 neurons with 30 % inhibitory synapses, their estimate
+    was 20.1 and the same iteration from other starts gives 1.8 to 46,
+    where the radius is 48.1 (`tests/test_flynn.py`'s fixture).
+    """
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.linalg import eigs
+
+    size = connectome.size
+    matrix = coo_matrix((np.asarray(connectome.synapses, np.float64), (connectome.post, connectome.pre)),
+                        shape=(size, size))
+    if size <= 2000:
+        values = np.linalg.eigvals(matrix.toarray())
+    else:
+        values = eigs(matrix.tocsr(), k=1, which="LM", v0=np.ones(size), return_eigenvectors=False)
+    return float(np.abs(values).max())
+
+
+class FLYNN(Neuron):
+    """Wang and Chen's fly connectome network (FLYNN, arXiv 2607.00025): a leaky tanh unit per neuron of
+    `connectome`, recurrent through its synapses, with input on some neurons and output read from others.
+
+        h[t] = (1 - a) h[t-1] + a tanh(W h[t-1] + x[t] + b)
+
+    their code's form of their eq. 1, with `a` the update fraction of each
+    neuron's cell class, `a = 0.99 sigmoid(l) + 0.01` for a learned logit
+    `l` per class (`types[i]` is neuron `i`'s class, 0 for unknown, as
+    their `load_cell_types` numbers them). `W` holds one learned weight per
+    edge of the connectome, starting at its signed synapse count scaled so
+    that the matrix's spectral radius is `radius` (their 0.9; computed
+    exactly by `spectral_radius`, where theirs is a power iteration's
+    estimate), and `b` one learned bias per neuron, starting at 0.
+    The input `[T, B, len(input_neurons)]` adds to the neurons
+    `input_neurons` (their sensory neurons; an index may repeat), and the
+    output `[T, B, len(output_neurons)]` is the activity of the neurons
+    `output_neurons` (their descending neurons). `update` is where each class's update fraction's
+    logit starts, `log(update / (1 - update))`, their `leak_alpha` of 0.2.
+
+    Their readout and input scales sit outside the network, and so do they
+    here. To train only the biases and leaks, as their code's default does,
+    give the `weight` parameter no optimizer (dew's `ParamGroup`).
+    """
+
+    connectome: Connectome = dataclasses.field(kw_only=True)
+    types: Sequence[int] = dataclasses.field(kw_only=True)
+    input_neurons: Sequence[int] = dataclasses.field(kw_only=True)
+    output_neurons: Sequence[int] = dataclasses.field(kw_only=True)
+    radius: float = 0.9
+    update: float = 0.2
+    activation: Literal["tanh", "relu", "sigmoid"] = "tanh"
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        return super().__call__(x)[..., np.asarray(self.output_neurons)]
+
+    def inputs(self, x: jax.Array) -> SynapticInput:
+        """`x` `[..., len(input_neurons)]` added onto the neurons `input_neurons`, as their jumps."""
+        drive = jnp.zeros((*x.shape[:-1], self.connectome.size), x.dtype)
+        return SynapticInput(jump=drive.at[..., np.asarray(self.input_neurons)].add(x))
+
+    def build(self, x: jax.Array) -> SparseRecurrentCell:
+        graph = self.connectome
+        pre, post = jnp.asarray(graph.pre), jnp.asarray(graph.post)
+        counts = jnp.asarray(graph.synapses, jnp.float32)
+
+        def scaled(key: jax.Array, shape: tuple[int, ...], dtype: jnp.dtype = jnp.float32) -> jax.Array:
+            # The radius comes from the connectome's own counts, so it is computed once, at initialization.
+            return (counts * (self.radius / spectral_radius(graph))).astype(dtype)
+
+        weight = self.param("weight", scaled, counts.shape, jnp.float32)
+        bias = self.param("bias", nn.initializers.zeros_init(), (graph.size,), jnp.float32)
+        start = math.log(self.update / (1 - self.update))
+        classes = int(np.max(self.types)) + 1
+        logits = self.param("update_logits", nn.initializers.constant(start), (classes,), jnp.float32)
+        fraction = 0.99 * jax.nn.sigmoid(logits) + 0.01
+        decay = 1 - fraction[jnp.asarray(self.types)]
+        return SparseRecurrentCell(RateCell(decay, bias, self.activation), pre, post, weight, graph.size)

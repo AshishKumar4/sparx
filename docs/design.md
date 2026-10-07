@@ -237,6 +237,7 @@ It compiles one chunk of the time loop, carries state between chunks, streams mo
 | Reward-driven learning | REINFORCE (Williams 1992) for escape-noise neurons: an eligibility per synapse, `d log P(spikes) / dw`, weighed by the reward | `sparx.learn.reinforce` |
 | Fast weights | differentiable plasticity and Backpropamine (Miconi et al. 2018, 2019): Hebbian traces each sequence writes, their plasticity learned by BPTT | `sparx.dynamics.PlasticRecurrentCell`, `sparx.nn.Plastic` |
 | Local energy minimization | predictive coding and PC-ALM (Seely and Gould 2026): hidden activity relaxed on a layered energy, each weight's update read from its own layer's error | `sparx.learn.predictive`, with a dew objective that hands the update to the trainer |
+| Trainable connectomes | FLYNN (Wang and Chen 2026): a rate unit per neuron, recurrent through the connectome's synapses, every weight, bias and class leak trained by BPTT | `sparx.graph.connectome.FLYNN`, `sparx.dynamics.SparseRecurrentCell` |
 | Fitting to recordings | gradient descent on network parameters against recorded spikes, rates or voltages, with spike-train distances (van Rossum 2001, Victor-Purpura 1996) and PSTH losses | `sparx.objectives.ActivityFitObjective` |
 | Conversion | trained ANN weights mapped to an IF network with threshold balancing | `sparx.learn.convert` |
 

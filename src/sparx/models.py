@@ -264,3 +264,4 @@ class SpikingMLP(nn.Module):
             x = nn.Dropout(self.dropout, broadcast_dims=broadcast, deterministic=not train)(x)
         x = synapse(x, self.classes, delays[-1], "readout")
         return LI(tau=self.readout_tau, learn_tau=self.learn_readout_tau, name="integrator")(x)
+
