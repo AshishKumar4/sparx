@@ -1,10 +1,10 @@
 # Handoff
 
-The state of sparx and its dew work as of 7 October 2026: what exists, what is open, and how to pick it up. `README.md` describes the library, `docs/design.md` its architecture and plan, `docs/fidelity.md` every model's reference and check, and `docs/performance.md` the measurements.
+The state of sparx and its dew work as of 8 October 2026: what exists, what is open, and how to pick it up. `README.md` describes the library, `docs/design.md` its architecture and plan, `docs/fidelity.md` every model's reference and check, and `docs/performance.md` the measurements.
 
 ## State
 
-- The suite passes: 551 tests, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
+- The suite passes: 595 tests, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
 - sparx pins dew at `6329435` on dew's `main` (`pyproject.toml`).
 - Every commit is authored by Ashish Kumar Singh <ashishkmr472@gmail.com>.
 
@@ -19,6 +19,7 @@ The state of sparx and its dew work as of 7 October 2026: what exists, what is o
   - One recurrence for every algorithm: `sparx.dynamics.RecurrentCell(inner, wiring, fast_weights)` runs any neuron model over a `Dense` or `Sparse` (connectome) wiring, fixed or with `FastWeights`. The Hebbian rules (differentiable plasticity's decaying trace and Oja's rule, Backpropamine's simple and retroactive neuromodulation) read each connection's units through the wiring, so each runs on a dense layer and on a connectome alike, and a rule of your own is one dataclass and one module.
   - Predictive coding and PC-ALM for any stack of layers, with a dew objective that hands the local update to the trainer.
   - FLYNN, a whole connectome trained as a rate network: a learned weight per synapse, bias per neuron and leak per cell class.
+  - RNeuralNet-Research (the owner's 2018 project), rebuilt deterministically: `PulseCell`, its threshold-shifted ELU neuron, over a `Sparse` wiring with a delay per connection, and its reward diffusion (`sparx.learn.reward_diffusion`, the original's first-visit spread and the notes' all-paths repair), with a dew objective that trains it by the rule or by REINFORCE.
   - EventProp-style exact gradients.
   - ANN-to-SNN conversion of CNNs, checked against snntoolbox.
   - NIR exchange with snnTorch: dense, conv and recurrent.
@@ -38,6 +39,7 @@ The state of sparx and its dew work as of 7 October 2026: what exists, what is o
 - **Fast weights:** Miconi et al.'s four plastic networks, run in PyTorch, agree with sparx's in activity, traces and gradients within 5e-14 in float64. On their full pattern completion (1000 bits, five patterns, 2000 episodes, 59 minutes on 4 CPU cores) the decaying trace leaves 0.3% of the zeroed bits wrong and the same network without fast weights 50.1%, chance. A sparse wiring of every pair computes the dense layer under every rule.
 - **PC-ALM:** Seely and Gould's JAX reference and sparx agree in settled activity, multipliers and weight updates within 5e-14 in float64. On their headline Fashion-MNIST cell (width and depth 32, one epoch, through dew's trainer) sparx scores 75.1, 76.1 and 76.5% by PC-ALM, 62.2, 65.5 and 65.6% by PC and 77.8, 76.9 and 76.7% by BP at seeds 0 to 2; their code on the same machine scores 77.73, 76.49 and 76.34%, 68.17, 64.49 and 66.54%, and 78.65, 76.85 and 77.31%. The ranking is theirs, and sparx averages 0.5 to 2 points lower in all three, backpropagation included.
 - **FLYNN:** Wang and Chen's PyTorch cell and sparx's agree in activity and gradients within 1e-15 in float64. Their code scales the weights by a power iteration whose estimate depends on its random start when the dominant eigenvalues are a complex pair, as a signed connectome's often are (on the parity test's connectome: 1.8 to 46 by start, against an exact 48.1); sparx scales by the exact radius.
+- **RNeuralNet:** its C++ (d4b7803), compiled unchanged and driven single-threaded, and `sparx.learn.RNeuralNet` agree within 7.2e-7 in outputs over 80 ticks and in local rewards and weights after three rewards. On the notes' delayed cue-order task (256 neurons, seeds 0 to 4) a linear readout of the network's state is 100% right, REINFORCE through the network teaches its output neurons on 4 of 5 seeds, and reward diffusion leaves their choice as drawn on all 5 (README results).
 - **No GPU or TPU numbers exist yet.**
 
 ## dew: the bedrock
@@ -72,8 +74,8 @@ Open in dew, for sparx:
 
 ## Open work, in suggested order
 
-1. **Learning rules from the owner's research notes** (bio-inspired continual learning), each checked against a reference. Done: REINFORCE with Bernoulli neurons (enumerated trajectories), reward-modulated STDP (NEST), fast weights (Miconi et al.'s four networks), PC-ALM (Sakana AI's JAX reference), and the FLYNN trainable connectome (their PyTorch cell). Open:
-   - a deterministic reconstruction of RNeuralNet with its reward-diffusion rule as a baseline. No public source by that name was found; the owner's notes should say which paper or code it is.
+1. **Learning rules from the owner's research notes** (bio-inspired continual learning), each checked against a reference. Done: REINFORCE with Bernoulli neurons (enumerated trajectories), reward-modulated STDP (NEST), fast weights (Miconi et al.'s four networks), PC-ALM (Sakana AI's JAX reference), the FLYNN trainable connectome (their PyTorch cell), and RNeuralNet with its reward diffusion (its own C++, at the commit the notes cite; the notes are the owner's document, not a paper). Open:
+   - RNeuralNet's rule with the two changes that make attention-gated reinforcement learning (AGREL, Roelfsema and van Ooyen 2005) follow the gradient on average: credit from the chosen output alone, scaled by a signed reward prediction error. It would show how much of the original idea survives; `reward_diffusion` and `RNeuralNetObjective` are where it goes.
    - FLYNN on the whole FlyWire connectome: `sparx.graph.connectome.FLYNN` takes `Connectome.from_shiu`'s tables and their cell classes, sensory and descending neurons, but no full-brain training has been run, and their navigation task (MuJoCo) is not ported.
 2. **`research/continual/`**, built only on sparx and dew's public API.
    - Start with the small modular core (16 x 256 units), selective fast plasticity (`sparx.nn.Recurrent` with a neuromodulated trace; on a connectome's sparse wiring as well), a BPTT reference and a switch-and-door adaptation task, as the notes recommend.
@@ -103,7 +105,7 @@ Open in dew, for sparx:
   - Neither venv holds elephant, neo and quantities, which `tools/make_elephant_fixtures.py` needs; the elephant fixture was not regenerated in this container.
   - Their PC-ALM code is plain JAX and runs in `/home/user/.venv` (it needs PyYAML, which dew brings): `PYTHONPATH=<pc-alm checkout> python scripts/run_headline_grid.py ... --data-dir <dir with FashionMNIST/raw/*.gz>`, the IDX files `sparx.datasets.mnist` downloads.
   - `/home/user/.venv-torch` holds the PyTorch tools' references: torch 2.14.1+cpu, snnTorch 1.0.0, nir 1.0.8, nirtorch 2.6, dcls 0.1.1, torchvision and SpikingJelly's imports. Every torch-based fixture tool reproduces its fixture bit for bit there, except the order of edges in the `.nir` files (`PYTHONHASHSEED`). snntoolbox needs tensorflow 2.21 and tf-keras in a venv of its own.
-  - Reference checkouts live in `/home/user/refs` (differentiable-plasticity, backpropamine, spikingjelly, OTTT-SNN, SNN-delays, pc-alm, fly-gym); each tool's docstring names the commit and takes the path.
+  - Reference checkouts live in `/home/user/refs` (differentiable-plasticity, backpropamine, spikingjelly, OTTT-SNN, SNN-delays, pc-alm, fly-gym, RNeuralNet-Research); each tool's docstring names the commit and takes the path. `tools/make_rneuralnet_fixtures.py` needs g++.
   - Octave runs Izhikevich's `figure1.m` for `tools/make_izhikevich_2004_fixtures.py`.
 - **Keep `/home/user/dew` detached at the pinned commit.** sparx's tests import dew from that checkout, so a branch checked out there changes what they test. Do dew work in separate worktrees (`git worktree add ... /home/user/dew-wt/<topic>`).
 - **Data, which tests skip when absent:**
