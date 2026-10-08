@@ -38,7 +38,10 @@ jobs:
         clone uber-research/backpropamine ref-backpropamine 180c9101
         clone ben-gitdev/fly-gym ref-fly-gym 8d964599119b420de67ee259434d273651a1a76d
         # SNN-delays imports these at module level and never runs them.
-        mkdir ../stubs && touch ../stubs/wandb.py ../stubs/torchaudio.py
+        mkdir -p ../stubs/torchaudio/datasets && touch ../stubs/wandb.py
+        touch ../stubs/torchaudio/__init__.py ../stubs/torchaudio/datasets/__init__.py
+        echo "Spectrogram = MelScale = AmplitudeToDB = Resample = None" > ../stubs/torchaudio/transforms.py
+        echo "SPEECHCOMMANDS = object" > ../stubs/torchaudio/datasets/speechcommands.py
     - name: Regenerate
       run: |
         # regenerate PYTHONPATH TOOL [ARGUMENTS]
@@ -103,7 +106,7 @@ jobs:
       # The microcircuit's network is drawn by sparx, and PC-ALM's reference is JAX.
       run: |
         python -m pip install uv
-        uv venv --python 3.12 ../sparx && VIRTUAL_ENV=../sparx uv pip install -e . -c constraints.txt
+        uv venv --python 3.12 ../sparx-env && VIRTUAL_ENV=../sparx-env uv pip install -e . -c constraints.txt
         clone() { git clone -q "https://github.com/$1" "../$2" && git -C "../$2" checkout -q "$3"; }
         clone INM-6/microcircuit-PD14-model microcircuit-PD14-model f79f8ac
         clone SakanaAI/pc-alm ref-pc-alm 660747f61a8a7e547c0ecd2c48c8883380a7d1f6
@@ -113,7 +116,7 @@ jobs:
         regenerate make_nest_fixtures.py
         regenerate make_nest_gap_fixtures.py
         regenerate make_brunel_fixtures.py
-        ../sparx/bin/python tools/make_microcircuit_fixtures.py export ../microcircuit-network.npz
+        ../sparx-env/bin/python tools/make_microcircuit_fixtures.py export ../microcircuit-network.npz
         regenerate make_microcircuit_fixtures.py nest ../microcircuit-PD14-model ../microcircuit-network.npz
-        ../sparx/bin/python tools/regenerate.py make_pcalm_fixtures.py ../ref-pc-alm || failed="$failed pcalm"
+        ../sparx-env/bin/python tools/regenerate.py make_pcalm_fixtures.py ../ref-pc-alm || failed="$failed pcalm"
         test -z "$failed" || { echo "not reproduced:$failed"; exit 1; }

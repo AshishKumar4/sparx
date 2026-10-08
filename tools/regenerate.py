@@ -15,10 +15,9 @@ comparison, and a NIR graph is compared as nodes and edges, whose order in
 the file follows Python's string hashing. A float array within `ULPS` units
 in the last place of its largest value is reproduced to rounding, and the
 line says the worst case: a reduction rounds differently on another
-instruction set, by an amount that follows the magnitude of what it sums.
-The largest seen is 3 (DCLS's outputs on two x86 CPUs), so 16 leaves a
-margin of five that a drift would show in the reports before it crossed.
-Integer, boolean and string arrays match exactly. With `--update`, a fixture that
+instruction set, by an amount that follows the magnitude of what it sums,
+and a recurrence carries that from step to step (`ROUNDING`). Integer,
+boolean and string arrays match exactly. With `--update`, a fixture that
 changed replaces the committed one and its checksum. Exits with 1 when a
 fixture changed and `--update` is not given.
 """
@@ -40,6 +39,14 @@ VARIES: dict[str, str] = {"microcircuit.npz": "/seconds"}
 """Fixtures with arrays that differ between identical runs, by the suffix of their names."""
 
 ULPS = 16
+"""The rounding a fixture may differ by, in units in the last place of an array's largest value: about
+five times the 3 seen for one pass of a layer (DCLS's and SpikingJelly's outputs on two x86 CPUs), so a
+drift shows in the reports before it crosses."""
+
+ROUNDING: dict[str, int] = {"miconi.npz": 128, "flynn.npz": 64}
+"""Recurrences that run long enough to compound rounding, with about 2.5 times the most seen on two x86 CPUs:
+50 for Miconi et al.'s modulated network's gradients, 23 for FLYNN's cell's. Either stays below 1e-14 of its
+array's largest value, far inside the tolerances of the parity tests that read them."""
 
 
 def ulps(a: np.ndarray, b: np.ndarray) -> float | None:
@@ -94,7 +101,9 @@ def compare(made: Path, committed: Path) -> tuple[str, bool]:
         graphs = same_graph(made, committed)
         return ("reproduced", True) if graphs else ("differs in its nodes or edges", False)
     changed = changed_arrays(made, committed)
-    beyond = [name for name, apart in changed.items() if apart is None or apart > ULPS]
+    limit = ROUNDING.get(committed.name, ULPS)
+    beyond = [f"{name} ({'its shape or type' if apart is None else f'{apart:.1f} ulps'})"
+              for name, apart in changed.items() if apart is None or apart > limit]
     if beyond:
         return f"differs in arrays {', '.join(beyond)}", False
     if not changed:
