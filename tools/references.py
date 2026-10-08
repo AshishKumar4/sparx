@@ -102,6 +102,10 @@ LOCKED: dict[str, tuple[str, ...]] = {
 }
 """The pip environments, by the requirements their lock files resolve; NEST's is `nest.yml`, for conda."""
 
+OVERRIDES: dict[str, tuple[str, ...]] = {"modelfitting": ("numpy<2",)}
+"""Pins that replace what a package declares: brian2 2.10.1 declares numpy>=2, which brian2modelfitting 0.4
+cannot import (`numpy.NaN`), and gamma.npz was made with both on numpy 1."""
+
 TORCH_INDEX = "https://download.pytorch.org/whl/cpu"
 
 
@@ -154,9 +158,15 @@ def lock() -> None:
         pinned = [f"{name}=={PINS[name][1]}" if name in PINS else name for name in requirements]
         source = ENVIRONMENTS / f"{environment}.in"
         source.write_text("".join(f"{line}\n" for line in pinned))
-        index = ["--index-url", TORCH_INDEX, "--extra-index-url", "https://pypi.org/simple",
-                 "--index-strategy", "unsafe-best-match", "--emit-index-url"]
-        index = index if environment == "torch" else []
+        # uv reads an extra index before the default one, here and in `uv pip sync`, which the lock file
+        # names them to, so torch's CPU build is taken from PyTorch's index.
+        torch = ["--index-url", "https://pypi.org/simple", "--extra-index-url", TORCH_INDEX,
+                 "--emit-index-url"]
+        index = torch if environment == "torch" else []
+        if environment in OVERRIDES:
+            overrides = ENVIRONMENTS / f"{environment}.overrides"
+            overrides.write_text("".join(f"{line}\n" for line in OVERRIDES[environment]))
+            index += ["--override", str(overrides.relative_to(ROOT))]
         locked = (ENVIRONMENTS / f"{environment}.txt").relative_to(ROOT)
         subprocess.run(["uv", "pip", "compile", "--quiet", "--generate-hashes", "--python-version", "3.12",
                         "--universal", *index, str(source.relative_to(ROOT)), "-o", str(locked)],
