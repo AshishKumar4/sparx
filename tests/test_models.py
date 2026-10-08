@@ -151,6 +151,33 @@ def test_dropout_masks_a_step_or_holds_one_mask_over_the_sequence(mask):
     assert held.all() if mask == "sequence" else held.mean() < 0.01
 
 
+LEARNING = {"lif": sparx.nn.LIF(learn_tau=True), "alif": sparx.nn.ALIF(learn_tau=True),
+            "synaptic": sparx.nn.Synaptic(learn_tau=True), "rate": sparx.nn.Rate(learn_tau=True)}
+
+
+@pytest.mark.parametrize("neuron", list(LEARNING))
+def test_every_parameter_of_the_models_has_declared_axes(neuron):
+    # A parameter no declaration names would fall to dew's shape heuristic without notice.
+    from dew.nn.sharding import declared_axes
+
+    rules = {"decaying": sparx.nn.DecayingTrace(), "modulated": sparx.nn.ModulatedTrace()}
+    models = [
+        (SpikingMLP((8, 6), 3, neuron=LEARNING[neuron], delays=(2, 0, 2), batch_norm=True,
+                    learn_readout_tau=True), (4, 2, 5)),
+        (SpikingMLP((8,), 3, neuron=LEARNING[neuron], recurrent=True), (4, 2, 5)),
+        *((SpikingMLP((8,), 3, neuron=sparx.nn.Recurrent(neuron=LEARNING[neuron], rule=rule)), (4, 2, 5))
+          for rule in rules.values()),
+        (SEWResNet((1, 1, 1, 1), 3, width=4, stem="small", neuron=LEARNING[neuron]), (2, 1, 8, 8, 1)),
+        (SEWResNet((1, 1, 1, 1), 3, width=4, neuron=LEARNING[neuron]), (2, 1, 16, 16, 1)),
+    ]
+    for model, shape in models:
+        shapes = jax.eval_shape(lambda m=model, s=shape: m.init(jax.random.key(0), jnp.zeros(s), train=False))
+        leaves = jax.tree_util.tree_leaves_with_path(shapes["params"])
+        undeclared = [jax.tree_util.keystr(path) for path, leaf in leaves
+                      if declared_axes(path, leaf.ndim) is None]
+        assert leaves and not undeclared, (type(model).__name__, undeclared)
+
+
 @pytest.mark.parametrize("architecture", ["SpikingMLP", "SEWResNet"])
 def test_a_runs_precision_settings_reach_the_synapses(architecture):
     from dew.config import ModelConfig
