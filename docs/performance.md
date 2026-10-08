@@ -76,7 +76,7 @@ The first version (commit b11bb08, timed with the benchmark's two calls written 
 - The remaining products are elementwise and fuse into one loop, and the Jacobian's columns come from one linearization of the step.
 - The weight gradient sums `signal[b, n] * filtered[b, n, p]` over the batch elementwise. XLA on this CPU ran the einsum `"bn,bnp->pn"` as a batched matrix product, three times slower (284 ms against 97 ms for 100 such steps alone).
 
-The readout's leak still needs one filtered trace per synapse, `B x N x (in + N)` numbers, since the learning signal of each step weights the traces of every earlier step. Training SHD for five epochs (`examples/train_shd_eprop.py --rule eprop`) went from 39 min to 3 min 30 s; BPTT takes 30 s.
+The readout's leak still needs one filtered trace per synapse, `B x N x (in + N)` numbers, since the learning signal of each step weights the traces of every earlier step. Training SHD for five epochs (`examples/train_shd_eprop.py --rule eprop`) went from 39 min to 3 min 30 s, against 30 s for BPTT. On 8 October 2026 the same runs took 4 min 16 s to 4 min 53 s and 34 to 38 s on this machine, where the previous commit's e-prop run, whose evaluation was not compiled, took 4 min 54 s.
 
 ## Networks and connectomes
 

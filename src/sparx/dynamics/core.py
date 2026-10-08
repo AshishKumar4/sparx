@@ -32,8 +32,9 @@ a conductance acts through the neuron's own voltage and reversal potential.
 A step covers `(t, t + dt]`. Synaptic currents are waveforms over it, sums
 of `(a + b s) exp(-s / tau)` for `s` in `[0, dt]` (`Term`), which cover the
 exponential, alpha and bi-exponential synapses; a model whose membrane is
-linear integrates them exactly. Conductances are held at their value at the
-start of the step. Gap junctions (`Gap`) couple the membrane to the
+linear integrates them exactly. A conductance is held over the step; the
+value held is its exact mean over the step unless `PointNeuron.hold` says
+its value at the start. Gap junctions (`Gap`) couple the membrane to the
 voltages of other neurons held at the start of the step. Spikes that
 arrive at the end of the step, at `t + dt`, are added to the synapses after
 the membrane has moved, so they shape the next step; a voltage jump (a

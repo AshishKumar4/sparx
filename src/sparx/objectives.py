@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import functools
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
@@ -65,19 +65,19 @@ from dew.registry import to_record
 from dew.training.optim import ScheduleBase
 
 from sparx.dynamics import NeuronModel
-from sparx.encode import SpikeEncoder
+from sparx.encode import EventsEncoder, SpikeEncoder
 from sparx.learn import (
     EPropParams,
     PredictiveCoding,
     RNeuralNet,
     bptt_loss,
     eprop,
-    eprop_forward,
     reward_diffusion,
     sequential_blocks,
     squared_error,
 )
 from sparx.losses import READOUTS, Readout, readout_logits, readout_losses, van_rossum
+from sparx.models import SpikingMLP
 from sparx.nn import RATES
 from sparx.rates import firing_rates, rate_penalty
 from sparx.tasks import SpikingClassification, bound_call
@@ -111,9 +111,35 @@ def _row_weights(batch: Batch, rows: int) -> jax.Array:
     return jnp.ones(rows, jnp.float32) if valid is None else jnp.asarray(valid, jnp.float32)
 
 
+def _fields(batch: Batch, *keys: str) -> dict[str, jax.Array]:
+    """The fields `keys` of `batch`, and its `VALID_ROWS` when it has them, as arrays: what a compiled
+    evaluation takes. Dew calls `evaluate` outside `jit`, so each objective compiles its own scoring,
+    which would otherwise dispatch one operation at a time."""
+    keys = (*keys, VALID_ROWS) if VALID_ROWS in batch else keys
+    return {key: jnp.asarray(batch[key]) for key in keys}
+
+
+def _classification_record(sample: Field, encoder: SpikeEncoder, readout: Readout, labels: str, *,
+                           schedules: Mapping[str, ScheduleBase] | None = None,
+                           schedule_steps: int | None = None,
+                           deployed: Mapping[str, float] | None = None) -> dict[str, JSON]:
+    """The settings `SpikingClassification.from_run` rebuilds a classifier with, beside its model."""
+    return {
+        "sample": {"key": sample.key, "shape": list(sample.shape)},
+        "encoder": to_record(encoder, SpikeEncoder),
+        "readout": readout,
+        "labels": labels,
+        "schedules": {name: to_record(schedule, ScheduleBase)
+                      for name, schedule in (schedules or {}).items()},
+        "schedule_steps": schedule_steps,
+        "deployed": dict(deployed or {}),
+    }
+
+
 @dataclass(frozen=True)
 class RateBand:
-    """Keep each spiking neuron's rate within `[lower, upper]`, adding `weight * sparx.rate_penalty`."""
+    """Keep each spiking neuron's rate, in spikes per step, within `[lower, upper]`, adding
+    `weight * sparx.rate_penalty`."""
 
     lower: float = 0.0
     upper: float = 1.0
@@ -254,16 +280,9 @@ class SpikingClassifierObjective(Objective[Ratio]):
 
     def task_record(self) -> Mapping[str, JSON]:
         """The encoder, readout, schedules and deployed arguments of the classifier."""
-        return {
-            "sample": {"key": self.sample.key, "shape": list(self.sample.shape)},
-            "encoder": to_record(self.encoder, SpikeEncoder),
-            "readout": self.readout,
-            "labels": self.labels,
-            "schedules": {name: to_record(schedule, ScheduleBase)
-                          for name, schedule in self.schedules.items()},
-            "schedule_steps": self.schedule_steps,
-            "deployed": dict(self.deployed),
-        }
+        return _classification_record(self.sample, self.encoder, self.readout, self.labels,
+                                      schedules=self.schedules, schedule_steps=self.schedule_steps,
+                                      deployed=self.deployed)
 
     def build_task(self, variables: Variables, *,
                    processor: Processor | None | Omitted = OMITTED) -> SpikingClassification:
@@ -349,8 +368,13 @@ class ActivityFitObjective(Objective[Ratio]):
         metrics = {"distance": stats.mean()[0], "rate": jnp.mean(spikes), "recorded_rate": jnp.mean(target)}
         return stats, Aux(metrics=metrics)
 
+    @functools.cached_property
+    def _compiled_distances(self) -> Callable[[Variables, Batch], tuple[jax.Array, jax.Array, jax.Array]]:
+        return jax.jit(self._distances)
+
     def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
-        per_example, _, _ = self._distances(self.evaluation_variables(params, step), batch)
+        fields = _fields(batch, self.stimulus.key, self.recording)
+        per_example, _, _ = self._compiled_distances(self.evaluation_variables(params, step), fields)
         return _per_example(per_example)
 
 
@@ -364,71 +388,92 @@ type EPropRule = Literal["eprop", "random", "bptt"]
 
 
 class EPropObjective(Objective[Ratio]):
-    """Classify recordings with a recurrent spiking layer whose gradients are e-prop's.
+    """Classify recordings with a recurrent spiking network whose gradients are e-prop's.
 
-    The network is `sparx.learn.eprop_forward`'s: a recurrent layer of
-    `cell` with `hidden` neurons over the `[T, channels]` field `sample`, and
-    a leaky readout of time constant `tau` with `classes` outputs, all
-    stepped at `dt`. Each step's cross entropy, divided by the steps, is
-    summed over time, so the loss is the per-step mean, averaged over the
-    batch's rows. The class is the argmax of the readout averaged over time.
+    `model` is Bellec et al.'s (2020) network as a `sparx.models.SpikingMLP`
+    with one recurrent hidden layer (`recurrent=True`) and dense synapses:
+    an input synapse, a recurrent layer of `model.neuron`, and a synapse
+    into a leaky readout, over the `[T, channels]` field `sample`. Each
+    step's cross entropy, divided by the steps, is summed over time, so the
+    loss is the per-step mean, averaged over the batch's rows. The class is
+    the argmax of the readout averaged over time.
 
-    The loss runs `sparx.learn.eprop`, which computes the loss and its
-    gradients online in memory that does not grow with the recording, and
-    hands the gradients to dew's trainer as the loss's own
+    The loss runs `sparx.learn.eprop` on the model's weights, which computes
+    the loss and its gradients online in memory that does not grow with the
+    recording, and hands the gradients to dew's trainer as the loss's own
     (`Objective.with_gradients`), so the trainer's one gradient path applies
-    them with its accumulation, sharding and logging. `rule="bptt"`
-    differentiates `sparx.learn.bptt_loss` instead. With `rule="random"`
-    the feedback weights are drawn once by `init` and kept in the
-    `feedback` collection, which no update touches.
+    them with its accumulation, sharding and logging. A bias is a synapse
+    from an input that is always 1, and e-prop trains it as one. e-prop
+    computes no gradient for a time constant, so a model that learns one is
+    refused, as are delays, batch norm, dropout and plasticity rules.
+    `rule="bptt"` differentiates `sparx.learn.bptt_loss` instead. With
+    `rule="random"` the feedback weights are drawn once by `init` and kept
+    in the `feedback` collection, which no update touches.
 
-    The recurrent layer has no self-connections, as in Bellec et al.: the
-    diagonal of `w_rec` starts at 0, is masked in the forward pass and gets
-    no gradient. Evaluation returns `TokenScores` for `sparx.metrics.Accuracy`.
+    The recurrent layer has no self-connections, as in Bellec et al.: `init`
+    zeroes the recurrent matrix's diagonal, which is masked in the forward
+    pass and gets no gradient. The trained network is the `SpikingMLP`
+    itself, so `pipeline(state)` and `dew.pipeline(run_dir,
+    trust=("sparx",))` load it as a `sparx.tasks.SpikingClassification`,
+    which streams, serves and exports as any other. Evaluation runs the
+    model and returns `TokenScores` for `sparx.metrics.Accuracy`.
     """
 
     artifact = TokenScores
+    saved_task = SpikingClassification
     shown: Mapping[str, Shown] = {"accuracy": Shown(better="higher", percent=True)}
 
-    def __init__(self, cell: NeuronModel, sample: Field, *, hidden: int, classes: int, tau: float,
-                 dt: float = 1.0, labels: str = "label", rule: EPropRule = "eprop"):
+    def __init__(self, model: SpikingMLP, sample: Field, *, labels: str = "label", rule: EPropRule = "eprop"):
         if rule not in ("eprop", "random", "bptt"):
             raise ValueError(f"rule must be eprop, random or bptt, not {rule!r}")
         if len(sample.shape) != 2:
             raise ValueError(f"the sample is one recording [T, channels], not shape {sample.shape}")
-        self.cell = cell
+        _check_eprop_network(model, sample.shape[1])
+        self.model = self.bind_model(model)
         self.sample = sample
-        self.hidden, self.classes = hidden, classes
-        self.tau, self.dt = tau, dt
         self.labels = labels
         self.rule: EPropRule = rule
         self.inputs = InputSpec(sample=sample)
+        (self.hidden,) = model.hidden
+        # Every layer of a `SpikingMLP` steps at its neuron's dt, the readout included.
+        self.dt, self.tau = model.neuron.dt, model.readout_tau
+        self.cell: NeuronModel = model.neuron.bind({}).model(jnp.zeros((1, self.hidden)))
 
     def fresh_variables(self, key: jax.Array, held: Variables | None) -> Variables:
-        channels = self.sample.shape[1]
-        w_in, w_rec, w_out, feedback = jax.random.split(key, 4)
-        h, c = self.hidden, self.classes
-        params = {
-            "w_in": jax.random.normal(w_in, (channels, h)) / jnp.sqrt(channels),
-            "w_rec": jax.random.normal(w_rec, (h, h)) / jnp.sqrt(h) * (1 - jnp.eye(h)),
-            "w_out": jax.random.normal(w_out, (h, c)) / jnp.sqrt(h),
-            "b_out": jnp.zeros(c),
-        }
-        tree: dict[str, dict[str, jax.Array]] = {"params": params}
+        model_key, feedback_key = jax.random.split(key)
+        params = thaw(self.model.init(model_key, jnp.zeros((1, 1, self.sample.shape[1]))))["params"]
+        params["recurrent_0"]["recurrent"] *= 1 - jnp.eye(self.hidden)
+        tree: dict[str, Variables] = {"params": params}
         if self.rule == "random":
-            tree["feedback"] = {"weight": jax.random.normal(feedback, (h, c)) / jnp.sqrt(h)}
+            h, c = self.hidden, self.model.classes
+            tree["feedback"] = {"weight": jax.random.normal(feedback_key, (h, c)) / jnp.sqrt(h)}
         return tree
 
-    def _network(self, variables: Variables, batch: Batch) -> tuple[EPropParams, jax.Array, jax.Array]:
-        """The masked parameters, the time-major inputs `[T, B, channels]` and the labels `[B]`."""
-        held = variables["params"]
-        no_self = 1 - jnp.eye(self.hidden)
-        params = EPropParams(held["w_in"], held["w_rec"] * no_self, held["w_out"], held["b_out"])
+    def _network(self, params: Variables, batch: Batch) -> tuple[EPropParams, jax.Array, jax.Array]:
+        """e-prop's parameters, the time-major inputs `[T, B, channels]` and the labels `[B]`. With
+        biases, the input bias is a last row of `w_in` and the inputs gain a last channel of ones."""
         inputs = jnp.swapaxes(jnp.asarray(batch[self.sample.key], jnp.float32), 0, 1)
-        return params, inputs, jnp.asarray(batch[self.labels])
+        w_in, readout = params["dense_0"]["kernel"], params["readout"]
+        b_out = readout["bias"] if self.model.use_bias else jnp.zeros(self.model.classes)
+        if self.model.use_bias:
+            w_in = jnp.concatenate([w_in, params["dense_0"]["bias"][None]])
+            inputs = jnp.concatenate([inputs, jnp.ones((*inputs.shape[:2], 1), inputs.dtype)], axis=-1)
+        w_rec = params["recurrent_0"]["recurrent"] * (1 - jnp.eye(self.hidden))
+        return EPropParams(w_in, w_rec, readout["kernel"], b_out), inputs, jnp.asarray(batch[self.labels])
+
+    def _update(self, grads: EPropParams) -> Variables:
+        """e-prop's gradients as a tree of the model's parameters, the recurrent diagonal's 0."""
+        channels = self.sample.shape[1]
+        update = {"dense_0": {"kernel": grads.w_in[:channels]},
+                  "recurrent_0": {"recurrent": grads.w_rec * (1 - jnp.eye(self.hidden))},
+                  "readout": {"kernel": grads.w_out}}
+        if self.model.use_bias:
+            update["dense_0"]["bias"] = grads.w_in[channels]
+            update["readout"]["bias"] = grads.b_out
+        return update
 
     def loss(self, variables: Variables, batch: Batch, step: Step) -> tuple[Ratio, Aux]:
-        params, inputs, labels = self._network(variables, batch)
+        params, inputs, labels = self._network(variables["params"], batch)
         steps = inputs.shape[0]
         targets = jnp.broadcast_to(labels, (steps, *labels.shape))
         weights = _row_weights(batch, labels.shape[0])
@@ -444,17 +489,52 @@ class EPropObjective(Objective[Ratio]):
         # linearizes e-prop's scan, whose memory would then grow with the recording.
         total, grads = eprop(self.cell, jax.lax.stop_gradient(params), inputs, targets, step_loss,
                              tau=self.tau, dt=self.dt, feedback=feedback)
-        no_self = 1 - jnp.eye(self.hidden)
-        rule = {"w_in": grads.w_in, "w_rec": grads.w_rec * no_self, "w_out": grads.w_out,
-                "b_out": grads.b_out}
-        return _with_rule(self, Ratio(total, jnp.sum(weights)), rule, variables["params"]), Aux(metrics={})
+        stats = Ratio(total, jnp.sum(weights))
+        return _with_rule(self, stats, self._update(grads), variables["params"]), Aux(metrics={})
+
+    @functools.cached_property
+    def _scores(self) -> Callable[[Variables, Batch], tuple[jax.Array, jax.Array]]:
+        def scores(params: Variables, batch: Batch) -> tuple[jax.Array, jax.Array]:
+            inputs = jnp.swapaxes(jnp.asarray(batch[self.sample.key], jnp.float32), 0, 1)
+            outputs = self.model.apply({"params": params}, inputs)
+            # `mutable` is unset, so apply returns the outputs alone, not a pair.
+            assert not isinstance(outputs, tuple)
+            logits, labels = jnp.mean(outputs, axis=0), batch[self.labels]
+            losses = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
+            return losses, jnp.argmax(logits, -1) == labels
+
+        return jax.jit(scores)
 
     def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
-        network, inputs, labels = self._network(self.evaluation_variables(params, step), batch)
-        outputs, _ = eprop_forward(self.cell, network, inputs, tau=self.tau, dt=self.dt)
-        logits = jnp.mean(outputs, axis=0)
-        losses = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
-        return _per_example(losses, jnp.argmax(logits, -1) == labels)
+        params = self.evaluation_variables(params, step)["params"]
+        return _per_example(*self._scores(params, _fields(batch, self.sample.key, self.labels)))
+
+    def task_record(self) -> Mapping[str, JSON]:
+        """The recordings as they are, scored by the readout averaged over time."""
+        return _classification_record(self.sample, EventsEncoder(), "mean", self.labels)
+
+    def build_task(self, variables: Variables, *,
+                   processor: Processor | None | Omitted = OMITTED) -> SpikingClassification:
+        """The trained network as a classifier over `variables`; it reads no text, so takes no
+        `processor`."""
+        if processor is not OMITTED:
+            raise TypeError("a spiking classifier reads no text, so it takes no processor")
+        return SpikingClassification(self.model, {"params": thaw(variables)["params"]}, EventsEncoder())
+
+
+def _check_eprop_network(model: SpikingMLP, channels: int) -> None:
+    """Raise unless e-prop trains every parameter of `model`: one recurrent hidden layer, dense
+    synapses, fixed time constants, no batch norm and no dropout."""
+    sample = jax.ShapeDtypeStruct((1, 1, channels), jnp.float32)
+    shapes = jax.eval_shape(model.init, jax.random.key(0), sample)
+    bias = {"bias"} if model.use_bias else set()
+    wanted = {"dense_0": {"kernel"} | bias, "recurrent_0": {"recurrent"}, "readout": {"kernel"} | bias}
+    found = {layer: set(leaves) for layer, leaves in shapes.get("params", {}).items()}
+    if set(shapes) != {"params"} or found != wanted or model.dropout:
+        raise ValueError(
+            "e-prop trains a SpikingMLP with one recurrent hidden layer (recurrent=True), dense synapses, "
+            "fixed time constants and no batch norm or dropout; this one has the parameters "
+            f"{ {name: sorted(leaves) for name, leaves in found.items()} } and dropout {model.dropout}")
 
 
 class PredictiveCodingObjective(Objective[Ratio]):
@@ -519,8 +599,13 @@ class PredictiveCodingObjective(Objective[Ratio]):
         update = {f"layers_{k}": grad for k, grad in enumerate(grads) if f"layers_{k}" in held}
         return _with_rule(self, stats, update, held), Aux(metrics=metrics)
 
+    @functools.cached_property
+    def _compiled_scored(self) -> Callable[[Variables, Batch], tuple[jax.Array, ...]]:
+        return jax.jit(self._scored)
+
     def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
-        _, labels, target, output = self._scored(self.evaluation_variables(params, step), batch)
+        fields = _fields(batch, self.sample.key, self.labels)
+        _, labels, target, output = self._compiled_scored(self.evaluation_variables(params, step), fields)
         return _per_example(squared_error(output, target), jnp.argmax(output, axis=-1) == labels)
 
 
@@ -612,8 +697,12 @@ class RNeuralNetObjective(Objective[Ratio]):
         metrics = {"reward": jnp.sum(rows * reward) / jnp.sum(rows)}
         return _with_rule(self, stats, {"weight": update}, variables["params"]), Aux(metrics=metrics)
 
+    @functools.cached_property
+    def _compiled_last(self) -> Callable[[jax.Array, Batch], jax.Array]:
+        return jax.jit(self._last)
+
     def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
         weight = self.evaluation_variables(params, step)["params"]["weight"]
-        outputs = self._last(weight, batch)[:, self.net.outputs]
+        outputs = self._compiled_last(weight, _fields(batch, self.sample.key))[:, self.net.outputs]
         correct = jnp.argmax(outputs, axis=-1) == jnp.asarray(batch[self.labels])
         return _per_example(jnp.where(correct, -1.0, 1.0), correct)

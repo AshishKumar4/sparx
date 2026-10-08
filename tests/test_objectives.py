@@ -380,19 +380,28 @@ def test_the_accuracy_metric_counts_each_example_by_its_weight():
     assert Accuracy()(scores, {}) == (1.0, 2.0)
 
 
-def eprop_objective(rule="eprop"):
-    from sparx.dynamics import ALIFCell, decay
+def eprop_model(dt=1.0, **kwargs):
+    from sparx.models import SpikingMLP
+    from sparx.nn import ALIF
     from sparx.surrogate import Triangle
 
-    cell = ALIFCell(decay=decay(4.0), adapt_decay=decay(20.0), beta=0.2, detach_reset=True,
-                    surrogate=Triangle(scale=0.3))
-    return EPropObjective(cell, Field("spikes", (12, 5)), hidden=6, classes=3, tau=4.0, rule=rule)
+    neuron = ALIF(tau=4.0, tau_adapt=20.0, beta=0.2, detach_reset=True, surrogate=Triangle(scale=0.3), dt=dt)
+    return SpikingMLP(hidden=(6,), classes=3, neuron=neuron, recurrent=True, readout_tau=4.0, **kwargs)
+
+
+def eprop_objective(rule="eprop", **kwargs):
+    return EPropObjective(eprop_model(**kwargs), Field("spikes", (12, 5)), rule=rule)
 
 
 def eprop_batch(seed):
     rng = np.random.default_rng(seed)
     return {"spikes": (rng.random((8, 12, 5)) < 0.3).astype(np.uint8),
             "label": rng.integers(0, 3, 8).astype(np.int32)}
+
+
+def objective_gradients(objective, variables, batch):
+    step = Step(jnp.asarray(0), jax.random.key(1), None)
+    return jax.value_and_grad(lambda v: objective.scalar_loss(v, batch, step)[0])(variables)
 
 
 @pytest.mark.parametrize("rule", ["eprop", "random"])
@@ -402,12 +411,15 @@ def test_the_eprop_objectives_gradient_is_eprops(rule):
     objective = eprop_objective(rule)
     variables = objective.init(jax.random.key(0))
     batch = {key: jnp.asarray(value) for key, value in eprop_batch(1).items()}
-    step = Step(jnp.asarray(0), jax.random.key(1), None)
-    grads = jax.grad(lambda v: objective.scalar_loss(v, batch, step)[0])(variables)["params"]
+    _, grads = objective_gradients(objective, variables, batch)
 
+    # e-prop trains a bias as the weight of an input that is always 1.
     held = variables["params"]
-    params = EPropParams(held["w_in"], held["w_rec"], held["w_out"], held["b_out"])
-    inputs = jnp.swapaxes(batch["spikes"].astype(jnp.float32), 0, 1)
+    w_in = jnp.concatenate([held["dense_0"]["kernel"], held["dense_0"]["bias"][None]])
+    params = EPropParams(w_in, held["recurrent_0"]["recurrent"], held["readout"]["kernel"],
+                         held["readout"]["bias"])
+    spikes = jnp.swapaxes(batch["spikes"].astype(jnp.float32), 0, 1)
+    inputs = jnp.concatenate([spikes, jnp.ones((12, 8, 1))], axis=-1)
     targets = jnp.broadcast_to(batch["label"], (12, 8))
 
     def step_loss(y, label):
@@ -416,12 +428,41 @@ def test_the_eprop_objectives_gradient_is_eprops(rule):
     feedback = variables["feedback"]["weight"] if rule == "random" else None
     _, expected = eprop(objective.cell, params, inputs, targets, step_loss, tau=4.0, feedback=feedback)
     no_self = 1 - jnp.eye(6)
+    want = {"dense_0": {"kernel": expected.w_in[:5], "bias": expected.w_in[5]},
+            "recurrent_0": {"recurrent": expected.w_rec * no_self},
+            "readout": {"kernel": expected.w_out, "bias": expected.b_out}}
     # The trainer differentiates the mean over the batch of 8.
-    for name, want in (("w_in", expected.w_in), ("w_rec", expected.w_rec * no_self),
-                       ("w_out", expected.w_out), ("b_out", expected.b_out)):
-        np.testing.assert_allclose(grads[name], want / 8, rtol=1e-6, atol=1e-8, err_msg=name)  # observed 0
-    assert np.all(np.diag(grads["w_rec"]) == 0)
-    assert all(np.any(np.asarray(g) != 0) for g in jax.tree.leaves(grads))
+    jax.tree.map(lambda got, w: np.testing.assert_allclose(got, w / 8, rtol=1e-6, atol=1e-8),  # observed 0
+                 grads["params"], want)
+    assert np.all(np.diag(grads["params"]["recurrent_0"]["recurrent"]) == 0)
+    assert all(np.any(np.asarray(g) != 0) for g in jax.tree.leaves(grads["params"]))
+
+
+@pytest.mark.parametrize("dt", [1.0, 2.0])
+def test_the_eprop_objective_trains_the_spiking_mlp_it_was_given(dt):
+    # By BPTT the objective's loss and gradient are those of the model's own forward pass, so the
+    # network e-prop trains is the one `pipeline` returns, biases and time step included.
+    objective = eprop_objective("bptt", dt=dt)
+    variables = objective.init(jax.random.key(0))
+    assert np.all(np.diag(variables["params"]["recurrent_0"]["recurrent"]) == 0)
+    batch = {key: jnp.asarray(value) for key, value in eprop_batch(1).items()}
+    loss, grads = objective_gradients(objective, variables, batch)
+
+    def models_loss(params):
+        spikes = jnp.swapaxes(batch["spikes"].astype(jnp.float32), 0, 1)
+        outputs = objective.model.apply({"params": params}, spikes)
+        labels = jnp.broadcast_to(batch["label"], outputs.shape[:2])
+        per_step = optax.softmax_cross_entropy_with_integer_labels(outputs, labels)
+        return jnp.mean(jnp.mean(per_step, axis=0))
+
+    want, want_grads = jax.value_and_grad(models_loss)(variables["params"])
+    np.testing.assert_allclose(loss, want, rtol=1e-6)  # observed 1.1e-7
+    # The model's gradient reaches the recurrent diagonal, which the objective keeps at 0.
+    off = 1 - jnp.eye(6)
+    want_grads["recurrent_0"]["recurrent"] = want_grads["recurrent_0"]["recurrent"] * off
+    jax.tree.map(lambda got, w: np.testing.assert_allclose(got, w, rtol=1e-5, atol=1e-7),  # observed 1.5e-7
+                 grads["params"], want_grads)
+    assert all(np.any(np.asarray(g) != 0) for g in jax.tree.leaves(grads["params"]))
 
 
 @pytest.mark.parametrize("rule", ["eprop", "bptt"])
@@ -429,26 +470,58 @@ def test_a_repeated_row_counts_for_nothing_in_the_eprop_objectives_loss_and_grad
     objective = eprop_objective(rule)
     variables = objective.init(jax.random.key(0))
     real = {key: jnp.asarray(value) for key, value in eprop_batch(1).items()}
-    step = Step(jnp.asarray(0), jax.random.key(1), None)
-
-    def value_and_grad(batch):
-        return jax.value_and_grad(lambda v: objective.scalar_loss(v, batch, step)[0])(variables)
-
-    want, want_grads = value_and_grad(real)
-    got, got_grads = value_and_grad(padded_batch(real, 3))
+    want, want_grads = objective_gradients(objective, variables, real)
+    got, got_grads = objective_gradients(objective, variables, padded_batch(real, 3))
     np.testing.assert_allclose(got, want, rtol=1e-6)  # observed 0
-    for name in want_grads["params"]:
-        np.testing.assert_allclose(got_grads["params"][name], want_grads["params"][name],
-                                   rtol=1e-6, atol=1e-8)  # observed 0
+    jax.tree.map(lambda g, w: np.testing.assert_allclose(g, w, rtol=1e-6, atol=1e-8),  # observed 0
+                 got_grads["params"], want_grads["params"])
 
 
-def test_the_eprop_objective_trains_through_dews_trainer():
+def test_an_eprop_run_loads_back_as_its_spiking_mlp(tmp_path):
+    import dew
+
     objective = eprop_objective()
+    run = tmp_path / "run"
     data = Dataset.from_records(eprop_batch(2), batch=8, validation=eprop_batch(3), loading=LOADING)
-    trainer = Trainer(objective, optax.adam(1e-2), key=jax.random.key(0))
-    state = trainer.fit(data, steps=3, log_every=3, eval_every=3, metrics=[Accuracy()])
+    trainer = Trainer(objective, optax.adam(1e-2), key=jax.random.key(0), checkpoints=Checkpoints(str(run)))
+    state = trainer.fit(data, steps=3, log_every=3, eval_every=3, checkpoint_every=3, metrics=[Accuracy()])
+    trainer.checkpoints.wait()
     assert "val/accuracy" in trainer._display.evaluations["val"][-1].scores
-    assert np.all(np.diag(state.variables["params"]["w_rec"]) == 0)
+    params = state.variables["params"]
+    assert np.all(np.diag(params["recurrent_0"]["recurrent"]) == 0)
+
+    spikes = eprop_batch(4)["spikes"]
+    classifier = objective.pipeline(state)
+    assert isinstance(classifier, SpikingClassification) and classifier.model is objective.model
+    outputs = objective.model.apply({"params": params}, jnp.swapaxes(spikes.astype(np.float32), 0, 1))
+    np.testing.assert_allclose(classifier.logits(spikes), jnp.mean(outputs, axis=0), rtol=1e-6)  # observed 0
+    loaded = dew.pipeline(str(run), trust=("sparx",))
+    np.testing.assert_array_equal(np.asarray(loaded.logits(spikes)), np.asarray(classifier.logits(spikes)))
+
+
+@pytest.mark.parametrize("change", [{"recurrent": False}, {"hidden": (6, 6)}, {"delays": 2},
+                                    {"batch_norm": True}, {"dropout": 0.1}, {"learn_readout_tau": True}])
+def test_the_eprop_objective_refuses_parameters_eprop_does_not_train(change):
+    with pytest.raises(ValueError, match="e-prop trains a SpikingMLP"):
+        EPropObjective(eprop_model().clone(**change), Field("spikes", (12, 5)))
+
+
+def test_the_eprop_objective_refuses_a_learned_time_constant():
+    from sparx.nn import ALIF
+
+    model = eprop_model().clone(neuron=ALIF(learn_tau=True))
+    with pytest.raises(ValueError, match="e-prop trains a SpikingMLP"):
+        EPropObjective(model, Field("spikes", (12, 5)))
+
+
+def test_the_eprop_objective_trains_a_network_without_biases():
+    objective = EPropObjective(eprop_model(use_bias=False), Field("spikes", (12, 5)))
+    variables = objective.init(jax.random.key(0))
+    params = variables["params"]
+    assert set(params["dense_0"]) == {"kernel"} and set(params["readout"]) == {"kernel"}
+    batch = {key: jnp.asarray(value) for key, value in eprop_batch(1).items()}
+    _, grads = objective_gradients(objective, variables, batch)
+    assert jax.tree.structure(grads["params"]) == jax.tree.structure(variables["params"])
 
 
 PC_ALM = PredictiveCoding(8, 0.2, alpha=1.0)

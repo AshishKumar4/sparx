@@ -7,7 +7,9 @@
 
 A layer of recurrent adaptive LIF neurons (Bellec et al. 2020) reads SHD,
 binned into 100 steps of 14 ms with adjacent channels pooled to 140, and a
-leaky readout scores the 20 classes. e-prop (`sparx.learn.eprop`) computes
+leaky readout scores the 20 classes. The network is a
+`sparx.models.SpikingMLP`, the model `examples/train_shd.py` trains by
+backpropagation. e-prop (`sparx.learn.eprop`) computes
 the gradients as the recording runs: each synapse keeps an eligibility
 trace, and each step's cross entropy weights it through the readout
 (`--rule eprop`) or through fixed random weights (`--rule random`). Its
@@ -18,8 +20,10 @@ is the argmax of the readout averaged over time.
 `sparx.objectives.EPropObjective` is the dew objective. Its loss hands
 e-prop's gradient to dew's trainer as the loss's own
 (`Objective.with_gradients`); the trainer, its optimizer, checkpoints and
-evaluation are dew's as for any other objective. The test set is scored after each epoch, all 2264
-recordings. `--smoke` trains a small layer for a few steps on synthetic
+evaluation are dew's as for any other objective. The test set is scored
+after each epoch, all 2264 recordings. The run loads back as the trained
+`SpikingMLP` (`dew.pipeline(out, trust=("sparx",))`), which streams and
+serves as any other. `--smoke` trains a small layer for a few steps on synthetic
 recordings in SHD's layout and downloads nothing.
 """
 
@@ -34,8 +38,9 @@ from dew import Checkpoints, Field, Trainer
 from dew.data import Dataset, Loading
 
 from sparx.datasets import shd, write_synthetic_shd
-from sparx.dynamics import ALIFCell, decay
 from sparx.metrics import Accuracy
+from sparx.models import SpikingMLP
+from sparx.nn import ALIF
 from sparx.objectives import EPropObjective
 from sparx.surrogate import Triangle
 
@@ -76,10 +81,11 @@ def main(config: Config) -> None:
     # Time in ms, in steps of 14 ms: membrane 20 ms, adaptation 200 ms and
     # readout 20 ms, as Bellec et al. take them for speech (TIMIT), and two
     # steps of refractoriness.
-    cell = ALIFCell(decay=decay(20.0), adapt_decay=decay(200.0), beta=0.2, detach_reset=True,
-                    surrogate=Triangle(scale=0.3), refractory=2 * DT)
-    objective = EPropObjective(cell, Field("spikes", train["spikes"].shape[1:]), hidden=config.hidden,
-                               classes=20, tau=TAU_READOUT, dt=DT, rule=config.rule)
+    neuron = ALIF(tau=20.0, tau_adapt=200.0, beta=0.2, detach_reset=True, surrogate=Triangle(scale=0.3),
+                  refractory=2 * DT, dt=DT)
+    model = SpikingMLP(hidden=(config.hidden,), classes=20, neuron=neuron, recurrent=True,
+                       readout_tau=TAU_READOUT)
+    objective = EPropObjective(model, Field("spikes", train["spikes"].shape[1:]), rule=config.rule)
     trainer = Trainer(objective, optax.adam(config.learning_rate), key=jax.random.key(config.seed),
                       checkpoints=Checkpoints(str(config.out)))
     trainer.fit(data, steps=config.epochs * per_epoch, log_every=per_epoch, eval_every=per_epoch,

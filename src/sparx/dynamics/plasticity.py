@@ -137,9 +137,9 @@ class PairSTDP:
         w <- min(w + lambda (1 - w)^mu_plus K_pre, 1)
         w <- max(w - alpha lambda w^mu_minus K_post, 0)
 
-    where `K_pre` sums `exp(-dt / tau_plus)` over earlier presynaptic
-    spikes and `K_post` sums `exp(-dt / tau_minus)` over earlier
-    postsynaptic arrivals. `mu = 0` is additive STDP (Song et al. 2000),
+    where `K_pre` sums `exp(-s / tau_plus)` over earlier presynaptic
+    spikes, each `s` ms before, and `K_post` sums `exp(-s / tau_minus)`
+    over earlier postsynaptic arrivals. `mu = 0` is additive STDP (Song et al. 2000),
     `mu = 1` multiplicative (van Rossum et al. 2000).
     """
 
@@ -245,8 +245,9 @@ class DopamineSTDP:
         dc/dt = -c / tau_c + a_plus K_pre delta(t - t_post) - a_minus K_post delta(t - t_pre)
         dw/dt = c (n - b)
 
-    `K_pre` sums `exp(-dt / tau_plus)` over earlier presynaptic spikes and
-    `K_post` sums `exp(-dt / tau_minus)` over earlier postsynaptic arrivals,
+    `K_pre` sums `exp(-s / tau_plus)` over earlier presynaptic spikes, each
+    `s` ms before, and `K_post` sums `exp(-s / tau_minus)` over earlier
+    postsynaptic arrivals,
     each read just before the spike that uses it, as in `PairSTDP`. Between
     steps `c` decays with `tau_c` and `n` with `tau_n`, so the weight
     integrates their product exactly, as NEST does between events; `tau_n`

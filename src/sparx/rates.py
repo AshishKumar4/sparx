@@ -50,8 +50,9 @@ def rate_penalty(sown: Sown, lower: float = 0.0, upper: float = 1.0,
     """The squared distance of each neuron's rate outside `[lower, upper]`, averaged over neurons.
 
     A neuron's rate is its time-averaged spikes averaged over the batch (the
-    leading axis of each sown array), each example weighed by `rows` when
-    given, `[B]`, so a batch's repeated rows can weigh nothing. Silent
+    leading axis of each sown array), in spikes per step as `firing_rates`
+    reports it, and so are `lower` and `upper`. Each example is weighed by
+    `rows` when given, `[B]`, so a batch's repeated rows can weigh nothing. Silent
     neurons below `lower` receive gradient to fire and saturated ones above
     `upper` to stop, the role of the activity regularizers of Zenke and
     Vogels (Neural Computation 2021). Every neuron of every layer weighs the

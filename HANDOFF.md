@@ -13,7 +13,7 @@ The state of sparx and its dew work as of 8 October 2026: what exists, what is o
 - **Training spiking networks.**
   - Flax layers: LIF, ALIF, synaptic, rate, PSN, learned delays, and recurrent layers, fixed or with fast weights (`Recurrent(neuron, rule=...)`).
   - Surrogate gradients.
-  - Objectives on dew's `Trainer`: classifier, activity fit, e-prop and predictive coding; any sparx stack also trains under dew's generic `Supervised` through `nn.BatchMajor`.
+  - Objectives on dew's `Trainer`: classifier, activity fit, e-prop and predictive coding; any sparx stack also trains under dew's generic `Supervised` through `nn.BatchMajor`. Every objective compiles its own evaluation, since dew calls `evaluate` outside `jit`.
   - Online rules: e-prop and OTTT.
   - REINFORCE for a recurrent layer of escape-noise (Bernoulli) LIF neurons.
   - One recurrence for every algorithm: `sparx.dynamics.RecurrentCell(inner, wiring, fast_weights)` runs any neuron model over a `Dense` or `Sparse` (connectome) wiring, fixed or with `FastWeights`. The Hebbian rules (differentiable plasticity's decaying trace and Oja's rule, Backpropamine's simple and retroactive neuromodulation) read each connection's units through the wiring, so each runs on a dense layer and on a connectome alike, and a rule of your own is one dataclass and one module.
@@ -81,12 +81,10 @@ Open in dew, for sparx:
 2. **`research/continual/`**, built only on sparx and dew's public API.
    - Start with the small modular core (16 x 256 units), selective fast plasticity (`sparx.nn.Recurrent` with a neuromodulated trace; on a connectome's sparse wiring as well), a BPTT reference and a switch-and-door adaptation task, as the notes recommend.
    - Anything awkward to express there is a gap to fix in sparx or dew.
-3. **Remaining DX review items** (the review's numbering):
-   - item 7, a "Time, units and rates" reference page;
-   - item 11, e-prop weights into an `nn` model;
+3. **Remaining DX review items** (the review's numbering). Items 7 and 11 are done: `docs/units.md` lists the two conventions of time and units and the two units of rates, and `EPropObjective` trains a `SpikingMLP`, so an e-prop run loads back as that model. Open:
    - the rest of the documentation plan: tutorials from training to export, a cortical circuit with a Brian2/NEST lookup table, connectomes, mixing the halves, and generated API pages. Done: a short README with a banner, six diagrams and three clips, and `docs/guide.md`, which holds the reference material the README used to; `tests/test_readme.py` runs the code blocks of both.
 4. **Speed benchmarks against Brian2 and NEST** on an idle machine. There are none today; the parity tests only check agreement.
-5. **A `docs/design.md` rewrite** to describe the code as it is. Sections 5 and 6 still sketch an older monitor and receptor API.
+5. **A `docs/design.md` rewrite** to describe the code as it is. Sections 5 and 6 still sketch an older monitor and receptor API, section 4.1 lists no `jump` in `SynapticInput`, section 4.4 promises a `units` table no code has (`docs/units.md` is the convention), and section 4.2 gives LIF and AdEx the wrong integration schemes.
 6. **GPU and TPU measurements** (design phase 7), then kernels where profiling shows they pay: event delivery and bit-packed spikes. A plastic layer's step reads and writes several `[B, F, F]` arrays and backpropagating keeps one trace per step, so its CPU time is memory traffic (1.6 s per episode of 106 steps at F = 1001 on 4 cores); a remat of the step would trade compute for that memory.
 7. **Smaller deferred items:**
    - stochastic release should deplete Tsodyks-Markram resources by actual releases;

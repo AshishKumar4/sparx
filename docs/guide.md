@@ -1,6 +1,6 @@
 # sparx guide
 
-The README shows what sparx does. This guide covers how to use each part. [fidelity.md](fidelity.md) lists what every model is checked against, [design.md](design.md) the architecture, and [performance.md](performance.md) the measurements behind the defaults.
+The README shows what sparx does. This guide covers how to use each part. [units.md](units.md) lists the units of time, rates and every physical quantity, [fidelity.md](fidelity.md) what every model is checked against, [design.md](design.md) the architecture, and [performance.md](performance.md) the measurements behind the defaults.
 
 ## Contents
 
@@ -35,7 +35,7 @@ class ConvNet(nn.Module):
         return sparx.nn.LI()(nn.Dense(10)(x))
 ```
 
-Membranes stay in float32 whatever the input dtype. Spikes come back in the input's dtype, which holds 0 and 1 exactly, bfloat16 included.
+Membranes stay in float32 whatever the input dtype. Spikes come back in the input's dtype, which holds 0 and 1 exactly, bfloat16 included. Time constants are in the unit of a layer's `dt`, 1 step by default; [units.md](units.md) covers steps of real time and the physical units.
 
 ## Neuron layers
 
@@ -111,7 +111,7 @@ logits = net.apply(variables, frames, train=False)   # frames [T, B, 32, 32, 3] 
 
 - `RateEncoder(steps)` draws Bernoulli spikes with the value as probability.
 - `LatencyEncoder(steps)` fires one spike per value, earlier for larger values.
-- `DirectEncoder(steps)` feeds the values as a constant input current.
+- `DirectEncoder(steps)` feeds the values as a constant input.
 - `DeltaEncoder(threshold)` fires on changes of a signal along each record's time axis.
 - `EventsEncoder()` passes records that already hold spikes over time.
 
@@ -146,14 +146,15 @@ Without `mutable=["state"]` every neuron starts at rest. `SlidingPSN` streams th
 The layers build neuron models from `sparx.dynamics`, and the models run without Flax. Every model, from the dimensionless `LIFCell` to the physical `AdEx`, has `init_state(shape, dtype)` and `step(state, SynapticInput, dt) -> (state, Output)`, and `sparx.run` scans one over time. `Output.value` holds spikes, or a real value for a model whose `graded` is True. An array input is a jump of the membrane each step:
 
 ```python
-from sparx.dynamics import ALIFCell, LICell, LIFCell, RecurrentCell, Serial, decay
+from sparx.dynamics import ALIFCell, Dense, LICell, LIFCell, RecurrentCell, Serial, decay
 
 cell = LIFCell(decay=decay(tau=10.0), threshold=1.0, reset="subtract")
-spikes, state = sparx.run(cell, currents)          # currents [T, ...]; spikes.value [T, ...]
-more, state = sparx.run(cell, next_currents, state)  # continues where it stopped
+spikes, state = sparx.run(cell, inputs)            # inputs [T, ...]; spikes.value [T, ...]
+more, state = sparx.run(cell, next_inputs, state)  # continues where it stopped
 
 synaptic = Serial(LICell(decay(5.0)), LIFCell(decay(10.0)))  # a synaptic current, then the membrane
-lsnn = RecurrentCell(ALIFCell(decay=0.95, adapt_decay=0.995, beta=1.8), weight)  # weight [F, F]
+lsnn = RecurrentCell(ALIFCell(decay=0.95, adapt_decay=0.995, beta=1.8), Dense(weight))  # weight [F, F]
+adaptive, _ = sparx.run(lsnn, inputs)
 ```
 
 A model stores its decay per unit of time, and a step of `dt` (`sparx.run(..., dt=...)`, 1 by default) applies `decay ** dt`. Decays, thresholds and weights can be traced arrays, so you can learn them, sweep them with `vmap` or shard them.
@@ -202,7 +203,7 @@ Dew's validation pass scores every record of a split. It pads the last batch wit
 
 Other objectives:
 
-- `EPropObjective` trains a recurrent layer with e-prop's gradients, handed to the trainer as the loss's own through `Objective.with_gradients` ([`examples/train_shd_eprop.py`](../examples/train_shd_eprop.py)).
+- `EPropObjective` trains a `SpikingMLP` with one recurrent layer by e-prop's gradients, handed to the trainer as the loss's own through `Objective.with_gradients` ([`examples/train_shd_eprop.py`](../examples/train_shd_eprop.py)). The run loads back as that `SpikingMLP`, so a network trained online streams, serves and exports as one trained by backpropagation does.
 - `PredictiveCodingObjective` trains a stack of layers by predictive coding or PC-ALM ([`examples/train_pcalm.py`](../examples/train_pcalm.py)).
 - `RNeuralNetObjective` trains an `RNeuralNet` by reward diffusion or REINFORCE ([`examples/reward_diffusion.py`](../examples/reward_diffusion.py)).
 - `ActivityFitObjective` fits a network's spikes to recorded ones by van Rossum distance or smoothed rates.
@@ -354,7 +355,7 @@ rates = run_converted(snn, snn_variables, images, steps=100)  # output firing ra
 
 ## Results in detail
 
-All runs are the example scripts on a 4-core x86 CPU with JAX 0.11.2, float32, seed 0 unless stated. They are short, untuned runs. The MNIST, SHD and e-prop rows were measured at commit 6f5ed31, before those examples moved to dew's `Trainer`; the networks, losses and optimizers did not change.
+All runs are the example scripts on a 4-core x86 CPU with JAX 0.11.2, float32, seed 0 unless stated. They are short, untuned runs. The MNIST and SHD rows were measured at commit 6f5ed31, before those examples moved to dew's `Trainer`; the networks, losses and optimizers did not change. The e-prop rows were measured on 8 October 2026, after e-prop's network became a `SpikingMLP`.
 
 | Task | Command | Network | Test accuracy | Time |
 | --- | --- | --- | --- | --- |
@@ -364,12 +365,12 @@ All runs are the example scripts on a 4-core x86 CPU with JAX 0.11.2, float32, s
 | SHD, channels pooled to 140 | `... --channels 140 --hidden 128` | 140-128 ALIF | 64.53% | 1 min 42 s |
 | SHD, channels pooled to 140 | `... --channels 140 --hidden 128 --delays 15` | the same, a learned delay of 0 to 15 steps per input synapse | 74.56%, delays rounded | 4 min 19 s |
 | SHD, Hammouamri et al.'s recipe, 20 of 150 epochs | `python examples/train_shd.py --recipe snn-delays --epochs 20 --validation 0` | 140-256-256 LIF, a learned delay on every synapse | 91.87% (their code: 93.59% last, 94.03% best) | 48 min |
-| SHD, channels pooled to 140 | `python examples/train_shd_eprop.py --rule eprop --epochs 5` | 140-128 recurrent ALIF, trained online by e-prop | 53.36% (56.93% at epoch 3) | 3 min 30 s |
-| SHD, channels pooled to 140 | `... --rule bptt --epochs 5` | the same network by BPTT | 46.38% (53.80% at epoch 3) | 30 s |
+| SHD, channels pooled to 140 | `python examples/train_shd_eprop.py --rule eprop --epochs 5`, seeds 0 to 2 | 140-128 recurrent ALIF, trained online by e-prop | 49.2, 48.6 and 43.2% (best epochs 54.8, 57.0 and 55.7%) | 4 min 32 s to 4 min 53 s |
+| SHD, channels pooled to 140 | `... --rule bptt --epochs 5`, seeds 0 to 2 | the same network by BPTT | 51.6, 45.7 and 46.9% (best epochs 51.6, 51.8 and 48.2%) | 37 to 38 s |
 | Fashion-MNIST, Seely and Gould's headline cell | `python examples/train_pcalm.py` (`--method pc`, `--method bp`) | 784-32-...-32-10 ReLU residual MLP, depth 32, one epoch | PC-ALM 75.1%, PC 62.2%, BP 77.8% | 83 s, 82 s, 41 s |
 | Delayed cue order, RNeuralNet | `python examples/reward_diffusion.py --rule first` (`all`, `reinforce`, `none`), seeds 0 to 4 | 256-neuron `RNeuralNet`, delays of 1 to 21 ticks, 19,200 rewarded trials | diffusion unchanged from 44.5 to 50.2%; REINFORCE 100% on 4 of 5 seeds; linear readout 100% | 95 s, 44 s, 26 s |
 
-The two pooled SHD rows with and without delays differ only in the delays, which add 10 points. The e-prop and BPTT rows train the same network with the same optimizer; both swing by several points between epochs, and neither is tuned. e-prop's memory does not grow with the recording, but on a CPU it runs about 7 times slower here, since it advances an eligibility trace for every synapse every step ([performance](performance.md#e-prop)).
+The two pooled SHD rows with and without delays differ only in the delays, which add 10 points. The e-prop and BPTT rows train the same network with the same optimizer. Both swing by up to 10 points between epochs, and neither is tuned. Before the network became a `SpikingMLP`, it had no input bias and took Bellec et al.'s initialization (normal weights over the square root of the fan-in); over the same seeds e-prop ended at 57.8, 56.3 and 47.4% (best epochs 57.8, 56.3 and 53.2%). With that initialization and an input bias it ended at 54.6, 49.9 and 44.4%, so the bias may cost a few points; three seeds cannot separate that from the swing. e-prop's memory does not grow with the recording, but on a CPU it runs about 7 times slower here, since it advances an eligibility trace for every synapse every step ([performance](performance.md#e-prop)).
 
 For the SNN-delays row, their official code (with the 2023 SpikingJelly it was written for) and sparx ran the same recipe and schedule on this machine, one seed each. sparx ends 1.7 points below their last epoch and 2.2 below their best. One training step's gradients agree with theirs to 6e-7, so the gap comes from what the steps see. The example's docstring lists those differences: every recording padded to 124 steps where theirs pads to each batch's longest, 31 steps an epoch where they take 32, and different random streams. One seed each does not separate these from run-to-run spread. sparx's epochs took 146 s against about 210 s for theirs. Their reported 95% is the best of 150 epochs, selected on the test set.
 

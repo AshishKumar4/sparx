@@ -269,9 +269,10 @@ class Receptor:
     """A synapse model and how its output reaches the membrane.
 
     `kind="current"` adds the waveform as a current (pA);
-    `kind="conductance"` reads its value at the start of the step as a
-    conductance (nS) against the neuron's reversal potential for this
-    receptor's name. A synapse that lands as a voltage jump (`Delta`) is one either way.
+    `kind="conductance"` holds its value over the step (as
+    `PointNeuron.hold` picks it) as a conductance (nS) against the neuron's
+    reversal potential for this receptor's name. A synapse that lands as a
+    voltage jump (`Delta`) is one either way.
     """
 
     synapse: SynapseModel = struct.field(default_factory=Exponential)

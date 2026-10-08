@@ -168,7 +168,8 @@ class SpikingMLP(nn.Module):
     Each width in `hidden` is a synapse followed by a copy of `neuron`, and
     the readout is a synapse followed by an `LI` integrator. `recurrent`
     feeds each hidden layer's spikes back to itself (`sparx.nn.Recurrent`).
-    Trailing input axes are flattened.
+    Every layer steps at the neuron's `dt`, so `readout_tau` is in the unit
+    of the neuron's time constants. Trailing input axes are flattened.
 
     `delays` makes synapses `sparx.nn.DelayedDense`, whose Gaussian width is
     the call's `sigma` (0, the rounded delays, by default). An integer above
@@ -258,9 +259,11 @@ class SpikingMLP(nn.Module):
                 x = nn.BatchNorm(use_running_average=not train, momentum=0.9, epsilon=1e-5, dtype=self.dtype,
                                  param_dtype=self.param_dtype, name=f"norm_{layer}")(x)
             if self.recurrent:
-                x = Recurrent(neuron=self.neuron, precision=self.precision, name=f"recurrent_{layer}")(x)
+                x = Recurrent(neuron=self.neuron, precision=self.precision, dt=self.neuron.dt,
+                              name=f"recurrent_{layer}")(x)
             else:
                 x = adopt(self.neuron, self, f"neuron_{layer}")(x)
             x = nn.Dropout(self.dropout, broadcast_dims=broadcast, deterministic=not train)(x)
         x = synapse(x, self.classes, delays[-1], "readout")
-        return LI(tau=self.readout_tau, learn_tau=self.learn_readout_tau, name="integrator")(x)
+        return LI(tau=self.readout_tau, learn_tau=self.learn_readout_tau, dt=self.neuron.dt,
+                  name="integrator")(x)

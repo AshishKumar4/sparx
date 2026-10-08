@@ -56,11 +56,12 @@ def test_the_streaming_snippet_continues_across_chunks():
 
 def test_the_pure_jax_model_snippet_runs():
     scope = {"sparx": __import__("sparx"),
-             "currents": jax.random.normal(jax.random.key(0), (20, 4, 6)),
-             "next_currents": jax.random.normal(jax.random.key(1), (5, 4, 6)),
+             "inputs": jax.random.normal(jax.random.key(0), (20, 4, 6)),
+             "next_inputs": jax.random.normal(jax.random.key(1), (5, 4, 6)),
              "weight": jnp.eye(6) * 0.1}
     exec(_block("from sparx.dynamics import ALIFCell"), scope)
     assert scope["spikes"].value.shape == (20, 4, 6) and scope["more"].value.shape == (5, 4, 6)
+    assert scope["adaptive"].value.shape == (20, 4, 6)
 
 
 def test_the_sew_resnet_snippet_returns_per_step_logits():

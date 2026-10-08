@@ -18,7 +18,7 @@ The encoders that read values as intensities (`DirectEncoder`, `RateEncoder`, `L
 reads spike counts or currents, which it passes on unscaled. Every encoder
 returns float32.
 
-Direct encoding feeds the analog values as the input current at every step
+Direct encoding feeds the analog values as the input at every step
 and lets the first layer do the encoding, as DIET-SNN (Rathi and Roy, IEEE
 TNNLS 2021) and SpikingJelly's static-image examples do.
 """
@@ -78,7 +78,7 @@ def _intensities(x: ArrayLike) -> jax.Array:
 
 @dataclass(frozen=True)
 class DirectEncoder(SpikeEncoder):
-    """The values themselves as the input current at each of `steps` steps, as a broadcast."""
+    """The values themselves as the input at each of `steps` steps, as a broadcast."""
 
     steps: int
 
