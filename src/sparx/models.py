@@ -42,7 +42,9 @@ norms) name their width as their synapse does. So dew's default rules split
 a synapse's neurons over `tensor`, or over `fsdp` on a mesh without tensor
 parallelism, and its inputs over `fsdp` when the neurons took `tensor`. The
 recurrent matrix names only its postsynaptic side. Below `Layout.min_shard`
-elements a parameter stays whole whatever it declares.
+elements a parameter stays whole whatever it declares. Each declaration
+names a module and its parameter, `("readout", "kernel")`, since dew matches
+a declaration in every model in the process.
 """
 
 from __future__ import annotations
@@ -60,6 +62,26 @@ from sparx.nn.delays import DelayedDense
 from sparx.nn.neurons import LI, LIF, Neuron, Recurrent, adopt
 
 __all__ = ["SEWBlock", "SEWResNet", "SpikingMLP", "sew_resnet18", "sew_resnet34"]
+
+type Axes = dict[tuple[str, ...], LogicalAxes]
+
+UNIT_PARAMETERS = ("decay", "adapt_decay", "synapse_decay", "bias")
+"""The parameters a `sparx.nn` neuron holds, one per unit."""
+
+
+def _units(module: str, axis: str) -> Axes:
+    """The axes of a neuron layer's or a batch norm's parameters, one per unit along `axis`."""
+    return {(module, name): (axis,) for name in (*UNIT_PARAMETERS, "scale")}
+
+
+def _synapse(module: str, inputs: str | None, outputs: str | None) -> Axes:
+    """The axes of a dense or delayed synapse's kernel, delays and bias."""
+    return {(module, "kernel"): (inputs, outputs), (module, "delay"): (inputs, outputs),
+            (module, "bias"): (outputs,)}
+
+
+def _convolution(module: str) -> Axes:
+    return {(module, "kernel"): (None, None, None, "embed")}
 
 
 type Connect = Literal["add", "and", "iand"]
@@ -85,9 +107,10 @@ def connect(shortcut: jax.Array, residual: jax.Array, how: Connect) -> jax.Array
 
 
 @logical_axes({
-    **{(f"{conv}_conv",): (None, None, None, "embed") for conv in ("first", "second", "downsample")},
-    **{(f"{conv}_bn",): ("embed",) for conv in ("first", "second", "downsample")},
-    **{(neuron,): ("embed",) for neuron in ("sn1", "sn2", "downsample_sn")},
+    **{suffix: axes for conv in ("first", "second", "downsample")
+       for suffix, axes in (_convolution(f"{conv}_conv") | _units(f"{conv}_bn", "embed")).items()},
+    **{suffix: axes for neuron in ("sn1", "sn2", "downsample_sn")
+       for suffix, axes in _units(neuron, "embed").items()},
 })
 class SEWBlock(nn.Module):
     """A basic SEW block: two 3x3 conv-BN-neuron layers, joined to the shortcut by `connect`.
@@ -122,8 +145,8 @@ class SEWBlock(nn.Module):
         return connect(shortcut, residual, self.connect)
 
 
-@logical_axes({("stem_conv",): (None, None, None, "embed"), ("stem_bn",): ("embed",),
-               ("stem_sn",): ("embed",), ("classifier",): ("embed", None)})
+@logical_axes(_convolution("stem_conv") | _units("stem_bn", "embed") | _units("stem_sn", "embed")
+               | _synapse("classifier", "embed", None))
 class SEWResNet(nn.Module):
     """A SEW ResNet over `[T, B, H, W, C]` inputs, returning per-step logits `[T, B, classes]`.
 
@@ -181,16 +204,17 @@ def sew_resnet34(classes: int, **kwargs) -> SEWResNet:
     return SEWResNet((3, 4, 6, 3), classes, **kwargs)
 
 
-def _mlp_axes(layers: int) -> dict[tuple[str, ...], LogicalAxes]:
+def _mlp_axes(layers: int) -> Axes:
     """The logical axes of the parameters under each module a `SpikingMLP` of `layers` hidden layers
     builds."""
-    declared: dict[tuple[str, ...], LogicalAxes] = {("readout",): ("mlp", None), ("integrator",): (None,)}
+    # The readout's classes and its integrator's are too few to split.
+    declared = _synapse("readout", "mlp", None) | {("integrator", "decay"): (None,)}
     for layer in range(layers):
-        declared |= {(f"dense_{layer}",): ("embed", "mlp"), (f"delayed_{layer}",): ("embed", "mlp"),
-                     (f"norm_{layer}",): ("mlp",), (f"neuron_{layer}",): ("mlp",),
-                     (f"recurrent_{layer}", "recurrent"): (None, "mlp"),
-                     (f"recurrent_{layer}", "alpha"): (None, "mlp"),
-                     (f"recurrent_{layer}", "neuron"): ("mlp",), (f"recurrent_{layer}", "rule"): ("mlp",)}
+        declared |= (_synapse(f"dense_{layer}", "embed", "mlp") | _synapse(f"delayed_{layer}", "embed", "mlp")
+                     | _units(f"norm_{layer}", "mlp") | _units(f"neuron_{layer}", "mlp")
+                     | {(f"recurrent_{layer}", "recurrent"): (None, "mlp"),
+                        (f"recurrent_{layer}", "alpha"): (None, "mlp"),
+                        (f"recurrent_{layer}", "neuron"): ("mlp",), (f"recurrent_{layer}", "rule"): ("mlp",)})
     return declared
 
 
