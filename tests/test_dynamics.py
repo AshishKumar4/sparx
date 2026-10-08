@@ -83,6 +83,19 @@ def test_firing_period_is_the_analytic_one_within_a_step(current):
     assert np.all(periods >= expected - 1e-9) and np.all(periods < expected + dt)
 
 
+def test_a_constant_current_is_the_input_current_held_at_it():
+    # NEST's I_e: the membrane fires as it does on the same current fed every step.
+    with jax.enable_x64(new_val=True):
+        currents = jnp.asarray([80.0, 250.0, 400.0, 900.0])  # rheobase is 100 pA
+        fed, fed_state = run(LeakyIntegrateAndFire(), SynapticInput(jnp.broadcast_to(currents, (3000, 4))),
+                             dt=0.1)
+        held, held_state = run(LeakyIntegrateAndFire(i_e=currents), SynapticInput(jnp.zeros((3000, 4))),
+                               dt=0.1)
+    np.testing.assert_array_equal(held.value, fed.value)
+    np.testing.assert_allclose(held_state.v, fed_state.v, rtol=1e-12)  # observed 0
+    assert np.asarray(held.value).sum(0)[0] == 0 and np.all(np.asarray(held.value).sum(0)[1:] > 5)
+
+
 def test_in_step_spike_times_are_closer_than_the_grid():
     neuron = LeakyIntegrateAndFire()
     dt = 0.5

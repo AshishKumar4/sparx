@@ -148,7 +148,7 @@ Every network advances in NEST's order, which the single-neuron and network test
 
 1. Delta synapses deliver the spikes due at the end of the step as voltage jumps.
 2. Each population advances its membranes on its synapses' output and its gap junctions, and emits its output (spikes, or graded values).
-3. The outputs enter each population's ring buffer, and each modulator takes up the spikes of its source.
+3. The outputs enter each population's ring buffer, and each modulator takes up the spikes of its source. An event projection whose edges have their own delays sends its spikes now, each edge's weight into the row of its target receptor's arrivals that is due `delay` steps on.
 4. Every other synapse receives what is due at the end of the step, which shapes the membrane from the next step on.
 5. Plasticity updates traces and weights, reading the modulators.
 6. Monitors record.
@@ -161,13 +161,13 @@ A projection is stored and delivered in one of three formats, all giving the sam
 
 | Format | Cost per step | Taken by `"auto"` |
 | --- | --- | --- |
-| `"events"` | the spiking neurons' out-edges | whenever it can: a spiking population, one delay, fixed weights |
+| `"events"` | the spiking neurons' out-edges | whenever it can: a spiking population, fixed weights |
 | `"dense"` | `pre x post` | otherwise, with at most `DENSE_LIMIT` entries and a density of at least 2% |
 | `"edges"` | every edge, summed per target with `segment_sum` | otherwise |
 
 Event delivery takes a step's spiking neurons in passes of `per_pass`, found by `jax.lax.top_k`, as many passes as the step has spikes. Near-even or small out-degrees keep each neuron's out-edges as one padded row; uneven ones (a connectome's) are laid end to end in blocks and found by binary search. A `while_loop` of passes keeps shapes static, drops no spike, and under `vmap` costs the busiest trial's spikes. [performance.md](performance.md) has the measurements behind each choice.
 
-Each population keeps a ring buffer of its last outputs, in the network's dtype, as long as its longest outgoing delay; delays are int32 steps, and a projection with one delay reads one row of the ring.
+Each population keeps a ring buffer of its last outputs, in the network's dtype, as long as its longest outgoing delay; delays are int32 steps, and a projection with one delay reads one row of the ring. An event projection whose edges have their own delays reads only the step's row and sends ahead, as NEST does: each receptor it feeds keeps its arrivals for the next `longest delay + 1` steps (`NetworkState.pending`), and a step reads and empties its own row.
 
 ### 6.3 Scale
 

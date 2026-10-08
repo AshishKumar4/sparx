@@ -34,7 +34,7 @@ The physical models in `sparx.dynamics.neurons`, the synapses and plasticity rul
 - **Weights.** A projection's receptor sets the unit of its weight: pA of peak current for a `"current"` receptor, nS of peak conductance for a `"conductance"` receptor, mV for a `Delta` synapse. A projection from a graded population weighs its synapses at full release.
 - **Delays.** `Projection(delay=...)` is in ms and must be a whole number of steps, as must `simulate`'s `duration` and `chunk`. A delta synapse's jump lands before the threshold test, so it needs a delay of at least one step; a kinetic synapse takes 0.
 - **Refractoriness.** A neuron that fires holds its reset for `round(t_ref / dt)` steps after the step it fired in, as NEST counts it. Brian2 counts one step less (see [fidelity.md](fidelity.md)).
-- **Inputs.** `PoissonInput(rate=...)` is in Hz per source. `CurrentInput` drives in pA. A `GapJunction`'s weight is a conductance in nS.
+- **Inputs.** `PoissonInput(rate=...)` is in Hz per source. `CurrentInput` drives in pA, as does a neuron's constant `i_e`. A `GapJunction`'s weight is a conductance in nS.
 - **Neuromodulators.** A `Modulator`'s concentration has no unit. Each spike of its source adds `release`, and the concentration decays with `tau` ms.
 - **Plasticity.** STDP's, triplet STDP's, dopamine STDP's and Tsodyks-Markram's time constants are in ms.
 - **EventProp.** `sparx.learn.spike_times` works in continuous time in ms, with the membrane in mV above rest and currents in pA.

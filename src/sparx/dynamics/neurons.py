@@ -100,7 +100,7 @@ def _leaky(model: LeakyIntegrateAndFire | GradedPotential, v: jax.Array, inputs:
     g_l = model.c_m / model.tau_m
     g_syn, syn_drive = _synaptic(model, inputs, v)
     g_total = g_l + g_syn
-    drive = g_l * model.e_l + inputs.current + syn_drive
+    drive = g_l * model.e_l + model.i_e + inputs.current + syn_drive
     tau = model.c_m / g_total
     return exact_linear(v, drive / g_total, tau, dt) + sum(
         (response(term, tau, dt) for term in inputs.waveforms), jnp.zeros(())) / model.c_m + inputs.jump
@@ -142,6 +142,8 @@ class LeakyIntegrateAndFire:
     v_reset: jax.Array | float = -60.0
     t_ref: jax.Array | float = 5.0
     """Refractory period, ms; per neuron when an array."""
+    i_e: jax.Array | float = 0.0
+    """A constant current, pA, NEST's `I_e`, added to the input current `I`; per neuron when an array."""
     reversal: Mapping[str, float] = struct.field(pytree_node=False, default_factory=lambda: dict(RECEPTORS))
     gates: Mapping[str, MgBlock] = struct.field(pytree_node=False,
                                                 default_factory=lambda: {"nmda": MgBlock()})
@@ -209,6 +211,8 @@ class GradedPotential:
     """The voltage of half the maximal release, mV."""
     slope: jax.Array | float = 5.0
     """The voltage over which release grows by a factor of e near its foot, mV."""
+    i_e: jax.Array | float = 0.0
+    """A constant current, pA, added to the input current `I`; per neuron when an array."""
     reversal: Mapping[str, float] = struct.field(pytree_node=False, default_factory=lambda: dict(RECEPTORS))
     gates: Mapping[str, MgBlock] = struct.field(pytree_node=False,
                                                 default_factory=lambda: {"nmda": MgBlock()})

@@ -14,7 +14,7 @@ from typing import NamedTuple, Protocol
 import numpy as np
 
 __all__ = ["AllToAll", "Connectivity", "EdgeList", "FixedInDegree", "FixedOutDegree", "FixedProbability",
-           "FromEdges", "OneToOne"]
+           "FixedTotalNumber", "FromEdges", "OneToOne"]
 
 
 class EdgeList(NamedTuple):
@@ -134,6 +134,42 @@ class FixedOutDegree:
     def edges(self, rng: np.random.Generator, pre: int, post: int, same: bool) -> EdgeList:
         transposed = FixedInDegree(self.k, self.autapses, self.multapses).edges(rng, post, pre, same)
         return EdgeList.of(transposed.post, transposed.pre)
+
+
+@dataclass(frozen=True)
+class FixedTotalNumber:
+    """Exactly `n` edges between the two populations, each pair drawn uniformly. NEST's `fixed_total_number`.
+
+    Potjans and Diesmann's (2014) cortical microcircuit connects this way,
+    with `n` set so that a pair is connected at least once with the
+    measured probability. With `multapses` each edge draws its pair
+    independently, so a pair may repeat; without, `n` distinct pairs.
+    """
+
+    n: int
+    autapses: bool = False
+    multapses: bool = False
+
+    def edges(self, rng: np.random.Generator, pre: int, post: int, same: bool) -> EdgeList:
+        loops = same and not self.autapses
+        pairs = pre * post - (pre if loops else 0)
+        if self.n > pairs and not self.multapses:
+            raise ValueError(f"FixedTotalNumber({self.n}) exceeds the {pairs} possible pairs")
+        if not self.n:
+            return EdgeList.of(np.zeros(0), np.zeros(0))
+        if not pairs:
+            raise ValueError(f"FixedTotalNumber({self.n}) has no pairs to draw from")
+        # A pair is an index into the pre x post grid, or, without autapses, into
+        # each target's row of pre - 1 sources with the target itself skipped.
+        row = pre - 1 if loops else pre
+        if self.multapses:
+            chosen = rng.integers(0, pairs, self.n)
+        else:
+            chosen = rng.choice(pairs, self.n, replace=False)
+        targets, sources = np.divmod(chosen, row)
+        if loops:
+            sources = sources + (sources >= targets)
+        return EdgeList.of(sources, targets)
 
 
 @dataclass(frozen=True)

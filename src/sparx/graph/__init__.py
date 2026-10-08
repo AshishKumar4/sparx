@@ -16,6 +16,7 @@ from sparx.graph.connectivity import (
     FixedInDegree,
     FixedOutDegree,
     FixedProbability,
+    FixedTotalNumber,
     FromEdges,
     OneToOne,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "FixedInDegree",
     "FixedOutDegree",
     "FixedProbability",
+    "FixedTotalNumber",
     "FromEdges",
     "GapJunction",
     "Modulator",

@@ -21,8 +21,9 @@ variables are split by role (design.md section 5.1):
 | `connectome` | each projection's edges, delays, and its weights unless trainable |
 | `params` | the weights of trainable projections |
 | `state` | per population, neuron and synapse states and a ring buffer of recent outputs; per plastic |
-|         | projection, traces and weights; per depressing projection, release; each modulator's |
-|         | concentration; the step count |
+|         | projection, traces and weights; per depressing projection, release; per receptor fed by |
+|         | events over edges of their own delays, what is on its way; each modulator's concentration; |
+|         | the step count |
 
 `Network.connections(variables)` reads every projection's edges, weights
 and delays back out of them, whichever collection holds the weights.
@@ -52,7 +53,10 @@ single-neuron tests pin against NEST and Brian2 (`sparx.dynamics.core`):
    gap junctions (`GapJunction`), and emits its output (spikes, or graded
    values).
 3. The outputs enter each population's ring buffer, and each modulator
-   takes up the spikes of its source.
+   takes up the spikes of its source. An event projection whose edges
+   have their own delays sends its spikes now: each edge adds its weight to
+   what its target's receptor receives at the end of step `t + delay`, as
+   NEST queues a spike in each target's ring buffer.
 4. Every other synapse receives what is due at the end of the step, which
    shapes the membrane from the next step on.
 5. Plasticity updates traces and weights, reading the modulators.
@@ -214,7 +218,7 @@ class Projection:
     """How the projection is stored and delivered. `"events"` visits only the edges of neurons that spiked,
     so a step costs the spiking neurons' out-degree, not the edge count; `"edges"` gathers and sums an edge
     list per postsynaptic neuron; `"dense"` multiplies the spikes by a `[pre, post]` matrix. `"auto"` takes
-    events whenever it can, from a spiking population with one delay and fixed weights. Otherwise it takes
+    events whenever it can, from a spiking population with fixed weights. Otherwise it takes
     the matrix when it has at most `DENSE_LIMIT` entries and a density of at least `DENSE_DENSITY`, where a
     matrix product costs less than the gather, and the edge list beyond. A graded population has no silent
     neurons to skip, so its projections are edges or dense; one with stochastic release draws per edge, so
@@ -528,13 +532,19 @@ def _initial(population: Population, state: PointNeuronState, rng: np.random.Gen
     return PointNeuronState(neuron, synapses)
 
 
-def _events(p: Projection, delays: np.ndarray, pre: Population) -> bool:
+def _events(p: Projection, pre: Population) -> bool:
     """Whether `p` delivers by events: as asked, or under `"auto"` whenever it can, from a spiking
-    population with one delay and fixed weights, since its cost then follows the spikes, not the edges."""
-    fixed = not np.ndim(delays) and p.plasticity is None and not p.trainable
+    population with fixed weights, since its cost then follows the spikes, not the edges."""
+    fixed = p.plasticity is None and not p.trainable
     if p.format == "events" and not fixed:
-        raise ValueError(f"{p.key}: an event projection needs one delay and fixed weights")
+        raise ValueError(f"{p.key}: an event projection needs fixed weights")
     return p.format == "events" or (p.format == "auto" and fixed and not pre.graded)
+
+
+def _ahead(e: Mapping[str, np.ndarray | jax.Array]) -> bool:
+    """Whether a projection's built edges deliver by events over delays of their own, sending each spike's
+    weights ahead to the steps they are due in."""
+    return "by_pre" in e and np.ndim(e["delay"]) == 1
 
 
 def _dense(p: Projection, delays: np.ndarray, edges: int, pre: int, post: int) -> bool:
@@ -549,12 +559,24 @@ def _dense(p: Projection, delays: np.ndarray, edges: int, pre: int, post: int) -
     return small and not np.ndim(delays) and p.plasticity is None and not p.trainable and p.release is None
 
 
+def _landing(e: Mapping[str, jax.Array], edge: jax.Array, out: jax.Array, t: jax.Array | None
+             ) -> tuple[jax.Array, ...]:
+    """Where in `out` each event edge's value lands: its postsynaptic neuron, or with `t`, that neuron in the
+    row its delay reaches from step `t`. An index past the last edge lands past the end, to be dropped."""
+    post = e["by_pre"].at[edge].get(mode="fill", fill_value=out.shape[-1])
+    if t is None:
+        return (post,)
+    lag = e["delay"].at[edge].get(mode="fill", fill_value=0)
+    return ((t + lag) % out.shape[0], post)
+
+
 def _event_edges(edges: EdgeList, weight: np.ndarray, delays: np.ndarray, pre: int) -> dict[str, np.ndarray]:
     """An event projection's edges sorted by presynaptic neuron, with where each neuron's run starts and
-    how long it is, and its padded rows when the out-degrees are near even or few (`EVENT_PADDING`)."""
+    how long it is, its delay or each edge's, and its padded rows when the out-degrees are near even or
+    few (`EVENT_PADDING`)."""
     order = np.lexsort((edges.post, edges.pre))
     counts = np.bincount(edges.pre, minlength=pre)
-    built = {"delay": np.asarray(np.ravel(delays)[0] if np.size(delays) else 0, np.int32),
+    built = {"delay": delays[order] if np.ndim(delays) else np.asarray(delays, np.int32),
              "by_pre": edges.post[order],
              "start": np.append(np.cumsum(counts) - counts, 0).astype(np.int32),
              "count": np.append(counts, 0).astype(np.int32),
@@ -562,6 +584,19 @@ def _event_edges(edges: EdgeList, weight: np.ndarray, delays: np.ndarray, pre: i
     if len(edges) and counts.max() * pre <= max(EVENT_PADDING * len(edges), EVENT_ROWS):
         built["rows"] = _rows(counts, len(edges))
     return built
+
+
+def _pending(projections: Sequence[Projection], edges: Mapping[str, Mapping[str, np.ndarray | jax.Array]]
+             ) -> dict[str, tuple[str, int]]:
+    """Each receptor that event projections over delays of their own feed, `population:receptor`, with its
+    population and how many steps of arrivals it holds: its longest delay and the step itself."""
+    out: dict[str, tuple[str, int]] = {}
+    for p in projections:
+        if _ahead(edges[p.key]):
+            key = f"{p.post}:{p.receptor}"
+            rows = int(np.max(np.asarray(edges[p.key]["delay"]), initial=0)) + 1
+            out[key] = (p.post, max(rows, out.get(key, (p.post, 1))[1]))
+    return out
 
 
 def _rows(counts: np.ndarray, edges: int) -> np.ndarray:
@@ -622,6 +657,9 @@ class NetworkState(TypedDict):
     """The `state` collection of a `Network`, carried between calls."""
 
     populations: dict[str, PopulationState]
+    pending: dict[str, jax.Array]
+    """By `population:receptor`, the weights event projections over edges of their own delays have sent
+    and that are not yet due, `[rows, size]`: row `t % rows` arrives at the end of step `t`."""
     plastic: dict[str, PlasticState]
     """By projection key, the projections with plasticity."""
     short_term: dict[str, ReleaseState]
@@ -867,7 +905,7 @@ class Network(nn.Module):
             elif np.all(delays == delays[0]):
                 delays = np.asarray(delays[0], np.int32)  # one delay: read one row of the ring per step
             weight = _per_edge(p.weight, rng, edges, f"{p.key} weight").astype(np.dtype(self.dtype))
-            if _events(p, delays, pre):
+            if _events(p, pre):
                 built[p.key] = _event_edges(edges, weight, delays, pre.size)
             elif _dense(p, delays, len(edges), pre.size, post.size):
                 matrix = np.zeros((pre.size, post.size), weight.dtype)
@@ -885,10 +923,11 @@ class Network(nn.Module):
         return built
 
     def _lags(self, edges) -> dict[str, int]:
-        """How many steps of output each population's ring buffer keeps."""
+        """How many steps of output each population's ring buffer keeps; a projection that sends its spikes
+        ahead reads only the step's."""
         lags = {p.name: 1 for p in self.populations}
         for p in self.projections:
-            if np.size(edges[p.key]["delay"]):
+            if np.size(edges[p.key]["delay"]) and not _ahead(edges[p.key]):
                 longest = int(np.max(np.asarray(edges[p.key]["delay"]))) + 1
                 lags[p.pre] = max(lags[p.pre], longest)
                 if p.plasticity is not None:
@@ -918,9 +957,11 @@ class Network(nn.Module):
             if p.short_term is not None:
                 short_term[p.key] = {"release": p.short_term.init_state((pre,), dtype),
                                      "buffer": jnp.zeros((lags[p.pre], pre), dtype)}
+        pending = {key: jnp.zeros((rows, populations[post].size), dtype)
+                   for key, (post, rows) in _pending(self.projections, edges).items()}
         modulators = {m.name: jnp.zeros((), dtype) for m in self.modulators}
-        return {"populations": out, "plastic": plastic, "short_term": short_term, "modulators": modulators,
-                "t": jnp.zeros((), jnp.int32)}
+        return {"populations": out, "pending": pending, "plastic": plastic, "short_term": short_term,
+                "modulators": modulators, "t": jnp.zeros((), jnp.int32)}
 
     def _noise(self) -> jax.Array | None:
         """The key Poisson inputs and stochastic release draw from, None when nothing draws."""
@@ -1060,6 +1101,7 @@ class _Stepper:
         # Each stochastic projection draws from its own stream, numbered after the Poisson inputs' streams.
         self.streams = {p.key: len(network.inputs) + i for i, p in enumerate(network.projections)
                         if p.release is not None}
+        self.ahead = [p for p in network.projections if _ahead(edges[p.key])]
 
     def is_delta(self, population: str, receptor: str) -> bool:
         return self.populations[population].receptors[receptor].synapse.lands == "before_threshold"
@@ -1076,7 +1118,8 @@ class _Stepper:
         e = self.edges[p.key]
         key = self.release_key(t, p)
         if "by_pre" in e:
-            return self.events(p, e, weight, ring[(t - e["delay"]) % ring.shape[0]], key)
+            out = jnp.zeros(self.populations[p.post].size, weight.dtype)
+            return self.events(p, e, weight, ring[(t - e["delay"]) % ring.shape[0]], key, out)
         if "pre" not in e:
             return ring[(t - e["delay"]) % ring.shape[0]] @ weight
         if e["delay"].ndim == 0:
@@ -1091,8 +1134,32 @@ class _Stepper:
         return jax.ops.segment_sum(transmitted, e["post"], num_segments=self.populations[p.post].size,
                                    indices_are_sorted=True)
 
-    def events(self, p: Projection, e, weight, sent, key: jax.Array | None) -> jax.Array:
-        """Delivery that visits only the edges of neurons that spiked.
+    def send(self, t, rings: Mapping[str, jax.Array], weights, pending: dict[str, jax.Array]
+             ) -> dict[str, jax.Array]:
+        """`pending` with the spikes of step `t` sent ahead by the event projections whose edges have their
+        own delays, each edge's weight in the row of the step it is due in."""
+        pending = dict(pending)
+        for p in self.ahead:
+            ring = rings[p.key]
+            target = f"{p.post}:{p.receptor}"
+            pending[target] = self.events(p, self.edges[p.key], weights[p.key], ring[t % ring.shape[0]],
+                                          self.release_key(t, p), pending[target], t)
+        return pending
+
+    def received(self, pending: Mapping[str, jax.Array], t, delta: bool) -> dict[str, jax.Array]:
+        """`pending` with the rows its delta (or kinetic) receptors took at the end of step `t` emptied."""
+        targets = {f"{p.post}:{p.receptor}": (p.post, p.receptor) for p in self.ahead}
+        return {key: rows.at[t % rows.shape[0]].set(0) if self.is_delta(*targets[key]) == delta else rows
+                for key, rows in pending.items()}
+
+    def events(self, p: Projection, e, weight, sent, key: jax.Array | None, out: jax.Array,
+               t: jax.Array | None = None) -> jax.Array:
+        """Delivery that visits only the edges of neurons that spiked, added to `out`.
+
+        `out` is a value per postsynaptic neuron, or, with `t`, for a
+        projection whose edges have their own delays, the rows of what is on
+        its way, `[rows, post]`: an edge sending in step `t` adds to row
+        `(t + delay) % rows`.
 
         A step delivers its spiking neurons in passes of up to `p.per_pass`,
         as many passes as it has spikes for (none in a silent step), so its
@@ -1105,9 +1172,8 @@ class _Stepper:
         their out-degrees and walked in blocks of `EVENT_BLOCK` slots; each
         slot finds its neuron by binary search. With stochastic release, each
         pass, and each block of a pass, draws from `key` folded with its
-        index.
+        index, the key of the step that sends.
         """
-        out = jnp.zeros(self.populations[p.post].size, weight.dtype)
         if weight.shape[0] == 0:
             return out
         size = sent.shape[0]
@@ -1122,13 +1188,13 @@ class _Stepper:
             value, index = jax.lax.top_k(left, width)  # what a neuron sends is never below 0
             active = jnp.where(value != 0, index, size)
             passed = None if key is None else jax.random.fold_in(key, n)
-            out = deliver(p, e, weight, sent, passed, active, out)
+            out = deliver(p, e, weight, sent, passed, active, out, t)
             return out, left.at[active].set(0, mode="drop"), n + 1
 
         return jax.lax.while_loop(busy, one_pass, (out, sent, jnp.zeros((), jnp.int32)))[0]
 
     def _rows(self, p: Projection, e, weight, sent, key: jax.Array | None, active: jax.Array,
-              out: jax.Array) -> jax.Array:
+              out: jax.Array, t: jax.Array | None) -> jax.Array:
         """The `active` neurons' padded rows of out-edges, gathered and summed onto their targets; an
         index past the last neuron stands for none."""
         # A padding slot, or a neuron that stands for none, is an edge index past the last edge.
@@ -1141,11 +1207,10 @@ class _Stepper:
         else:
             assert key is not None
             value = jnp.where(valid, p.release.transmit(key, weights, spiked), 0)
-        target = e["by_pre"].at[edge].get(mode="fill", fill_value=out.shape[0])
-        return out.at[target].add(value, mode="drop")
+        return out.at[_landing(e, edge, out, t)].add(value, mode="drop")
 
     def _slots(self, p: Projection, e, weight, sent, key: jax.Array | None, active: jax.Array,
-               out: jax.Array) -> jax.Array:
+               out: jax.Array, t: jax.Array | None) -> jax.Array:
         """The `active` neurons' out-edges, laid end to end and walked in blocks of slots."""
         degree = e["count"][active]
         ends = jnp.cumsum(degree)
@@ -1164,7 +1229,7 @@ class _Stepper:
                 assert key is not None
                 drawn = p.release.transmit(jax.random.fold_in(key, i), weight[edge], spiked)
                 value = jnp.where(valid, drawn, 0)
-            return out.at[e["by_pre"][edge]].add(value)
+            return out.at[_landing(e, edge, out, t)].add(value, mode="drop")
 
         blocks = (total + EVENT_BLOCK - 1) // EVENT_BLOCK
         return jax.lax.fori_loop(0, blocks, block, out)
@@ -1202,13 +1267,18 @@ class _Stepper:
             arrivals[source.target][source.receptor] = incoming + source.weight * draws
         return arrivals, currents
 
-    def gather(self, name, t, external, rings, weights, delta: bool) -> dict[str, jax.Array]:
+    def gather(self, name, t, external, rings, weights, pending: Mapping[str, jax.Array],
+               delta: bool) -> dict[str, jax.Array]:
         """Everything due at the end of step `t` on `name`'s delta (or kinetic) receptors."""
         arrivals = {k: v for k, v in external.items() if self.is_delta(name, k) == delta}
         for p in self.into[name]:
-            if self.is_delta(name, p.receptor) == delta:
+            if self.is_delta(name, p.receptor) == delta and not _ahead(self.edges[p.key]):
                 due = self.deliver(t, p, weights[p.key], rings[p.key])
                 arrivals[p.receptor] = arrivals.get(p.receptor, 0.0) + due
+        for receptor in self.populations[name].receptors:
+            rows = pending.get(f"{name}:{receptor}")
+            if rows is not None and self.is_delta(name, receptor) == delta:
+                arrivals[receptor] = arrivals.get(receptor, 0.0) + rows[t % rows.shape[0]]
         return arrivals
 
     def gaps(self, start: Mapping[str, jax.Array], end: Mapping[str, jax.Array]) -> dict[str, Gap]:
@@ -1272,9 +1342,11 @@ class _Stepper:
         frozen = {name: pop.point_neuron.frozen(pops[name]["point_neuron"], self.dt)
                   for name, pop in self.populations.items()}
         before = rings({name: pops[name]["buffer"] for name in self.populations})
-        jumps = {name: pop.point_neuron.delta(self.gather(name, t, external[name], before, weights,
+        pending = state["pending"]
+        jumps = {name: pop.point_neuron.delta(self.gather(name, t, external[name], before, weights, pending,
                                                           delta=True))
                  for name, pop in self.populations.items()}
+        pending = self.received(pending, t, delta=True)
 
         def advance(name: str, gap: Gap | None) -> tuple[PointNeuronState, Output]:
             return self.populations[name].point_neuron.advance(
@@ -1306,17 +1378,20 @@ class _Stepper:
                 short_term[p.key] = {"release": release,
                                      "buffer": ring.at[t % ring.shape[0]].set(efficacy.astype(ring.dtype))}
 
-        # 4. Every other synapse receives what is due at the end of the step.
         after = rings(buffers)
+        pending = self.send(t, after, weights, pending)
+
+        # 4. Every other synapse receives what is due at the end of the step.
         new_pops: dict[str, PopulationState] = {}
         for name, pop in self.populations.items():
-            due = self.gather(name, t, external[name], after, weights, delta=False)
+            due = self.gather(name, t, external[name], after, weights, pending, delta=False)
             point_neuron = pop.point_neuron.receive(moved[name], due, self.dt, outputs[name], frozen[name])
             new_pops[name] = {"point_neuron": point_neuron, "buffer": buffers[name]}
+        pending = self.received(pending, t, delta=False)
 
         # 5-6. Plasticity, then monitors.
         self.plasticity(t, plastic, outputs, buffers, modulators)
         states = {n: v["point_neuron"] for n, v in new_pops.items()}
         records = {name: m.record(outputs, states, self.dt, modulators) for name, m in self.monitors.items()}
-        return {"populations": new_pops, "plastic": plastic, "short_term": short_term,
+        return {"populations": new_pops, "pending": pending, "plastic": plastic, "short_term": short_term,
                 "modulators": modulators, "t": t + 1}, records

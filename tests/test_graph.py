@@ -28,6 +28,7 @@ from sparx.graph import (
     CurrentInput,
     FixedInDegree,
     FixedProbability,
+    FixedTotalNumber,
     FromEdges,
     Network,
     OneToOne,
@@ -143,6 +144,19 @@ def test_connectivity_rules_draw_what_they_promise():
     edges = FixedProbability(0.1).edges(rng, 300, 300, same=True)
     assert abs(len(edges) / (300 * 299) - 0.1) < 0.01 and not np.any(edges.pre == edges.post)
     assert len(AllToAll().edges(rng, 5, 5, same=True)) == 20
+    edges = FixedTotalNumber(5000).edges(rng, 100, 100, same=True)
+    assert len(edges) == 5000 and not np.any(edges.pre == edges.post)
+    assert len(set(zip(edges.pre.tolist(), edges.post.tolist(), strict=True))) == 5000
+
+
+def test_a_fixed_total_number_draws_each_pair_alike():
+    # Without autapses each target skips itself, so the 12 other pairs of 4 neurons share the draws.
+    edges = FixedTotalNumber(120_000, multapses=True).edges(np.random.default_rng(0), 4, 4, same=True)
+    counts = np.zeros((4, 4))
+    np.add.at(counts, (edges.pre, edges.post), 1)
+    assert np.all(np.diag(counts) == 0)
+    off = counts[~np.eye(4, dtype=bool)] / len(edges)
+    np.testing.assert_allclose(off, 1 / 12, rtol=0.03)  # observed 0.010
 
 
 def test_the_same_key_builds_the_same_network():
@@ -193,6 +207,32 @@ def test_auto_delivers_by_events_what_it_can_and_the_spikes_are_the_edge_lists()
     runs = [simulate(n, n.init(jax.random.key(0)), duration=50.0, key=jax.random.key(1),
                      monitors={"a": SpikeRaster("a")}).records["a"] for n in (network, edges)]
     np.testing.assert_array_equal(*runs)
+    assert runs[0].sum() > 100
+
+
+@pytest.mark.parametrize(("synapse", "weight", "drive", "lowest"),
+                         [(Exponential(5.0), 20.0, 60.0, 0), (Delta(), 0.4, 1.2, 1)])
+def test_events_over_delays_of_their_own_are_the_edge_lists(synapse, weight, drive, lowest):
+    # Events send each spike's weights ahead to the steps they are due in; edge lists read each edge's
+    # source that many steps back. The spikes are the same, in one run and in chunks, which carry what
+    # is on its way.
+    def delays(rng, n):
+        return DT * rng.integers(lowest, 40, n)
+
+    projection = Projection("a", "a", FixedProbability(0.1), weight=weight, delay=delays, receptor="ex")
+    population = Population("a", 200, LeakyIntegrateAndFire(), {"ex": Receptor(synapse)})
+    network = Network((population,), (projection,),
+                      inputs=(PoissonInput("a", rate=1000.0, weight=drive, receptor="ex", count=5),), dt=DT)
+    variables = network.init(jax.random.key(0))
+    assert variables["connectome"]["edges"]["a->a:ex"]["delay"].ndim == 1
+    assert "by_pre" in variables["connectome"]["edges"]["a->a:ex"]
+    edges = network.clone(projections=(dataclasses.replace(network.projections[0], format="edges"),))
+    monitors = {"a": SpikeRaster("a")}
+    runs = [simulate(n, n.init(jax.random.key(0)), duration=50.0, key=jax.random.key(1), monitors=monitors,
+                     chunk=chunk).records["a"]
+            for n, chunk in ((network, 50.0), (network, 7.0), (edges, 50.0))]
+    np.testing.assert_array_equal(runs[0], runs[1])
+    np.testing.assert_array_equal(runs[0], runs[2])
     assert runs[0].sum() > 100
 
 
