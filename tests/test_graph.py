@@ -45,6 +45,7 @@ from sparx.graph import (
 from sparx.graph.models import brunel, coba, cuba
 from sparx.nn import LIF
 from sparx.spiketrains import cv_isi, population_fano, rates_hz
+from sparx.surrogate import Triangle
 
 NEST = np.load(Path(__file__).parent / "fixtures" / "nest.npz")
 DT = float(NEST["meta/dt"])
@@ -554,6 +555,38 @@ def test_connections_read_each_storage_back_as_the_edges_it_was_given():
         np.testing.assert_array_equal(got.weight, weight[order])
         np.testing.assert_allclose(got.delay, delay[order] if per_edge else 0.1)
         np.testing.assert_array_equal(connections["a->a:in"].weight, -weight[order])
+
+
+def test_gradients_through_a_network_are_exact_where_no_membrane_nears_threshold():
+    # A driven population fires; trainable synapses carry its spikes to one held below threshold, whose
+    # membranes are then a smooth function of their weights. With a surrogate that is zero away from
+    # threshold, the gradient is the exact one, which central differences give for this quadratic loss.
+    neuron = LeakyIntegrateAndFire(tau_m=10.0, c_m=250.0, e_l=-65.0, v_th=-50.0, v_reset=-65.0, t_ref=2.0,
+                                   surrogate=Triangle(1.0))
+    receptors = {"ampa": Receptor(Exponential(2.0)), "gaba_a": Receptor(Exponential(5.0))}
+    with jax.enable_x64(new_val=True):
+        network = Network((Population("e", 8, neuron, receptors), Population("i", 4, neuron, receptors)), (
+            Projection("e", "i", FixedProbability(0.5), weight=600.0, delay=1.0, receptor="ampa",
+                       trainable=True),
+            Projection("e", "i", FixedProbability(0.5), weight=-100.0, delay=0.5, receptor="gaba_a",
+                       trainable=True)), inputs=(CurrentInput("e", "stimulus"),), dt=0.1, dtype=jnp.float64)
+        variables = network.init(jax.random.key(0))
+        fixed = {name: value for name, value in variables.items() if name != "params"}
+        drive = {"stimulus": np.random.default_rng(0).uniform(400.0, 900.0, (500, 8))}
+        monitors = {"v": StateMonitor("i"), "e": SpikeRaster("e")}
+
+        def loss(params):
+            records, _ = network.apply({**fixed, "params": params}, drive, monitors=monitors,
+                                       mutable=["state"])
+            return jnp.sum((records["v"] + 60.0) ** 2), records
+
+        (_, records), grads = jax.value_and_grad(loss, has_aux=True)(variables["params"])
+        assert records["e"].sum() > 20 and -60.0 < float(records["v"].max()) < -52.0
+        for name, weight in variables["params"].items():
+            for k in range(len(weight)):
+                up = loss({**variables["params"], name: weight.at[k].add(1e-3)})[0]
+                down = loss({**variables["params"], name: weight.at[k].add(-1e-3)})[0]
+                np.testing.assert_allclose(grads[name][k], (up - down) / 2e-3, rtol=1e-6)  # observed 2.6e-9
 
 
 def test_connections_read_plastic_weights_as_learned():

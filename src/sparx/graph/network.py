@@ -1045,9 +1045,13 @@ class Network(nn.Module):
         edges = self.variable("connectome", "edges", structure).value
         weights = {}
         for p in self.projections:
-            if p.trainable:
+            if p.trainable and self.is_initializing():
                 weights[p.key] = self.param(f"weight:{p.key}",
                                             lambda _, k=p.key: jnp.asarray(build()[k]["weight"]))
+            elif p.trainable:
+                # Flax would check the stored weights' shape by tracing their initializer, which draws
+                # the edges from the "params" key that only `init` has; the stored weights are read.
+                weights[p.key] = self.get_variable("params", f"weight:{p.key}")
             else:
                 weights[p.key] = self.variable("connectome", f"weight:{p.key}",
                                                lambda k=p.key: jnp.asarray(build()[k]["weight"])).value

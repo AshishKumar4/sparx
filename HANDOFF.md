@@ -4,7 +4,7 @@ The state of sparx and its dew work as of 8 October 2026: what exists, what is o
 
 ## State
 
-- The suite passes: 666 tests, among them every example run in its `--smoke` mode, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
+- The suite passes: 668 tests, among them every example run in its `--smoke` mode, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
 - sparx pins dew at `6329435` on dew's `main` (`pyproject.toml`).
 - Every commit is authored by Ashish Kumar Singh <ashishkmr472@gmail.com>.
 
