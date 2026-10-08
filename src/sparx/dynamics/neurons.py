@@ -148,6 +148,12 @@ class LeakyIntegrateAndFire:
     gates: Mapping[str, MgBlock] = struct.field(pytree_node=False,
                                                 default_factory=lambda: {"nmda": MgBlock()})
     surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
+    detach_reset: bool = struct.field(pytree_node=False, default=False)
+    """Stop the gradient through the reset, as SpikingJelly's option of that name does. In mV the reset
+    is a jump of `v_th - v_reset`, so the reset's gradient multiplies a membrane's by about
+    `1 - slope (v_th - v_reset)` each step it spends near threshold: -9 with `ATan()`'s slope of 1 per
+    mV at threshold and the defaults' 10 mV, enough to overflow float32 within a few dozen steps. Train
+    through these neurons with it set."""
     graded = False
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> LeakyIntegrateAndFireState:
@@ -159,7 +165,8 @@ class LeakyIntegrateAndFire:
         integrated = _leaky(self, state.v, inputs, dt)
         held = state.refractory > dt / 2
         v = jnp.where(held, self.v_reset, integrated)
-        reset, fired = fire(v, jnp.where(held, jnp.inf, self.v_th), self.surrogate, self.v_reset)
+        reset, fired = fire(v, jnp.where(held, jnp.inf, self.v_th), self.surrogate, self.v_reset,
+                            detach_reset=self.detach_reset)
         offset = jnp.where(fired > 0, crossing(state.v, v, self.v_th), 1.0)
         refractory = jnp.where(fired > 0, self.t_ref, jnp.maximum(state.refractory - dt, 0))
         dtype = state.v.dtype

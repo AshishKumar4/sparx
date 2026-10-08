@@ -96,6 +96,27 @@ def test_a_constant_current_is_the_input_current_held_at_it():
     assert np.asarray(held.value).sum(0)[0] == 0 and np.all(np.asarray(held.value).sum(0)[1:] > 5)
 
 
+def test_a_detached_reset_passes_only_the_leak_back_through_a_step():
+    # Just below threshold the surrogate's slope is near its peak; through the reset it scales the gradient
+    # by 1 + slope (v_reset - v), and a detached reset leaves the leak's exp(-dt / tau_m) alone.
+    neuron = LeakyIntegrateAndFire()
+    dt, below = 0.1, neuron.v_th - 0.05
+    leak = math.exp(-dt / neuron.tau_m)
+
+    def after(v0, model):
+        state = model.init_state((), jnp.float64)._replace(v=v0)
+        return model.step(state, SynapticInput(0.0), dt)[0].v
+
+    with jax.enable_x64(new_val=True):
+        attached = jax.grad(after)(jnp.asarray(below), neuron)
+        detached = jax.grad(after)(jnp.asarray(below), neuron.replace(detach_reset=True))
+    v1 = neuron.e_l + (below - neuron.e_l) * leak
+    slope = 1 / (1 + (math.pi * (v1 - neuron.v_th)) ** 2)  # ATan(alpha=2)
+    np.testing.assert_allclose(detached, leak, rtol=1e-12)  # observed 0
+    np.testing.assert_allclose(attached, leak * (1 + slope * (neuron.v_reset - v1)), rtol=1e-12)  # observed 0
+    assert float(attached) < -5
+
+
 def test_in_step_spike_times_are_closer_than_the_grid():
     neuron = LeakyIntegrateAndFire()
     dt = 0.5
