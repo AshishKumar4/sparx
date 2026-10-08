@@ -56,9 +56,10 @@ sparx uses dew wherever dew has the concept; changes dew needs go to dew as pull
 
 | What | Where it helps |
 | --- | --- |
-| `Objective.with_gradients` without the rule in the loss's value | a validation pass computes a learning rule's update it never applies (PC-ALM: 46 ms a batch against 0.3 ms) |
-| `Dataset.validation`, a validation reader on its own | the SNN-delays example builds a dataset over its training records to read its holdout |
-| Exports of `OMITTED`, `Omitted`, `Artifact` and `logical_axes` | sparx imports them from outside their modules' `__all__` |
+| `Objective.row_weights`, a batch's real rows as weights | a learning rule weights rows itself (`sparx.objectives._row_weights`) |
 | `Supervised`'s metrics in the validation pass | `examples/pattern_completion.py` scores its holdout's zeroed bits itself after `fit` |
+| Logical-axis declarations scoped to the class that declares them | sparx's module names (`readout`, `dense_0`, ...) declare axes for any model in the process with a module of that name |
+
+Landed in dew `b255a88d` and taken here: `Objective.with_gradients` leaves the rule out of a value-only pass, `Dataset.validation` reads a held-out split alone, and `OMITTED`, `Omitted`, `Artifact` and `logical_axes` are exported.
 
 Stateful serving in dew (dew#30) was declined and the issue closed: dew's server overlaps dispatch and token draws, which synchronous spiking frames do not need, so `sparx.serve.StreamServer` stays sparx's.

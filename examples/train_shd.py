@@ -205,11 +205,7 @@ def snn_delays(config: Config) -> None:
                                 loading=loading(config))
     splits = {"test": data.val}
     if config.validation:
-        # dew reads a validation split beside the records it trains on; this pair's reader scores the
-        # holdout.
-        held = Dataset.from_records(train, batch=batch, seed=config.seed, validation=val,
-                                    loading=loading(config))
-        splits = {"val": held.val, **splits}
+        splits = {"val": Dataset.validation(val, batch=batch, loading=loading(config)), **splits}
     per_epoch = data.steps_per_epoch
     assert per_epoch is not None  # records held in memory have a count
     steps = config.epochs * per_epoch

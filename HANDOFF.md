@@ -4,7 +4,7 @@ How to pick sparx up. [docs/status.md](docs/status.md) is the one ledger of what
 
 ## State
 
-- sparx pins dew at `8e184b83` on dew's `main` (`pyproject.toml`), and `tools/lint_slop.py` is dew's file at that commit.
+- sparx pins dew at `b255a88d` on dew's `main` (`pyproject.toml`), and `tools/lint_slop.py` is dew's file at that commit.
 - CI (`.github/workflows/ci.yml`) runs ruff, dew's prose checker, pyright and the CPU suite on every push to `main` and to `ci/**` branches; a head lands on `main` by fast-forward once its run is green.
 - dew is the foundation wherever it has the concept. Changes dew needs go to dew as pull requests the owner merges; `docs/status.md` lists the open ones.
 - Every commit is authored by Ashish Kumar Singh <ashishkmr472@gmail.com>.
