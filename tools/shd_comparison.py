@@ -54,11 +54,12 @@ EPOCH = re.compile(r"=====> Epoch (\d+) : \nLoss Train = [\d.]+  \|  Acc Train =
 
 
 def _run(command: list[str], out: Path, cwd: Path) -> float:
-    """Run `command` in `cwd` with its output in `out/stdout.log`; the seconds it took."""
+    """Run `command` in `cwd` with its output in `out/stdout.log` and `out/stderr.log`, apart so progress
+    bars on stderr cannot split the lines read from stdout; the seconds it took."""
     out.mkdir(parents=True, exist_ok=True)
     start = time.perf_counter()
-    with (out / "stdout.log").open("w") as log:
-        subprocess.run(command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, check=True)
+    with (out / "stdout.log").open("w") as log, (out / "stderr.log").open("w") as errors:
+        subprocess.run(command, cwd=cwd, stdout=log, stderr=errors, check=True)
     return time.perf_counter() - start
 
 
