@@ -1,6 +1,7 @@
 """Learning rules beyond surrogate-gradient backpropagation through time (design.md section 7)."""
 
 from sparx.learn.convert import SpikingMaxPool, convert, fold_batch_norm, normalize, run_converted
+from sparx.learn.diffusion import Diffusion, RNeuralNet, reward_diffusion, reward_shares
 from sparx.learn.events import EventLIF, first_spike_cross_entropy, spike_times
 from sparx.learn.online import (
     EPropParams,
@@ -24,10 +25,12 @@ from sparx.learn.predictive import (
 from sparx.learn.reinforce import ReinforceParams, policy_gradient, reinforce
 
 __all__ = [
+    "Diffusion",
     "EPropParams",
     "EventLIF",
     "OTTTLayer",
     "PredictiveCoding",
+    "RNeuralNet",
     "ReinforceParams",
     "ResidualBlock",
     "Settled",
@@ -46,6 +49,8 @@ __all__ = [
     "policy_gradient",
     "reinforce",
     "residual_mlp",
+    "reward_diffusion",
+    "reward_shares",
     "run_converted",
     "sequential_blocks",
     "spike_times",

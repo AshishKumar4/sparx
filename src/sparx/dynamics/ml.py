@@ -41,8 +41,10 @@ from typing import Literal, NamedTuple, Protocol
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from flax import struct
 from flax.typing import PrecisionLike
+from jax.core import Tracer
 
 from sparx.dynamics.core import (
     NeuronModel,
@@ -71,6 +73,7 @@ __all__ = [
     "MembraneState",
     "ModulatedHebb",
     "OjaHebb",
+    "PulseCell",
     "RateCell",
     "RateState",
     "RecurrentCell",
@@ -289,6 +292,49 @@ class RateCell:
 
 
 @struct.dataclass
+class PulseCell:
+    """RNeuralNet's neuron: each step it outputs a function of the sum of what arrived, and empties the sum.
+
+        s[t] = v[t-1] + x[t]
+        output[t] = s[t]                      if s[t] >= threshold
+                    exp(s[t] - threshold) - 1   otherwise
+        v[t] = 0
+
+    The activation of `Soma_t::ActivationFunction` in Ashish Kumar Singh's
+    RNeuralNet-Research (commit d4b7803, with its `A_CONST` of 1): an ELU
+    whose exponential branch is shifted by the threshold while its linear
+    branch is not, so the output jumps from 0 to `threshold` there, and an
+    empty sum gives `exp(-threshold) - 1`, not 0. The output is a graded
+    message, sent each step, after which the sum empties, as the original
+    neuron resets once it has sent on every outgoing connection. A jump
+    that lands after the step (`after_threshold`) waits in `v` for the
+    next. The neuron has no time constant, so `dt` changes nothing; a
+    threshold of minus infinity passes the sum through unchanged, the
+    original's input neurons. `sparx.learn.RNeuralNet` wires these neurons
+    as the original does.
+    """
+
+    threshold: jax.Array | float = 2.0
+    graded = True
+
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> MembraneState:
+        return MembraneState(jnp.zeros(shape, membrane_dtype(dtype)))
+
+    def step(self, state: MembraneState, inputs: SynapticInput, dt: float) -> tuple[MembraneState, Output]:
+        s = state.v + _jump(inputs)
+        # The minimum keeps the unused branch finite, so its gradient is too.
+        below = jnp.exp(jnp.minimum(s - self.threshold, 0.0)) - 1
+        output = jnp.where(s >= self.threshold, s, below).astype(state.v.dtype)
+        return MembraneState(jnp.zeros_like(state.v)), _at_end(output)
+
+    def is_refractory(self, state: MembraneState, dt: float) -> jax.Array:
+        return _never(state.v)
+
+    def after_threshold(self, state: MembraneState, jump: jax.Array, fired: jax.Array) -> MembraneState:
+        return MembraneState(jump_after_threshold(state.v, jump, None))
+
+
+@struct.dataclass
 class Serial[First, Second]:
     """Two models in series: each step, the first's `Output.value` is the second's input jump.
 
@@ -401,16 +447,22 @@ class ALIFCell:
 class Wiring(Protocol):
     """Which units of a recurrent layer reach which, and with what weights: `Dense` or `Sparse`.
 
-    `send(output, fast)` carries a layer's outputs `[..., F]` back to every
+    `send(output, fast)` carries a layer's outputs `[..., F]` to every
     unit's input through the wiring's weights, plus `fast`, extra weights
-    per example and connection (a plastic trace's), or None. A plasticity
-    rule reads values at each connection's presynaptic unit
-    (`presynaptic(x)`), at its postsynaptic unit (`postsynaptic(x)`), or one
-    per example at every connection (`per_example(x)`), so one rule serves
-    every wiring. `connections(shape)` is the shape of one value per
-    connection for outputs of `shape`, and refuses outputs the wiring does
-    not fit.
+    per example and connection (a plastic trace's), or None. An output takes
+    one step to arrive, or as many as its connection's delay, up to
+    `longest_delay`, so `send` returns `[longest_delay, ..., F]`, what
+    arrives 1, 2, ... steps after the step that sent it; each message is
+    weighted when it is sent. A plasticity rule reads values at each
+    connection's presynaptic unit (`presynaptic(x)`), at its postsynaptic
+    unit (`postsynaptic(x)`), or one per example at every connection
+    (`per_example(x)`), so one rule serves every wiring.
+    `connections(shape)` is the shape of one value per connection for
+    outputs of `shape`, and refuses outputs the wiring does not fit.
     """
+
+    @property
+    def longest_delay(self) -> int: ...
 
     def connections(self, shape: tuple[int, ...]) -> tuple[int, ...]: ...
 
@@ -435,6 +487,10 @@ class Dense:
     weight: jax.Array
     precision: PrecisionLike = struct.field(pytree_node=False, default=None)
 
+    @property
+    def longest_delay(self) -> int:
+        return 1
+
     def connections(self, shape: tuple[int, ...]) -> tuple[int, ...]:
         if self.weight.shape != (shape[-1], shape[-1]):
             raise ValueError(f"a [{shape[-1]}, {shape[-1]}] weight feeds {shape[-1]} units back, not "
@@ -443,9 +499,12 @@ class Dense:
 
     def send(self, output: jax.Array, fast: jax.Array | None) -> jax.Array:
         if fast is None:
-            return jnp.matmul(output.astype(self.weight.dtype), self.weight, precision=self.precision)
-        weights = self.weight + fast
-        return jnp.einsum("...i,...ij->...j", output.astype(weights.dtype), weights, precision=self.precision)
+            sent = jnp.matmul(output.astype(self.weight.dtype), self.weight, precision=self.precision)
+        else:
+            weights = self.weight + fast
+            sent = jnp.einsum("...i,...ij->...j", output.astype(weights.dtype), weights,
+                              precision=self.precision)
+        return sent[None]
 
     def presynaptic(self, x: jax.Array) -> jax.Array:
         return x[..., :, None]
@@ -467,23 +526,40 @@ class Sparse:
     the presynaptic outputs and sums them at their postsynaptic units, in
     time and memory proportional to the edges. A value per connection is
     one per edge, `[..., E]`.
+
+    `delay[e]`, whole steps from 1 to `longest_delay`, is how long an output
+    takes to cross edge `e`; None is one step for every edge. A message is
+    weighted when it is sent, so a weight that changes while it travels
+    leaves it as it was. RNeuralNet's connections queue their messages so
+    (`sparx.learn.RNeuralNet`).
     """
 
     pre: jax.Array
     post: jax.Array
     weight: jax.Array
     size: int = struct.field(pytree_node=False)
+    delay: jax.Array | None = None
+    longest_delay: int = struct.field(pytree_node=False, default=1)
 
     def connections(self, shape: tuple[int, ...]) -> tuple[int, ...]:
         if shape[-1] != self.size:
             raise ValueError(f"the wiring's {self.size} units read inputs of {self.size} features, "
                              f"not {shape[-1]}")
+        if self.delay is not None and not isinstance(self.delay, Tracer) and len(self.delay):
+            # Out of range, an edge's messages would fall outside the steps a cell keeps.
+            delays = np.asarray(self.delay)
+            low, high = int(delays.min()), int(delays.max())
+            if low < 1 or high > self.longest_delay:
+                raise ValueError(f"delays from {low} to {high} steps do not fit 1 to longest_delay "
+                                 f"{self.longest_delay}")
         return (*shape[:-1], self.weight.shape[0])
 
     def send(self, output: jax.Array, fast: jax.Array | None) -> jax.Array:
         weights = self.weight if fast is None else self.weight + fast
-        sent = output.astype(weights.dtype)[..., self.pre] * weights
-        return jnp.moveaxis(jax.ops.segment_sum(jnp.moveaxis(sent, -1, 0), self.post, self.size), 0, -1)
+        sent = jnp.moveaxis(output.astype(weights.dtype)[..., self.pre] * weights, -1, 0)
+        slot = self.post if self.delay is None else (self.delay - 1) * self.size + self.post
+        arrived = jax.ops.segment_sum(sent, slot, self.longest_delay * self.size)
+        return jnp.moveaxis(arrived.reshape(self.longest_delay, self.size, *sent.shape[1:]), 1, -1)
 
     def presynaptic(self, x: jax.Array) -> jax.Array:
         return x[..., self.pre]
@@ -683,7 +759,10 @@ class FastWeights[Trace]:
 class RecurrentState[State, Trace](NamedTuple):
     inner: State
     output: jax.Array
-    """The step's output, fed back in the next."""
+    """The step's output."""
+    arriving: jax.Array
+    """The outputs sent and on their way, `[longest_delay, ..., F]`: `arriving[k]` reaches the units
+    `k + 1` steps after the step."""
     trace: Trace | None = None
     """What the fast weights' rule keeps, one per example; None without fast weights."""
 
@@ -696,7 +775,10 @@ class RecurrentCell[State, Trace]:
         hebb[t] = rule.update(hebb[t-1], output[t-1], output[t], dt)
 
     The wiring is `Dense`, every unit to every unit, or `Sparse`, along a
-    list of edges such as a connectome's. With `fast_weights` (`FastWeights`),
+    list of edges such as a connectome's, where each edge may take its own
+    number of steps (`Sparse.delay`): the output then arrives that many
+    steps after it was sent, weighted as the wiring was when it left, and
+    the state holds what is on its way. With `fast_weights` (`FastWeights`),
     a Hebbian trace each sequence writes adds fast weights to the wiring's;
     without, the trace stays None and the weights fixed. Any model runs
     inside: `ALIFCell` gives the recurrent adaptive network (LSNN) of Bellec
@@ -721,24 +803,36 @@ class RecurrentCell[State, Trace]:
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> RecurrentState[State, Trace]:
         self.wiring.connections(shape)
         rule = None if self.fast_weights is None else self.fast_weights.rule
+        if rule is not None and self.wiring.longest_delay > 1:
+            raise ValueError("fast weights pair each output with the one before it, so they need a "
+                             "wiring whose every delay is one step")
         trace = None if rule is None else rule.init_trace(self.wiring, shape, dtype)
-        return RecurrentState(self.inner.init_state(shape, dtype), jnp.zeros(shape, dtype), trace)
+        output = jnp.zeros(shape, dtype)
+        # What is on its way is held in the dtype the wiring sends in, so it reaches the units unrounded.
+        sent = jax.eval_shape(self._send, output, trace)
+        return RecurrentState(self.inner.init_state(shape, dtype), output, jnp.zeros(sent.shape, sent.dtype),
+                              trace)
 
     def step(self, state: RecurrentState[State, Trace], inputs: SynapticInput,
              dt: float) -> tuple[RecurrentState[State, Trace], Output]:
-        fed_back = jax.lax.stop_gradient(state.output) if self.cut_gradient else state.output
-        if self.fast_weights is None:
-            feedback = self.wiring.send(fed_back, None)
-        else:
-            assert state.trace is not None, "init_state gives a cell with fast weights its trace"
-            hebb = self.fast_weights.rule.hebb(state.trace)
-            feedback = self.wiring.send(fed_back.astype(hebb.dtype), self.fast_weights.alpha * hebb)
-        fed = dataclasses.replace(inputs, jump=inputs.jump + feedback)
+        fed = dataclasses.replace(inputs, jump=inputs.jump + state.arriving[0])
         inner, out = self.inner.step(state.inner, fed, dt)
-        # The feedback promotes the step's input, so the output is cast back
+        # What arrived promotes the step's input, so the output is cast back
         # to the dtype the carry started with, the input's.
         value = out.value.astype(state.output.dtype)
-        return RecurrentState(inner, value, self._learned(state, value, dt)), Output(value, out.offset)
+        trace = self._learned(state, value, dt)
+        later = jnp.concatenate([state.arriving[1:], jnp.zeros_like(state.arriving[:1])])
+        arriving = later + self._send(value, trace).astype(later.dtype)
+        return RecurrentState(inner, value, arriving, trace), Output(value, out.offset)
+
+    def _send(self, output: jax.Array, trace: Trace | None) -> jax.Array:
+        """What `output` sends through the wiring and the fast weights of `trace`."""
+        sent = jax.lax.stop_gradient(output) if self.cut_gradient else output
+        if self.fast_weights is None:
+            return self.wiring.send(sent, None)
+        assert trace is not None, "init_state gives a cell with fast weights its trace"
+        hebb = self.fast_weights.rule.hebb(trace)
+        return self.wiring.send(sent.astype(hebb.dtype), self.fast_weights.alpha * hebb)
 
     def _learned(self, state: RecurrentState[State, Trace], value: jax.Array, dt: float) -> Trace | None:
         """The trace after the step that output `value`, in its dtypes; None without fast weights."""

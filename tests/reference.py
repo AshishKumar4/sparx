@@ -204,3 +204,56 @@ def conductance_lif(arrivals, current, *, c_m, g_l, e_l, v_th, v_reset, t_ref, r
         vs.append(v.copy())
         spikes.append(fired)
     return np.stack(vs), np.stack(spikes)
+
+
+def pulse(s, threshold):
+    """RNeuralNet's activation (`Soma_t::ActivationFunction`, A_CONST 1): `s` at or above the threshold,
+    `exp(s - threshold) - 1` below."""
+    return np.where(s >= threshold, s, np.exp(np.minimum(s - threshold, 0.0)) - 1)
+
+
+def delayed_pulses(xs, pre, post, weight, delay, threshold):
+    """Units that each step output `pulse` of what arrived and send `weight[e]` times their output down
+    each connection, to arrive `delay[e]` steps later; returns each step's outputs."""
+    arrivals = np.zeros((len(xs) + int(np.max(delay)) + 1, *xs.shape[1:]))
+    out = []
+    for t, x in enumerate(xs):
+        o = pulse(arrivals[t] + x, threshold)
+        for e in range(len(pre)):
+            arrivals[t + delay[e], ..., post[e]] += weight[e] * o[..., pre[e]]
+        out.append(o)
+    return np.stack(out)
+
+
+def reward_spread(pre, post, activity, reward, root, size, eta=0.01):
+    """`Global_RewardSpreader` and `Global_Teacher` of RNeuralNet-Research (d4b7803) as written.
+
+    Recursive and depth first from `root`: a unit whose `Var2` has not
+    counted all its incoming connections, entered with a nonzero reward,
+    gives each source the share `exp|a| / sum exp|a|` of that reward,
+    counting each, then enters each source with what the source holds.
+    Then every connection whose target holds a reward changes by `eta`
+    times that reward times its share. Returns the changes, the local
+    rewards and the shares.
+    """
+    dendrites = [[e for e in range(len(pre)) if post[e] == u] for u in range(size)]
+    credit, share, var2 = np.zeros(size), np.zeros(len(pre)), np.zeros(size, int)
+    credit[root] = reward
+
+    def spread(unit, r):
+        if var2[unit] >= len(dendrites[unit]) or r == 0:
+            return
+        total = sum(np.exp(abs(activity[pre[e]])) for e in dendrites[unit])
+        for e in dendrites[unit]:
+            share[e] = np.exp(abs(activity[pre[e]])) / total
+            credit[pre[e]] += r * share[e]
+            var2[unit] += 1
+        for e in dendrites[unit]:
+            spread(pre[e], credit[pre[e]])
+
+    spread(root, reward)
+    change = np.zeros(len(pre))
+    for e in range(len(pre)):
+        if eta * credit[post[e]] != 0:
+            change[e] = eta * credit[post[e]] * share[e]
+    return change, credit, share

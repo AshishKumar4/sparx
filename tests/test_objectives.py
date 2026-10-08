@@ -16,7 +16,14 @@ from dew.training.optim import Exponential, Linear, OneCycle, ParamGroup
 import sparx
 from sparx.datasets import holdout
 from sparx.encode import Direct, Events, Rate
-from sparx.learn import PredictiveCoding, residual_mlp, sequential_blocks, squared_error
+from sparx.learn import (
+    PredictiveCoding,
+    RNeuralNet,
+    residual_mlp,
+    reward_diffusion,
+    sequential_blocks,
+    squared_error,
+)
 from sparx.metrics import Accuracy
 from sparx.nn import LI, LIF
 from sparx.objectives import (
@@ -24,6 +31,7 @@ from sparx.objectives import (
     EPropObjective,
     PredictiveCodingObjective,
     RateBand,
+    RNeuralNetObjective,
     SpikingClassifierObjective,
 )
 from sparx.tasks import SpikingClassification
@@ -505,3 +513,67 @@ def test_the_predictive_coding_objective_refuses_a_model_that_is_not_a_stack():
     with pytest.raises(TypeError, match=r"nn\.Sequential"):
         PredictiveCodingObjective(LIF(), Field("image", (4,)), classes=2)
 
+
+
+RNEURALNET = RNeuralNet.random(0, 24, 2, 2, fan=4, input_fan=2)
+
+
+def rneuralnet_batch(seed, rows=8):
+    rng = np.random.default_rng(seed)
+    return {"cues": (rng.random((rows, 24, 2)) < 0.4).astype(np.float32) * 3,
+            "label": rng.integers(0, 2, rows).astype(np.int32)}
+
+
+@pytest.mark.parametrize("rule", ["first", "all", "reinforce"])
+def test_the_rneuralnet_objectives_gradient_is_its_rules(rule):
+    objective = RNeuralNetObjective(RNEURALNET, Field("cues", (24, 2)), rule=rule, discount=0.9)
+    variables = objective.init(jax.random.key(0))
+    batch = {key: jnp.asarray(value) for key, value in rneuralnet_batch(1).items()}
+    step = Step(jnp.asarray(0), jax.random.key(1), None)
+    grads = jax.grad(lambda v: objective.scalar_loss(v, batch, step)[0])(variables)["params"]["weight"]
+    outputs = RNEURALNET.outputs
+
+    def chosen(weight):
+        wiring = RNEURALNET.wiring.replace(weight=weight)
+        net = RNEURALNET.replace(cell=RNEURALNET.cell.replace(wiring=wiring))
+        last = net.run(batch["cues"].swapaxes(0, 1))[0][-1]
+        logits = 4.0 * last[:, outputs]
+        choice = jax.random.categorical(step.key, logits)
+        reward = jnp.where(choice == batch["label"], 1.0, -1.0)
+        return last, jax.nn.log_softmax(logits)[jnp.arange(8), choice], reward
+
+    weight = variables["params"]["weight"]
+    last, _, reward = chosen(weight)
+    if rule == "reinforce":
+        def surrogate(w):
+            _, log_p, r = chosen(w)
+            return -jnp.mean((r - (jnp.sum(r) - r) / 7) * log_p)
+
+        expected = jax.grad(surrogate)(weight)
+    else:
+        # The trainer descends the mean over the batch of 8 of the rule's changes, their sign flipped.
+        def change(a, r):
+            return reward_diffusion(RNEURALNET.wiring, a, r, root=RNEURALNET.feeder, paths=rule, discount=0.9,
+                                    eta=1.0).change
+
+        spread = jax.vmap(change)
+        expected = -jnp.mean(spread(last, reward), axis=0)
+    np.testing.assert_allclose(grads, expected, rtol=1e-5, atol=1e-8)  # observed 0
+    assert np.any(np.asarray(grads) != 0) and 0 < np.sum(np.asarray(reward) > 0) < 8
+    _, aux = objective.loss(variables, batch, step)
+    np.testing.assert_allclose(aux.metrics["reward"], jnp.mean(reward), rtol=1e-6)
+
+
+def test_the_rneuralnet_objective_trains_through_dews_trainer():
+    objective = RNeuralNetObjective(RNEURALNET, Field("cues", (24, 2)), rule="first")
+    data = Dataset.from_records(rneuralnet_batch(2), batch=8, validation=rneuralnet_batch(3, 11),
+                                loading=LOADING)
+    trainer = Trainer(objective, optax.sgd(0.08), key=jax.random.key(0))
+    state = trainer.fit(data, steps=3, log_every=3, eval_every=3, metrics=[Accuracy()])
+    assert "val/accuracy" in trainer._display.evaluations["val"][-1].scores
+    assert np.any(np.asarray(state.variables["params"]["weight"]) != np.asarray(RNEURALNET.wiring.weight))
+
+
+def test_the_rneuralnet_objective_refuses_a_sample_that_is_not_one_sequence_of_its_inputs():
+    with pytest.raises(ValueError, match="sequence"):
+        RNeuralNetObjective(RNEURALNET, Field("cues", (24, 3)))

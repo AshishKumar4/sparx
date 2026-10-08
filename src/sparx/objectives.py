@@ -12,6 +12,8 @@ objectives:
   gradients (`sparx.learn.eprop`) in place of backpropagation.
 - `PredictiveCodingObjective` trains a stack of layers with predictive
   coding's or PC-ALM's local weight updates (`sparx.learn.PredictiveCoding`).
+- `RNeuralNetObjective` rewards an `RNeuralNet`'s choice and learns from the
+  reward by reward diffusion or by REINFORCE (`sparx.learn.RNeuralNet`).
 
     import optax
     from dew import Field, Trainer
@@ -36,7 +38,7 @@ from __future__ import annotations
 import functools
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
 import flax.linen as nn
@@ -67,9 +69,11 @@ from sparx.encode import SpikeEncoder
 from sparx.learn import (
     EPropParams,
     PredictiveCoding,
+    RNeuralNet,
     bptt_loss,
     eprop,
     eprop_forward,
+    reward_diffusion,
     sequential_blocks,
     squared_error,
 )
@@ -82,8 +86,8 @@ if TYPE_CHECKING:
     from dew.inference.tasks import Processor
     from dew.records import JSON
 
-__all__ = ["ActivityFitObjective", "EPropObjective", "PredictiveCodingObjective", "RateBand",
-           "SpikingClassifierObjective"]
+__all__ = ["ActivityFitObjective", "EPropObjective", "PredictiveCodingObjective", "RNeuralNetObjective",
+           "RateBand", "SpikingClassifierObjective"]
 
 
 def _per_example(losses: jax.Array, correct: jax.Array | None = None) -> TokenScores:
@@ -519,3 +523,97 @@ class PredictiveCodingObjective(Objective[Ratio]):
         _, labels, target, output = self._scored(self.evaluation_variables(params, step), batch)
         return _per_example(squared_error(output, target), jnp.argmax(output, axis=-1) == labels)
 
+
+
+type RewardRule = Literal["first", "all", "reinforce"]
+
+
+class RNeuralNetObjective(Objective[Ratio]):
+    """Reward an `RNeuralNet`'s choice among its output neurons after a sequence, and learn from the reward.
+
+    The network (`sparx.learn.RNeuralNet`) runs over the field `sample`,
+    one sequence of input values `[T, inputs]` per example, from nothing on
+    its way. At the last tick it chooses one of its output neurons: in
+    training it draws the choice from a softmax of `beta` times their
+    outputs, in evaluation it takes the largest. A choice that matches the
+    label under `labels` earns a reward of 1 and any other -1, the one
+    scalar per example that every rule receives. The weights of all its
+    connections are the parameters.
+
+    `rule="first"` or `"all"` is reward diffusion (`sparx.learn.reward_diffusion`,
+    with `discount`): each example's reward spreads from the feeder over its
+    last tick's outputs, and the mean of the examples' weight changes goes
+    to dew's trainer as the loss's gradient with its sign flipped
+    (`Objective.with_gradients`), so `optax.sgd(0.01 * batch)` applies the
+    original's `W_CONST` of 0.01 for every reward. `rule="reinforce"` is
+    REINFORCE (Williams 1992) on the choice, `-(R - b) log p(choice)` per
+    example with `b` the mean reward of the batch's other examples,
+    differentiated through the network over time. Whatever the rule, the
+    reported loss is the negative mean reward of the choices drawn, and
+    evaluation returns `TokenScores` for `sparx.metrics.Accuracy`.
+    """
+
+    artifact = TokenScores
+    shown: Mapping[str, Shown] = {"accuracy": Shown(better="higher", percent=True)}
+
+    def __init__(self, net: RNeuralNet, sample: Field, *, rule: RewardRule = "first", discount: float = 1.0,
+                 beta: float = 4.0, labels: str = "label"):
+        if rule not in ("first", "all", "reinforce"):
+            raise ValueError(f"rule must be first, all or reinforce, not {rule!r}")
+        if sample.shape[1:] != (net.inputs,):
+            raise ValueError(f"the sample is one sequence [T, {net.inputs}], not shape {sample.shape}")
+        self.net = net
+        self.sample = sample
+        self.rule: RewardRule = rule
+        self.discount, self.beta = discount, beta
+        self.labels = labels
+        self.inputs = InputSpec(sample=sample)
+
+    def fresh_variables(self, key: jax.Array, held: Variables | None) -> Variables:
+        return {"params": {"weight": self.net.wiring.weight}}
+
+    def _last(self, weight: jax.Array, batch: Batch) -> jax.Array:
+        """Every unit's output at the last tick, `[B, size]`, with the connections weighted by `weight`."""
+        net = replace(self.net, cell=replace(self.net.cell, wiring=replace(self.net.wiring, weight=weight)))
+        x = jnp.swapaxes(jnp.asarray(batch[self.sample.key], jnp.float32), 0, 1)
+        return net.run(x)[0][-1]
+
+    def _chosen(self, weight: jax.Array, batch: Batch,
+                key: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+        """The last tick's outputs, the log-probabilities of the choices, the choices and their rewards."""
+        last = self._last(weight, batch)
+        logits = self.beta * last[:, self.net.outputs]
+        choice = jax.random.categorical(key, logits)
+        reward = jnp.where(choice == jnp.asarray(batch[self.labels]), 1.0, -1.0)
+        log_p = jnp.take_along_axis(jax.nn.log_softmax(logits), choice[:, None], axis=-1)[:, 0]
+        return last, log_p, choice, reward
+
+    def loss(self, variables: Variables, batch: Batch, step: Step) -> tuple[Ratio, Aux]:
+        weight = jax.lax.stop_gradient(variables["params"]["weight"])
+        rows = _row_weights(batch, len(batch[self.labels]))
+        if self.rule == "reinforce":
+            def surrogate(w: jax.Array) -> tuple[jax.Array, jax.Array]:
+                _, log_p, _, r = self._chosen(w, batch, step.key)
+                baseline = (jnp.sum(rows * r) - rows * r) / jnp.maximum(jnp.sum(rows) - 1, 1)
+                return -jnp.sum(rows * (r - baseline) * log_p), r
+
+            update, reward = jax.grad(surrogate, has_aux=True)(weight)
+        else:
+            last, _, _, reward = self._chosen(weight, batch, step.key)
+            wiring = replace(self.net.wiring, weight=weight)
+            paths: Literal["first", "all"] = "first" if self.rule == "first" else "all"
+
+            def change(activity: jax.Array, r: jax.Array) -> jax.Array:
+                return reward_diffusion(wiring, activity, r, root=self.net.feeder, paths=paths,
+                                        discount=self.discount, eta=1.0).change
+
+            update = -jnp.sum(rows[:, None] * jax.vmap(change)(last, reward), axis=0)
+        stats = Ratio(-jnp.sum(rows * reward), jnp.sum(rows))
+        metrics = {"reward": jnp.sum(rows * reward) / jnp.sum(rows)}
+        return _with_rule(self, stats, {"weight": update}, variables["params"]), Aux(metrics=metrics)
+
+    def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
+        weight = self.evaluation_variables(params, step)["params"]["weight"]
+        outputs = self._last(weight, batch)[:, self.net.outputs]
+        correct = jnp.argmax(outputs, axis=-1) == jnp.asarray(batch[self.labels])
+        return _per_example(jnp.where(correct, -1.0, 1.0), correct)

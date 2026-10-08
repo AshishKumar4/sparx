@@ -14,6 +14,7 @@ from sparx.dynamics import (
     LICell,
     LIFCell,
     ModulatedHebb,
+    PulseCell,
     RateCell,
     RecurrentCell,
     RetroactiveHebb,
@@ -241,6 +242,55 @@ def test_recurrent_lif_matches_the_reference_loop():
 
 
 PRE, POST = [0, 1, 2, 3, 4, 5, 6, 2, 5], [1, 2, 3, 4, 5, 6, 0, 0, 3]  # a ring and two chords among F
+DELAY = [1, 3, 2, 1, 4, 2, 1, 3, 2]
+
+
+def test_a_pulse_cell_is_rneuralnets_activation():
+    threshold = jnp.asarray([2.0, 2.0, 2.0, 2.0, -jnp.inf])
+    sums = jnp.asarray([[2.0, 2.0 - 1e-3, 0.0, -1.0, -3.5]])
+    out, state = run(PulseCell(threshold), sums)
+    expected = [2.0, np.expm1(-1e-3), np.exp(-2.0) - 1, np.exp(-3.0) - 1, -3.5]
+    np.testing.assert_allclose(out.value[0], expected, rtol=1e-6, atol=1e-7)  # observed 7.0e-8
+    np.testing.assert_allclose(out.value[0], reference.pulse(np.asarray(sums[0], np.float64), threshold),
+                               rtol=1e-6, atol=1e-7)
+    assert PulseCell().graded and not np.any(state.v)
+    # The sum empties every step; a jump after the step waits for the next.
+    later = PulseCell(threshold).after_threshold(state, jnp.full(5, 0.5), jnp.zeros(5))
+    out, _ = run(PulseCell(threshold), jnp.zeros((1, 5)), later)
+    np.testing.assert_allclose(out.value[0], reference.pulse(np.full(5, 0.5), threshold), rtol=1e-6)
+
+
+def test_a_delayed_sparse_recurrence_is_the_queued_loop():
+    xs = currents(21, scale=1.5)
+    weight = np.random.default_rng(22).normal(0, 0.8, 9).astype(np.float32)
+    threshold = np.linspace(0.5, 1.5, F).astype(np.float32)
+    wiring = Sparse(jnp.asarray(PRE), jnp.asarray(POST), jnp.asarray(weight), F, jnp.asarray(DELAY), 4)
+    out, state = run(RecurrentCell(PulseCell(jnp.asarray(threshold)), wiring), jnp.asarray(xs))
+    expected = reference.delayed_pulses(xs.astype(np.float64), PRE, POST, weight, DELAY, threshold)
+    np.testing.assert_allclose(out.value, expected, rtol=1e-5, atol=1e-6)  # observed 4.8e-7 of 7.4
+    assert state.arriving.shape == (4, B, F)
+    # A wiring closed over by a compiled function is checked as it is built.
+    compiled = jax.jit(lambda x: run(RecurrentCell(PulseCell(jnp.asarray(threshold)), wiring), x)[0].value)
+    np.testing.assert_array_equal(compiled(jnp.asarray(xs)), out.value)
+    undelayed = reference.delayed_pulses(xs.astype(np.float64), PRE, POST, weight, np.ones(9, int), threshold)
+    assert np.abs(undelayed - expected).max() > 0.1
+
+
+def test_a_delay_the_cell_does_not_keep_is_refused():
+    wiring = Sparse(jnp.asarray(PRE), jnp.asarray(POST), jnp.ones(9), F, jnp.asarray(DELAY), 3)
+    with pytest.raises(ValueError, match="longest_delay"):
+        run(RecurrentCell(RateCell(0.5), wiring), jnp.asarray(currents(23)))
+    with pytest.raises(ValueError, match="longest_delay"):
+        undelayed = wiring.replace(delay=jnp.zeros(9, jnp.int32))
+        run(RecurrentCell(RateCell(0.5), undelayed), jnp.asarray(currents(23)))
+
+
+def test_fast_weights_refuse_a_delayed_wiring():
+    wiring = Sparse(jnp.asarray(PRE), jnp.asarray(POST), jnp.ones(9), F, jnp.asarray(DELAY), 4)
+    with pytest.raises(ValueError, match="one step"):
+        plastic = RecurrentCell(RateCell(0.5), wiring, FastWeights(0.1, DecayingHebb(0.3)))
+        run(plastic, jnp.asarray(currents(24)))
+
 
 MODELS = {
     "lif": LIFCell(0.8),
@@ -275,6 +325,15 @@ MODELS = {
         Sparse(jnp.asarray(PRE), jnp.asarray(POST), jnp.asarray(np.random.default_rng(13).normal(0, 0.8, 9)),
                F),
         FastWeights(jnp.asarray(np.random.default_rng(14).normal(0, 0.5, 9)), DecayingHebb(0.3))),
+    "pulse": PulseCell(jnp.linspace(-0.5, 1.5, F)),
+    "delayed_pulse": RecurrentCell(
+        PulseCell(1.0),
+        Sparse(jnp.asarray(PRE), jnp.asarray(POST), jnp.asarray(np.random.default_rng(15).normal(0, 0.5, 9)),
+               F, jnp.asarray(DELAY), 4)),
+    "delayed_rate": RecurrentCell(
+        RateCell(0.6, 0.1),
+        Sparse(jnp.asarray(PRE), jnp.asarray(POST), jnp.asarray(np.random.default_rng(16).normal(0, 0.8, 9)),
+               F, jnp.asarray(DELAY), 4)),
 }
 
 
@@ -321,6 +380,7 @@ def test_recurrent_bf16_carry_keeps_its_dtype():
     spikes, state = fired(model, xs)
     assert spikes.dtype == jnp.bfloat16
     assert state.output.dtype == jnp.bfloat16
+    assert state.arriving.dtype == jnp.float32  # what is on its way keeps the weights' precision
 
 
 def _two_step_gradient(detach_reset):
