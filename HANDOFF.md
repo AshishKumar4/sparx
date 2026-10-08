@@ -6,16 +6,15 @@ The state of sparx and its dew work as of 8 October 2026: what exists, what is o
 
 The last session (8 October 2026) ended early, at `412d5cd` on both `main` and `claude/zen-brown-b0kxzw`. In order:
 
-1. Run `JAX_PLATFORMS=cpu pytest tests -q`. The suite passed at `4e5140f`; `412d5cd` (the coincidence factor and the fit-a-circuit tutorial) passed its own tests and the lint gate, and its full run was cut short at 30%.
-2. Rebuild the merged event loop from item 4 below, the session's unfinished work: it took the microcircuit from 9.8 to 3.8 s per simulated second, and its prototype was lost with the session's scratch space.
-3. Re-run `benchmarks/bench_networks.py` after it and update `docs/performance.md`, the per-pass widths in `Projection.per_pass` and the microcircuit's `per_pass=4` in `sparx.graph.models` with the new times.
-4. Add to `docs/design.md` section 6.2 that event delivery's gradient is the edge list's (a `custom_jvp` in `sparx.graph.network._as_edges`), and the merged loop once it lands.
+1. Rebuild the merged event loop from item 4 below, the session's unfinished work: it took the microcircuit from 9.8 to 3.8 s per simulated second, and its prototype was lost with the session's scratch space.
+2. Re-run `benchmarks/bench_networks.py` after it and update `docs/performance.md`, the per-pass widths in `Projection.per_pass` and the microcircuit's `per_pass=4` in `sparx.graph.models` with the new times.
+3. Add to `docs/design.md` section 6.2 that event delivery's gradient is the edge list's (a `custom_jvp` in `sparx.graph.network._as_edges`), and the merged loop once it lands.
 
 What the session added, each with its test: trainable projections that apply after `init` (`e333da6`); `LeakyIntegrateAndFire(detach_reset=True)` (`7666f74`); gradients through event delivery (`4e5140f`); `sparx.spiketrains.coincidence_factor` with `tools/make_gamma_fixtures.py`, and `docs/tutorials/fit-a-circuit.md` (`412d5cd`).
 
 ## State
 
-- The suite passes: 670 tests at `4e5140f`; the commit after it (the coincidence factor and the fit-a-circuit tutorial) passed its own tests and the lint gate, but its full-suite run was cut short. Among the tests are every example run in its `--smoke` mode, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
+- The suite passes at `412d5cd`: 674 tests, among them every example run in its `--smoke` mode, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
 - sparx pins dew at `6329435` on dew's `main` (`pyproject.toml`).
 - Every commit is authored by Ashish Kumar Singh <ashishkmr472@gmail.com>.
 
