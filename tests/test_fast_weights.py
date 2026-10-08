@@ -155,6 +155,26 @@ def test_fast_weights_on_a_connectome_train():
     assert all(np.any(np.asarray(g) != 0) for g in jax.tree.leaves(grads["rule"]))
 
 
+def test_fast_weights_on_delayed_connections_pair_what_each_one_delivers():
+    # Connections of 1 to 4 steps, against a float64 loop of the equations.
+    from reference import delayed_plastic_rates
+
+    rng = np.random.default_rng(0)
+    size, edges, steps = 6, 16, 24
+    pre, post, delay = rng.integers(0, size, edges), rng.integers(0, size, edges), rng.integers(1, 5, edges)
+    weight, alpha = rng.normal(0, 0.6, edges), rng.normal(0, 0.6, edges)
+    xs = rng.normal(0, 1, (steps, 2, size))
+    with jax.enable_x64(new_val=True):
+        wiring = Sparse(jnp.asarray(pre), jnp.asarray(post), jnp.asarray(weight), size, jnp.asarray(delay),
+                        longest_delay=4)
+        cell = RecurrentCell(RateCell(0.6), wiring, FastWeights(jnp.asarray(alpha), DecayingHebb(0.3)))
+        out, state = run(cell, jnp.asarray(xs))
+        want, trace = delayed_plastic_rates(xs, pre, post, weight, alpha, delay, 0.3, 0.6)
+        np.testing.assert_allclose(out.value, want, rtol=1e-12, atol=1e-12)  # observed 2.5e-16
+        np.testing.assert_allclose(state.trace, trace, rtol=1e-12, atol=1e-12)  # observed 8.3e-17
+    assert np.abs(trace).max() > 0.05 and len(np.unique(delay)) == 4
+
+
 def test_a_decaying_trace_over_two_half_steps_is_one_whole_step():
     # keep = (1 - eta) ** dt: the trace decays as a rate per unit of time, whatever the step.
     rng = np.random.default_rng(0)

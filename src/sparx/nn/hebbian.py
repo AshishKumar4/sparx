@@ -43,7 +43,7 @@ def _linear_init(fan_in: int) -> nn.initializers.Initializer:
 
 
 class HebbianTrace(nn.Module):
-    """The Hebbian trace of a `Plastic` layer, which builds its rule with the rule's learned parameters.
+    """The Hebbian trace of a `Recurrent` layer, which builds its rule with the rule's learned parameters.
 
     A subclass declares the parameters in `build(features)`, for `features`
     units, and returns the rule, a `sparx.dynamics.HebbianRule`. A layer

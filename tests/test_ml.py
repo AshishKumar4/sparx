@@ -285,11 +285,18 @@ def test_a_delay_the_cell_does_not_keep_is_refused():
         run(RecurrentCell(RateCell(0.5), undelayed), jnp.asarray(currents(23)))
 
 
-def test_fast_weights_refuse_a_delayed_wiring():
+def test_a_delayed_plastic_recurrence_fed_in_chunks_is_the_whole_run():
+    # The state carries what is on its way and the outputs the traces still pair with.
     wiring = Sparse(jnp.asarray(PRE), jnp.asarray(POST), jnp.ones(9), F, jnp.asarray(DELAY), 4)
-    with pytest.raises(ValueError, match="one step"):
-        plastic = RecurrentCell(RateCell(0.5), wiring, FastWeights(0.1, DecayingHebb(0.3)))
-        run(plastic, jnp.asarray(currents(24)))
+    plastic = RecurrentCell(RateCell(0.5), wiring, FastWeights(0.1, DecayingHebb(0.3)))
+    x = jnp.asarray(currents(24))
+    whole, final = run(plastic, x)
+    first, state = run(plastic, x[:7])
+    rest, end = run(plastic, x[7:], state)
+    np.testing.assert_allclose(jnp.concatenate([first.value, rest.value]), whole.value, rtol=1e-6,
+                               atol=1e-7)  # observed 0
+    np.testing.assert_allclose(end.trace, final.trace, rtol=1e-6, atol=1e-7)  # observed 0
+    assert np.abs(np.asarray(final.trace)).max() > 0
 
 
 MODELS = {

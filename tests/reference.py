@@ -225,6 +225,28 @@ def delayed_pulses(xs, pre, post, weight, delay, threshold):
     return np.stack(out)
 
 
+def delayed_plastic_rates(xs, pre, post, weight, alpha, delay, eta, decay):
+    """Rate units, `h = decay h + (1 - decay) tanh(s)`, fed back along connections that each take
+    `delay[e]` steps, with fast weights. Each step, each connection's trace keeps `1 - eta` of itself and
+    adds `eta` times what the connection delivered this step (its source's output `delay[e]` steps
+    before) times its target's new output; then each unit sends its output down each connection with the
+    weight `weight[e] + alpha[e] * trace[e]` of that step. Returns each step's outputs and the last traces."""
+    steps = len(xs)
+    arrivals = np.zeros((steps + int(np.max(delay)) + 1, *xs.shape[1:]))
+    outputs = np.zeros(xs.shape)
+    trace = np.zeros((*xs.shape[1:-1], len(pre)))
+    h = np.zeros(xs.shape[1:])
+    for t in range(steps):
+        h = decay * h + (1 - decay) * np.tanh(arrivals[t] + xs[t])
+        delivered = np.stack([outputs[t - d][..., i] if t >= d else np.zeros(xs.shape[1:-1])
+                              for i, d in zip(pre, delay, strict=True)], axis=-1)
+        trace = (1 - eta) * trace + eta * delivered * h[..., post]
+        outputs[t] = h
+        for e in range(len(pre)):
+            arrivals[t + delay[e], ..., post[e]] += (weight[e] + alpha[e] * trace[..., e]) * h[..., pre[e]]
+    return outputs, trace
+
+
 def reward_spread(pre, post, activity, reward, root, size, eta=0.01):
     """`Global_RewardSpreader` and `Global_Teacher` of RNeuralNet-Research (d4b7803) as written.
 

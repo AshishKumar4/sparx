@@ -756,6 +756,37 @@ class FastWeights[Trace]:
     rule: HebbianRule[Trace]
 
 
+@struct.dataclass
+class _Arrivals:
+    """`wiring` as a plasticity rule reads it when its delays differ: each connection's presynaptic value
+    is what it delivers this step, its source's output `delay` steps before, from `history`, the last
+    outputs newest first, `[longest_delay, ..., F]`."""
+
+    wiring: Sparse
+    history: jax.Array
+
+    @property
+    def longest_delay(self) -> int:
+        return self.wiring.longest_delay
+
+    def connections(self, shape: tuple[int, ...]) -> tuple[int, ...]:
+        return self.wiring.connections(shape)
+
+    def send(self, output: jax.Array, fast: jax.Array | None) -> jax.Array:
+        return self.wiring.send(output, fast)
+
+    def presynaptic(self, x: jax.Array) -> jax.Array:
+        """Each connection's delivered value, whatever `x`: the output its source sent `delay` steps ago."""
+        delay = jnp.ones_like(self.wiring.pre) if self.wiring.delay is None else self.wiring.delay
+        return jnp.moveaxis(self.history, 0, -2)[..., delay - 1, self.wiring.pre]
+
+    def postsynaptic(self, x: jax.Array) -> jax.Array:
+        return self.wiring.postsynaptic(x)
+
+    def per_example(self, x: jax.Array) -> jax.Array:
+        return self.wiring.per_example(x)
+
+
 class RecurrentState[State, Trace](NamedTuple):
     inner: State
     output: jax.Array
@@ -765,6 +796,9 @@ class RecurrentState[State, Trace](NamedTuple):
     `k + 1` steps after the step."""
     trace: Trace | None = None
     """What the fast weights' rule keeps, one per example; None without fast weights."""
+    history: jax.Array | None = None
+    """The last outputs, newest first, `[longest_delay, ..., F]`, which fast weights on a wiring with
+    longer delays pair with the step's output; None otherwise."""
 
 
 @struct.dataclass
@@ -780,7 +814,11 @@ class RecurrentCell[State, Trace]:
     steps after it was sent, weighted as the wiring was when it left, and
     the state holds what is on its way. With `fast_weights` (`FastWeights`),
     a Hebbian trace each sequence writes adds fast weights to the wiring's;
-    without, the trace stays None and the weights fixed. Any model runs
+    without, the trace stays None and the weights fixed. On a wiring whose
+    delays differ, a connection's trace pairs the new output with what the
+    connection delivers this step, its source's output `delay` steps
+    before, which the state keeps (`RecurrentState.history`), and a message
+    carries the fast weights of the step that sent it. Any model runs
     inside: `ALIFCell` gives the recurrent adaptive network (LSNN) of Bellec
     et al. (2020), `RateCell` FLYNN's recurrence (on a `Sparse` wiring, its
     connectome), `RateCell(0.0)` with plasticity Miconi et al.'s networks,
@@ -803,15 +841,14 @@ class RecurrentCell[State, Trace]:
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> RecurrentState[State, Trace]:
         self.wiring.connections(shape)
         rule = None if self.fast_weights is None else self.fast_weights.rule
-        if rule is not None and self.wiring.longest_delay > 1:
-            raise ValueError("fast weights pair each output with the one before it, so they need a "
-                             "wiring whose every delay is one step")
         trace = None if rule is None else rule.init_trace(self.wiring, shape, dtype)
         output = jnp.zeros(shape, dtype)
         # What is on its way is held in the dtype the wiring sends in, so it reaches the units unrounded.
         sent = jax.eval_shape(self._send, output, trace)
+        delayed = rule is not None and self.wiring.longest_delay > 1
+        history = jnp.zeros((self.wiring.longest_delay, *shape), dtype) if delayed else None
         return RecurrentState(self.inner.init_state(shape, dtype), output, jnp.zeros(sent.shape, sent.dtype),
-                              trace)
+                              trace, history)
 
     def step(self, state: RecurrentState[State, Trace], inputs: SynapticInput,
              dt: float) -> tuple[RecurrentState[State, Trace], Output]:
@@ -823,7 +860,8 @@ class RecurrentCell[State, Trace]:
         trace = self._learned(state, value, dt)
         later = jnp.concatenate([state.arriving[1:], jnp.zeros_like(state.arriving[:1])])
         arriving = later + self._send(value, trace).astype(later.dtype)
-        return RecurrentState(inner, value, arriving, trace), Output(value, out.offset)
+        history = None if state.history is None else jnp.concatenate([value[None], state.history[:-1]])
+        return RecurrentState(inner, value, arriving, trace, history), Output(value, out.offset)
 
     def _send(self, output: jax.Array, trace: Trace | None) -> jax.Array:
         """What `output` sends through the wiring and the fast weights of `trace`."""
@@ -841,7 +879,11 @@ class RecurrentCell[State, Trace]:
         assert state.trace is not None, "init_state gives a cell with fast weights its trace"
         rule = self.fast_weights.rule
         kept = rule.hebb(state.trace).dtype
-        trace = rule.update(state.trace, self.wiring, state.output.astype(kept), value.astype(kept), dt)
+        wiring = self.wiring
+        if state.history is not None:
+            assert isinstance(wiring, Sparse), "only a sparse wiring has delays longer than a step"
+            wiring = _Arrivals(wiring, state.history.astype(kept))
+        trace = rule.update(state.trace, wiring, state.output.astype(kept), value.astype(kept), dt)
         # The weights promote the update, so each part is cast back to the dtype it started in.
         return jax.tree.map(lambda new, old: new.astype(old.dtype), trace, state.trace)
 
