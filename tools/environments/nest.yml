@@ -1,4 +1,5 @@
-# NEST 3.10.0 comes from conda-forge, which PyPI does not carry; the NEST tools
+# NEST 3.10.0 comes from conda-forge, which PyPI does not carry, beside the
+# numpy, scipy and matplotlib it reproduced the fixtures with; the NEST tools
 # (make_nest_fixtures, make_nest_gap_fixtures, make_brunel_fixtures, the
 # `nest` step of make_microcircuit_fixtures) and
 # benchmarks/bench_reference_simulators.py run here.
@@ -10,9 +11,9 @@ channels:
 dependencies:
   - python=3.12
   - nest-simulator=3.10.0
-  - numpy
-  - scipy
-  - matplotlib
+  - numpy=2.5.3
+  - scipy=1.18.1
+  - matplotlib=3.11.2
   - pip
   - pip:
       - brian2==2.10.1

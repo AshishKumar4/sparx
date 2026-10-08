@@ -20,6 +20,7 @@ Saves to `tests/fixtures/rneuralnet.npz`. The committed fixture came from
 RNeuralNet-Research d4b7803a5bbe87747d27a7137cc05a756bef42f7 with g++ 13.3.0:
 
     git clone https://github.com/AshishKumar4/RNeuralNet-Research ../ref-RNeuralNet-Research
+    uv pip sync tools/environments/brian2.txt
     python tools/make_rneuralnet_fixtures.py [path to the cloned repository]
 """
 
@@ -30,7 +31,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-from references import require_checkout
+from references import require_checkout, require_program
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tests" / "fixtures" / "rneuralnet.npz"
@@ -75,6 +76,7 @@ def network(rng):
 def main():
     repo = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT.parent / "ref-RNeuralNet-Research"
     require_checkout(repo, "RNeuralNet-Research")
+    require_program("g++")
     commit = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True,
                             check=True).stdout.strip()
     version = subprocess.run(["g++", "--version"], capture_output=True, text=True, check=True)

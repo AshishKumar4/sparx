@@ -21,6 +21,7 @@ import argparse
 import hashlib
 import importlib
 import importlib.metadata
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -43,6 +44,8 @@ PINS: dict[str, tuple[str, str]] = {
     "brian2modelfitting": ("brian2modelfitting", "0.4"),
     "elephant": ("elephant", "1.2.1"),
     "jax": ("jax", "0.11.2.post3"),
+    "pandas": ("pandas", "3.0.6"),
+    "pyarrow": ("pyarrow", "25.0.1"),
 }
 """Each reference package's module and version, by distribution: the version its fixtures record."""
 
@@ -57,8 +60,15 @@ CHECKOUTS: dict[str, str] = {
     "pc-alm": "660747f61a8a7e547c0ecd2c48c8883380a7d1f6",
     "RNeuralNet-Research": "d4b7803a5bbe87747d27a7137cc05a756bef42f7",
     "microcircuit-PD14-model": "f79f8ac",
+    "Drosophila_brain_model": "91bdd1e7dcf193f3e7ca5a8933497fcef63b7960",
 }
 """Every reference repository's commit, as a prefix of its full hash."""
+
+PROGRAMS: dict[str, str] = {"octave": "8.4.0", "g++": "13.3.0"}
+"""The version of each program a fixture tool runs, as `<program> --version` prints it."""
+
+FILES: dict[str, str] = {"figure1.m": "52a9aac93f7b3a5f0fd61d5f1250deb57d88deda048367b71b3933382aaf4ead"}
+"""The SHA-256 of each reference file a tool reads that no repository holds."""
 
 MADE_BY: dict[str, tuple[str, str]] = {
     "nest.npz": ("make_nest_fixtures.py", "nest"),
@@ -85,11 +95,11 @@ MADE_BY: dict[str, tuple[str, str]] = {
     "snntorch_conv.nir": ("make_nir_fixtures.py", "torch"),
     "snntorch_rleaky.nir": ("make_nir_fixtures.py", "torch"),
     "pcalm.npz": ("make_pcalm_fixtures.py", "sparx"),
-    "izhikevich_2004.npz": ("make_izhikevich_2004_fixtures.py", "octave"),
-    "rneuralnet.npz": ("make_rneuralnet_fixtures.py", "g++"),
+    "izhikevich_2004.npz": ("make_izhikevich_2004_fixtures.py", "brian2"),
+    "rneuralnet.npz": ("make_rneuralnet_fixtures.py", "brian2"),
 }
 """Each committed fixture's tool and the environment it runs in. `sparx` is the project's own environment
-(`constraints.txt`); `octave` and `g++` are the system's, and their tools record the version they ran."""
+(`constraints.txt`); a tool that runs a program (Octave, g++) checks its version (`PROGRAMS`)."""
 
 LOCKED: dict[str, tuple[str, ...]] = {
     # environment: the pins its lock file is compiled from, beyond PINS' own entries
@@ -143,6 +153,21 @@ def require_checkout(path: Path, name: str) -> None:
     if not head.startswith(CHECKOUTS[name]):
         sys.exit(f"{name} at {path} is at {head}; this fixture is made from {CHECKOUTS[name]}: "
                  f"git -C {path} checkout {CHECKOUTS[name]}")
+
+
+def require_program(name: str) -> None:
+    """Exit unless the program `name` on the path is the version `PROGRAMS` names."""
+    printed = subprocess.run([name, "--version"], capture_output=True, text=True, check=True).stdout
+    found = re.search(r"\d+\.\d+\.\d+", printed.splitlines()[0])
+    if found is None or found.group() != PROGRAMS[name]:
+        sys.exit(f"this fixture is made with {name} {PROGRAMS[name]}, and the path has "
+                 f"{printed.splitlines()[0]}")
+
+
+def require_file(path: Path, name: str) -> None:
+    """Exit unless the file at `path` is the reference file `FILES[name]` names, byte for byte."""
+    if digest(path) != FILES[name]:
+        sys.exit(f"{path} is not the {name} this fixture is made from (SHA-256 {FILES[name]})")
 
 
 def digest(path: Path) -> str:

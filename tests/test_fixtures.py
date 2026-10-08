@@ -26,5 +26,5 @@ def test_every_fixture_names_its_tool_and_an_environment_that_is_locked():
     environments = {path.stem for path in locks if path.suffix in (".txt", ".yml")}
     for name, (tool, environment) in references.MADE_BY.items():
         assert (ROOT / "tools" / tool).is_file(), name
-        assert environment in environments | {"sparx", "octave", "g++"}, name
+        assert environment in environments | {"sparx"}, name
     assert set(references.LOCKED) | {"nest"} == environments

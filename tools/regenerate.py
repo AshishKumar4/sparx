@@ -13,8 +13,12 @@ which names the arrays that changed; arrays that vary from run to run, the
 wall-clock times a fixture keeps (`VARIES`), are left out of that
 comparison, and a NIR graph is compared as nodes and edges, whose order in
 the file follows Python's string hashing. A float array within `ULPS` units
-in the last place of its largest value is reproduced to rounding: torch's
-CPU kernels round differently on another instruction set. With `--update`, a fixture that
+in the last place of its largest value is reproduced to rounding, and the
+line says the worst case: a reduction rounds differently on another
+instruction set, by an amount that follows the magnitude of what it sums.
+The largest seen is 3 (DCLS's outputs on two x86 CPUs), so 16 leaves a
+margin of five that a drift would show in the reports before it crossed.
+Integer, boolean and string arrays match exactly. With `--update`, a fixture that
 changed replaces the committed one and its checksum. Exits with 1 when a
 fixture changed and `--update` is not given.
 """
@@ -38,19 +42,22 @@ VARIES: dict[str, str] = {"microcircuit.npz": "/seconds"}
 ULPS = 16
 
 
-def rounded(a: np.ndarray, b: np.ndarray) -> bool:
-    """Whether float arrays `a` and `b` differ by at most `ULPS` units in the last place of `b`'s largest
-    value."""
+def ulps(a: np.ndarray, b: np.ndarray) -> float | None:
+    """How far float arrays `a` and `b` are apart, in units in the last place of `b`'s largest value;
+    None for arrays that are not floats of one dtype and shape, or that disagree on where a NaN is."""
     if a.dtype != b.dtype or a.dtype.kind != "f" or a.shape != b.shape:
-        return False
+        return None
+    if not np.array_equal(np.isnan(a), np.isnan(b)):
+        return None
     scale = float(np.max(np.abs(b[np.isfinite(b)]), initial=0.0))
-    return bool(np.allclose(a, b, rtol=0, atol=ULPS * float(np.spacing(np.asarray(scale, b.dtype))),
-                            equal_nan=True))
+    unit = float(np.spacing(np.asarray(scale, b.dtype)))
+    real = ~np.isnan(b)
+    return float(np.max(np.abs(a[real] - b[real]), initial=0.0)) / unit
 
 
-def changed_arrays(made: Path, committed: Path) -> tuple[list[str], list[str]]:
-    """The arrays of two NPZ files that differ, and those of them that differ by rounding alone, by name,
-    beside those `VARIES` leaves out."""
+def changed_arrays(made: Path, committed: Path) -> dict[str, float | None]:
+    """The arrays of two NPZ files that differ, by name, each with how many units in the last place apart
+    (`ulps`), beside those `VARIES` leaves out."""
     varying = VARIES.get(committed.name)
 
     def same(a: np.ndarray, b: np.ndarray) -> bool:
@@ -60,8 +67,8 @@ def changed_arrays(made: Path, committed: Path) -> tuple[list[str], list[str]]:
         names = sorted(set(new.files) | set(old.files))
         changed = [name for name in names if not (varying and name.endswith(varying))
                    and (name not in new.files or name not in old.files or not same(new[name], old[name]))]
-        return changed, [name for name in changed if name in new.files and name in old.files
-                         and rounded(new[name], old[name])]
+        return {name: ulps(new[name], old[name]) if name in new.files and name in old.files else None
+                for name in changed}
 
 
 def same_graph(made: Path, committed: Path) -> bool:
@@ -86,12 +93,14 @@ def compare(made: Path, committed: Path) -> tuple[str, bool]:
     if committed.suffix == ".nir":
         graphs = same_graph(made, committed)
         return ("reproduced", True) if graphs else ("differs in its nodes or edges", False)
-    changed, rounding = changed_arrays(made, committed)
+    changed = changed_arrays(made, committed)
+    beyond = [name for name, apart in changed.items() if apart is None or apart > ULPS]
+    if beyond:
+        return f"differs in arrays {', '.join(beyond)}", False
     if not changed:
         return "reproduced", True
-    if changed == rounding:
-        return f"reproduced to rounding in arrays {', '.join(changed)}", True
-    return f"differs in arrays {', '.join(name for name in changed if name not in rounding)}", False
+    worst = max(apart for apart in changed.values() if apart is not None)
+    return f"reproduced to rounding, at most {worst:.1f} ulps, in arrays {', '.join(changed)}", True
 
 
 def main() -> None:

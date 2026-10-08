@@ -19,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from references import require, require_checkout
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tests" / "fixtures" / "shiu.npz"
@@ -27,6 +28,8 @@ TRIALS, DURATION = 30, 1.0
 
 def main():
     repo = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT.parent / "ref-shiu"
+    require("pandas", "pyarrow")
+    require_checkout(repo, "Drosophila_brain_model")
     cases = {}
     for name in ("sugarR", "sugarR_100Hz"):
         spikes = pd.read_parquet(repo / "results" / "example" / f"{name}.parquet")

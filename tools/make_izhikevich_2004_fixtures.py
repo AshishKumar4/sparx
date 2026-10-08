@@ -1,6 +1,7 @@
 """Izhikevich (2004) Figure 1, the twenty firing patterns, as his own MATLAB code runs them.
 
-    python tools/make_izhikevich_2004_fixtures.py figure1.m     # needs GNU Octave
+    uv pip sync tools/environments/brian2.txt                   # and GNU Octave 8.4.0
+    python tools/make_izhikevich_2004_fixtures.py figure1.m
 
 `figure1.m` is the script published with "Which model to use for cortical
 spiking neurons?" (IEEE Trans. Neural Netw. 2004), from izhikevich.org
@@ -18,6 +19,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+from references import require_file, require_program
 
 OUT = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "izhikevich_2004.npz"
 
@@ -47,6 +49,8 @@ def instrumented(source: str) -> str:
 
 
 def main(figure1: str) -> None:
+    require_program("octave")
+    require_file(Path(figure1), "figure1.m")
     with tempfile.TemporaryDirectory() as directory:
         script = Path(directory) / "run.m"
         script.write_text(f"OUT='{directory}';\n" + instrumented(Path(figure1).read_text()))
