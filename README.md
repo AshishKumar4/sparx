@@ -1,33 +1,22 @@
-# Sparx
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+  <img alt="sparx: spiking neural networks in JAX" src="docs/assets/banner-light.svg" width="100%">
+</picture>
 
-Spiking neural networks in JAX and Flax.
+sparx trains spiking neural networks and simulates circuits of biological neurons, in JAX. Its spiking layers are Flax modules, so they train with optax or [dew](https://github.com/AshishKumar4/dew) and work with `jit`, `grad`, `vmap` and sharding. The same neuron models also run in millivolts and milliseconds, wired into circuits and whole connectomes, and there they match NEST and Brian2.
 
-Sparx builds spiking networks out of ordinary Flax linen layers and a small set of neuron layers that run over time. Neuron dynamics are pure JAX, gradients pass through spikes by surrogate derivatives, and networks train with optax, with your own loop or with [dew](https://github.com/AshishKumar4/dew)'s `Trainer`. Everything is a JAX PyTree, so `jit`, `grad`, `vmap`, forward-mode `jvp` and sharding work as they do for any Flax model.
+[Guide](docs/guide.md) · [Fidelity ledger](docs/fidelity.md) · [Design](docs/design.md) · [Performance](docs/performance.md)
 
-Sparx also simulates circuits as neuroscience states them: neuron models in physical units (LIF, AdEx, Izhikevich, Hodgkin-Huxley), receptor kinetics and plasticity (`sparx.dynamics`), wired into populations and projections with delays (`sparx.graph`). These match NEST and Brian2, spike for spike where the models are deterministic and statistically where they are chaotic.
+## Install
 
-`import sparx` reaches every part: `sparx.nn`, `sparx.models`, `sparx.dynamics` and the other modules a network is built from load with it, and `sparx.graph`, `sparx.learn`, `sparx.objectives`, `sparx.metrics`, `sparx.tasks`, `sparx.config`, `sparx.datasets`, `sparx.serve` and `sparx.nir` load the first time they are used.
+```bash
+git clone https://github.com/AshishKumar4/sparx.git && cd sparx
+uv venv --python 3.12 && source .venv/bin/activate
+uv pip install -e .                    # sparx and dew
+uv pip install -e ".[test]" && pytest -q
+```
 
-APIs can change before 1.0.
-
-## Contents
-
-- [A first network](#a-first-network)
-- [How a network runs over time](#how-a-network-runs-over-time)
-- [Neurons](#neurons)
-- [Surrogate gradients](#surrogate-gradients)
-- [Encoding, losses and firing rates](#encoding-losses-and-firing-rates)
-- [Streaming](#streaming)
-- [Pure JAX models](#pure-jax-models)
-- [Training with dew](#training-with-dew)
-- [Simulating circuits](#simulating-circuits)
-- [Learning beyond backpropagation through time](#learning-beyond-backpropagation-through-time)
-- [Connectomes, serving and exchange](#connectomes-serving-and-exchange)
-- [Results](#results)
-- [Performance](#performance)
-- [Correctness](#correctness)
-- [Installation](#installation)
-- [Roadmap](#roadmap)
+sparx needs Python 3.12 or later and is tested with JAX 0.11.2, Flax 0.12.10 and optax 0.2.8 on CPU. For a GPU or TPU, install the matching JAX build first. The API may change before 1.0.
 
 ## A first network
 
@@ -62,384 +51,117 @@ def loss(params):
 grads = jax.grad(loss)(params)
 ```
 
-`LIF` turns input currents into spikes, exactly 0 or 1, and `LI` is a leaky integrator whose membrane is the readout. The rest is Flax and optax. [`examples/train_mnist.py`](examples/train_mnist.py) trains a network like it, with a second hidden layer, to completion under dew's `Trainer` ([Training with dew](#training-with-dew)).
+`LIF` turns input currents into spikes, exactly 0 or 1, and `LI` integrates them into a membrane, which is the readout. Everything else is Flax and optax. [`examples/train_mnist.py`](examples/train_mnist.py) trains a network like this on MNIST under dew's `Trainer`.
 
-## How a network runs over time
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/training-dark.webp">
+  <img alt="A spiking classifier learning MNIST: a test digit, the hidden layer's spikes for it, the output spike counts and the test accuracy rising over 400 training steps" src="docs/assets/training-light.webp" width="100%">
+</picture>
 
-Time is the leading axis of every array inside a network: `[T, B, ...]`. Flax's `Dense`, `Conv`, `BatchNorm` and pooling treat every leading axis as a batch axis, so a synaptic layer applies to all time steps in one call, as one large matrix product. Only the neurons' elementwise recurrence runs step by step, as a `jax.lax.scan` inside each neuron layer. A neuron layer cannot tell time from batch, so `LIF()(x)` on a `[B, F]` array runs `B` as time steps without an error; give it `[T, B, F]`. A convolutional network needs nothing extra:
+A 784-200-10 network of LIF neurons learning MNIST by surrogate gradients. It follows one test digit through 400 training steps, showing the hidden layer's spikes, the ten output neurons' spike counts and the test accuracy, which reaches 92.8%.
 
-```python
-class ConvNet(nn.Module):
-    @nn.compact
-    def __call__(self, x, train: bool = False):     # [T, B, H, W, C]
-        x = sparx.nn.LIF()(nn.BatchNorm(use_running_average=not train)(nn.Conv(32, (3, 3))(x)))
-        x = nn.max_pool(x, (2, 2), (2, 2))
-        x = x.reshape(*x.shape[:2], -1)             # keep [T, B], flatten the rest
-        return sparx.nn.LI()(nn.Dense(10)(x))
-```
+## How sparx fits together
 
-Each neuron layer keeps its membrane in float32 whatever its input dtype, and returns spikes in the input's dtype, which holds 0 and 1 exactly even in bfloat16.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.svg">
+  <img alt="Training tools and simulation tools both run neuron models through one protocol" src="docs/assets/architecture-light.svg" width="100%">
+</picture>
 
-## Neurons
+Every neuron model implements one protocol, `init_state` and `step`, and `run` scans a model over time. Dimensionless cells serve deep learning, and physical models in mV and ms serve neuroscience. The two halves mix: a layer can hold a physical model (`nn.Dynamics(AdEx())`), and a simulated population can hold a dimensionless cell.
 
-The LIF family (`LIF`, `IF`, `LI`, `Synaptic`, `ALIF`) shares one discrete-time convention with step `dt = 1` and per-step decay `exp(-1 / tau)`: `v[t] = decay * v[t-1] + x[t]`, a spike where `v[t] >= threshold`, then a reset. The input enters unscaled, as in snnTorch's `Leaky`. Every layer takes `dt`, the step in the unit of its time constants, so the default counts `tau` in steps; a step of `dt` decays by `exp(-dt / tau)`.
+## A spiking layer over time
 
-| Layer | Dynamics | Learnable |
-| --- | --- | --- |
-| `LIF(tau, threshold, reset, surrogate, detach_reset)` | leaky integrate-and-fire | `learn_tau=True`: a decay per feature |
-| `IF(threshold, reset, ...)` | integrate-and-fire, no leak | |
-| `LI(tau)` | leaky integrator, never fires, returns its membrane | `learn_tau` |
-| `Rate(tau, activation)` | leaky rate unit, FLYNN's: `h <- alpha h + (1 - alpha) f(x + b)`, returns its activity; `tau=0` keeps no memory, `h = f(x + b)` | `b`; `learn_tau` |
-| `Synaptic(tau, tau_synapse, ...)` | current-based LIF: a decaying synaptic current charges the membrane | `learn_tau` (both) |
-| `ALIF(tau, tau_adapt, beta, ...)` | adaptive threshold that rises by `beta` per spike (Bellec et al. 2020) | `learn_tau` (both) |
-| `Dynamics(model, dt=dt)` | any neuron model of `sparx.dynamics`, such as `AdEx` or `Izhikevich`, on input currents | |
-| `Recurrent(neuron, rule=None)` | feeds any neuron's output back to its input through a learned `[F, F]` matrix; with a `rule`, plus fast weights, `alpha` times a Hebbian trace that each sequence writes from zero (Miconi et al. 2018, 2019) | the matrix; `alpha` and the rule's rates and neuromodulator |
-| `PSN()` | parallel spiking neuron: `H = W X + b` over all `T x T` step pairs (Fang et al. 2023) | `W`, `b` |
-| `MaskedPSN(k)` | the PSN restricted to the `k` most recent steps | `W`, `b` |
-| `SlidingPSN(k)` | `k` weights slid over time, any `T`, causal | weights, `b` |
-| `DelayedDense(features, max_delay)` | a dense synapse where every connection has its own delay of 0 to `max_delay` steps (Hammouamri et al. 2024) | weights, delays |
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/over_time-dark.svg">
+  <img alt="A layer scans one step function over time; a LIF membrane rises to threshold and resets at each spike; the spike's gradient is a smooth surrogate" src="docs/assets/over_time-light.svg" width="100%">
+</picture>
 
-`reset` is `"subtract"` (soft reset, the default), `"zero"` (hard reset) or `"none"`. `detach_reset=True` stops the gradient through the reset, as SpyTorch's tutorials and SpikingJelly's `detach_reset` do. Learned decays are the sigmoid of a parameter, so training cannot push them outside (0, 1).
+Arrays are time-major, `[T, B, ...]`. Synaptic layers run over all steps in one matrix product, and only the neurons step through time. A spike is a step function with zero derivative almost everywhere, so the backward pass uses a surrogate's slope instead. The layers are LIF, IF, LI, current-based synaptic LIF, adaptive LIF (ALIF), rate units, parallel spiking neurons and dense layers with learned delays ([guide](docs/guide.md#neuron-layers)).
 
-`DelayedDense` learns each delay by spreading the synapse over a Gaussian centered at it; the width is a call argument that a schedule shrinks during training, and `sigma=0` reads exactly the rounded delay, the network to deploy.
+## Recurrence and fast weights
 
-The PSNs have no loop over time at all. Each is one `[T, T] x [T, N]` product followed by a threshold, so no step waits for the one before it; Fang et al. report that this also learns longer dependencies than the LIF. `Recurrent(ALIF())` is the recurrent adaptive network (LSNN) of Bellec et al. `Recurrent(Rate())` is FLYNN's recurrence with a dense matrix.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/recurrence-dark.svg">
+  <img alt="A recurrent cell sends its output back through a dense, sparse or delayed wiring, with optional fast weights from a Hebbian trace" src="docs/assets/recurrence-light.svg" width="100%">
+</picture>
 
-A recurrent layer's feedback runs through a wiring, fixed or plastic, and every combination composes (`sparx.dynamics.RecurrentCell`): the wiring is `Dense`, every unit to every unit, or `Sparse`, a list of edges such as a connectome's, gathered and summed in memory proportional to the edges; `FastWeights(alpha, rule)` adds differentiable plasticity (Miconi et al. 2018), `recurrent + alpha * hebb`, where the Hebbian trace `hebb` starts at zero for every sequence and follows `rule`, so it holds what that sequence showed the network, and backpropagation through the traces learns the weights, each connection's `alpha` and the rule's parameters. The rules read each connection's presynaptic and postsynaptic units through the wiring, so each runs on a dense layer and on a connectome alike, and a sparse wiring that lists every pair computes exactly the dense layer. A `Sparse` wiring may also give each edge its own delay in steps (`delay`, up to `longest_delay`): a message is weighted when it leaves, and the cell's state holds what is on its way. `DecayingHebb` and `OjaHebb` are Miconi et al.'s decaying Hebbian trace and Oja's rule; `ModulatedHebb` and `RetroactiveHebb` are Backpropamine's (Miconi et al. 2019), whose neuromodulator, read off the units, sets each unit's plasticity or writes an eligibility trace of recent coactivity into the weights. In `sparx.nn`, `Recurrent(neuron, rule=...)` takes the rule as a module that declares its parameters (`DecayingTrace`, `OjaTrace`, `ModulatedTrace`, `RetroactiveTrace`, or a `HebbianTrace` of your own around a `HebbianRule`), and so does `FLYNN` on a connectome. `Recurrent(Rate(tau=0), rule=...)` is their tanh network: run against their four networks in PyTorch, its activity, traces and gradients agree within 5e-14 ([docs/fidelity.md](docs/fidelity.md#learning-rules)). With a spiking neuron, the decaying trace is a running average of coincident spikes. Backpropagating through a plastic layer holds one trace per example per step.
+`RecurrentCell` feeds any model's output back through a wiring: dense, an edge list such as a connectome's, or edges with their own delays. Fast weights add a Hebbian trace that each sequence writes as it runs (Miconi et al. 2018, 2019). Against Miconi et al.'s four networks in PyTorch, activity, traces and gradients agree within 5e-14. On their pattern completion task, the plastic network gets 0.3% of the zeroed bits wrong, and the same network without fast weights 50.1%.
 
-```python
-import sparx.nn as snn
+## Learning rules
 
-layer = snn.Recurrent(snn.Rate(tau=0), rule=snn.ModulatedTrace())     # Backpropamine's network
-spiking = snn.Recurrent(snn.LIF(), rule=snn.RetroactiveTrace(eta=0.1))  # fast weights between spikes
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/learning-dark.svg">
+  <img alt="Nine ways to train a spiking network in sparx, each with a schematic of its learning signal" src="docs/assets/learning-light.svg" width="100%">
+</picture>
 
-## Surrogate gradients
-
-A spike is the Heaviside step of `v - threshold`. Its derivative is zero almost everywhere, so the backward pass uses a surrogate's derivative instead, while the forward pass stays binary. `sparx.spike` is a `jax.custom_jvp`, so the same rule serves `jax.grad`, `jax.jvp` (forward-mode and forward-gradient training) and `vmap`.
-
-| Surrogate | Derivative at `x = v - threshold` | Source |
-| --- | --- | --- |
-| `ATan(alpha=2)` (default) | `alpha / 2 / (1 + (pi / 2 * alpha * x)^2)` | Fang et al. 2021, SpikingJelly, snnTorch |
-| `Sigmoid(alpha=4)` | `alpha * s * (1 - s)`, `s = sigmoid(alpha x)` | SpikingJelly |
-| `FastSigmoid(slope=25)` | `1 / (slope * abs(x) + 1)^2` | SuperSpike (Zenke and Ganguli 2018) |
-| `Triangle(width, scale)` | `scale * max(0, 1 - abs(x) / width)` | Bellec et al. 2018 |
-| `Rectangle(width)` | `1 / width` inside `abs(x) < width / 2` | Wu et al. 2018 |
-| `Gaussian(sigma)` | the normal density | Wu et al. 2018 |
-| `StraightThrough()` | 1 | |
-
-Pass one to any neuron: `sparx.nn.LIF(surrogate=sparx.surrogate.FastSigmoid(100.0))`.
-
-A physical model (`sparx.nn.Dynamics(AdEx(), dt=0.1)`) takes its surrogate as a field of the model, `AdEx(surrogate=...)`, and the surrogate reads `v - threshold` in mV, so its slope is per mV. Backpropagation also runs through the membrane equation, and AdEx's exponential upswing multiplies the gradient at every step a neuron spends near its peak. Behind a dense layer, over 2000 steps of 0.1 ms at 40 Hz, the gradient norm reaching that layer was 7.9e8 with the default `ATan()` and 0.42 with `FastSigmoid(100)`; a wider surrogate made it larger. Train physical models with a steep `FastSigmoid` (the `Dynamics` docstring has the measurements).
-
-## Models
-
-`sparx.models` builds architectures from these layers. `SEWResNet` is the spike-element-wise residual network of Fang et al. (2021), laid out as in SpikingJelly, with `sew_resnet18` and `sew_resnet34` presets, and `SpikingMLP` is a dense network for event data (stacked, optionally recurrent, with a leaky integrator readout). `SpikingMLP(delays=K)` delays its first synapse by up to `K` steps, and `delays=(24, 24, 24)` delays every synapse, the readout's too; with `extend=True`, `batch_norm=True`, `use_bias=False`, `weight_init="kaiming_uniform"` and `dropout_mask="sequence"` it is the network of Hammouamri et al.'s SNN-delays, checked against their code (`docs/fidelity.md`). Their `neuron` argument is the template every neuron of the network copies:
-
-```python
-net = sparx.models.sew_resnet18(10, width=32, stem="small",
-                                neuron=sparx.nn.LIF(tau=2.0, detach_reset=True))
-logits = net.apply(variables, frames, train=False)   # frames [T, B, 32, 32, 3] -> [T, B, 10]
-```
-
-[docs/design.md](docs/design.md) explains how neurons, models and objectives fit together, and what is planned.
-
-## Encoding, losses and firing rates
-
-`sparx.encode` turns a batch field `[B, ...]` into time-major input `[T, B, ...]`. An encoder is a frozen dataclass called as `encoder(key, x)`, where `key` is a JAX PRNG key such as `jax.random.key(0)`, never an int seed; the entry points called from outside JAX (dew's `Trainer`, `SpikingClassification.logits`) take an int seed, as dew's do. The encoders are `RateEncoder(steps)` (Bernoulli spikes at the value's probability), `LatencyEncoder(steps)` (one spike, earlier for larger values), `DirectEncoder(steps)` (the values as a constant input current, direct encoding), `DeltaEncoder(threshold)` (spikes on changes of a signal over each record's time axis) and `EventsEncoder()` (records that already hold spikes over time). The first four read uint8 fields as `x / 255`; `EventsEncoder` passes spike counts unscaled.
-
-`sparx.losses` has losses over the whole output sequence, one value per example: `per_step_cross_entropy` asks every time step to classify (Deng et al. 2022) and `rate_mse` pulls each output neuron's firing rate toward a target. For a loss on one readout, reduce time first and use optax: `jnp.max(v, axis=0)` of an `LI` membrane, its mean, or the spike count.
-
-Spiking layers report their firing rates when the `spike_rates` collection is mutable:
-
-```python
-outputs, sown = net.apply(params, spikes, mutable=["spike_rates"])
-sparx.firing_rates(sown)                          # {"LIF_0": mean rate, ...}
-penalty = sparx.rate_penalty(sown, lower=0.01, upper=0.3)  # differentiable
-```
-
-A plain `apply` sows nothing and costs nothing.
-
-## Streaming
-
-When the `state` collection is mutable, each neuron layer starts from the state it holds and writes back its final state. A sequence fed in chunks, down to one step at a time, gives exactly the output of one call over the whole sequence:
-
-```python
-carried = {}
-for chunk in chunks:                               # each [t, B, ...]
-    out, carried = net.apply({**params, **carried}, chunk, mutable=["state"])
-```
-
-A call without `mutable=["state"]` starts every neuron at rest. `SlidingPSN` streams the same way; `PSN` and `MaskedPSN` read every step of a fixed `T` and refuse to.
-
-## Pure JAX models
-
-The layers build neuron models from `sparx.dynamics`, which run without Flax modules. Every model, from the dimensionless `LIFCell` to the physical `AdEx`, has `init_state(shape, dtype)` and `step(state, SynapticInput, dt) -> (state, Output)`, and `sparx.run` scans one over time. `Output.value` holds the spikes, or a graded value for a model whose `graded` is True. An array input is a jump of the membrane each step, the dimensionless family's input:
-
-```python
-from sparx.dynamics import ALIFCell, LICell, LIFCell, RecurrentCell, Serial, decay
-
-cell = LIFCell(decay=decay(tau=10.0), threshold=1.0, reset="subtract")
-spikes, state = sparx.run(cell, currents)          # currents [T, ...]; spikes.value [T, ...]
-more, state = sparx.run(cell, next_currents, state)  # continues where it stopped
-
-synaptic = Serial(LICell(decay(5.0)), LIFCell(decay(10.0)))  # a synaptic current, then the membrane
-lsnn = RecurrentCell(ALIFCell(decay=0.95, adapt_decay=0.995, beta=1.8), weight)  # weight [F, F]
-```
-
-A model stores its decay per unit of time and a step of `dt` (`sparx.run(..., dt=...)`, 1 by default) applies `decay ** dt`. Decays, thresholds and weights can be traced arrays, so they can be learned, swept with `vmap`, or sharded.
-
-## Training with dew
-
-`sparx.objectives.SpikingClassifierObjective` is a dew objective. It encodes a batch field into spikes, runs the network, and scores its outputs against the labels, so a spiking network trains under dew's `Trainer` with its checkpoints, EMA, evaluation and display. The model takes `train`, as dew's models do. The tests train it on one CPU device and on eight simulated CPU devices; no real multi-device mesh has been tried.
-
-```python
-import optax
-from dew import Checkpoints, Field, Trainer
-from dew.data import Dataset
-
-from sparx.datasets import shd
-from sparx.encode import EventsEncoder
-from sparx.metrics import Accuracy
-from sparx.models import SpikingMLP
-from sparx.nn import ALIF
-from sparx.objectives import RateBand, SpikingClassifierObjective
-
-train, test = shd("train"), shd("test")           # {"spikes": [N, 100, 700], "label": [N]}
-net = SpikingMLP(hidden=(256,), classes=20, neuron=ALIF(tau=5.0, tau_adapt=20.0, learn_tau=True))
-objective = SpikingClassifierObjective(
-    net, Field("spikes", (100, 700)), EventsEncoder(),   # the records already hold spikes
-    readout="max",                                # each class's peak membrane
-    rates=RateBand(lower=0.01, upper=0.3),        # keep neurons in a firing band
-)
-data = Dataset.from_records(train, batch=64, validation=test)
-trainer = Trainer(objective, optax.adamw(2e-3), key=0, checkpoints=Checkpoints("runs/shd"))
-state = trainer.fit(data, steps=3000, eval_every=500, metrics=[Accuracy()], validation={"test": data.val})
-classifier = objective.pipeline(state)            # the trained classifier, as dew.pipeline loads it
-```
-
-The encoder is any of `sparx.encode`'s, the same objects a plain JAX loop calls. The readout is one of `sparx.losses.Readout`: `"mean"`, `"max"`, `"sum"`, `"softmax_sum"` (the softmax of every step summed over time, SNN-delays' loss) or `"per_step"`. `schedules` names model keyword arguments that follow one of dew's schedules over `schedule_steps`, such as `schedules={"sigma": Linear(peak=7.5, end=0.5)}` for a `DelayedDense`; a schedule's `every` advances it once every that many steps, as a torch scheduler stepped once an epoch does, and `deployed={"sigma": 0}` evaluates with every delay rounded. Parameters train with optimizers of their own through dew's `OptimConfig`, one `ParamGroup` each, matched by path pattern, with its own schedule, momentum schedule, weight decay (torch's L2 under `optimizer="adam"`) and bounds:
-
-```python
-from dew.config import OptimConfig
-from dew.training.optim import Cosine, OneCycle, ParamGroup
-
-optimizer = OptimConfig(optimizer="adam", param_groups=(
-    ParamGroup("delays", ("*/delay",), schedule=Cosine(peak=0.1, warmup_steps=0), bounds=(0.0, 24.0)),
-    ParamGroup("weights", ("*",), schedule=OneCycle(peak=5e-3), weight_decay=1e-5)))
-```
-
-Dew's validation pass scores every record of a split: it fills the split's last batch with repeats, which the objectives' losses (`Objective.row_mean`) and the metrics count for nothing. SHD has no validation split, and `sparx.datasets.holdout(train, 0.1)` holds out part of the training set to select on. `sparx.datasets.mnist(split, fashion=False)` reads MNIST or Fashion-MNIST as uint8 images and labels, downloaded once to `~/.cache/sparx`. The objective logs the batch accuracy and every spiking layer's firing rate (`rate/<layer>`), updates BatchNorm statistics, passes dropout keys, and evaluates to dew's `TokenScores`, which `sparx.metrics.Accuracy` reads. `Accuracy` works with dew's `Best` to keep the checkpoint of best validation accuracy. [`examples/train_shd.py`](examples/train_shd.py) is the full script; `--recipe snn-delays` runs Hammouamri et al.'s SHD recipe, and its docstring lists what still differs from their code. `sparx.objectives.EPropObjective` trains a recurrent layer with e-prop's gradients under the same trainer, handing them to it as its loss's own (`Objective.with_gradients`) ([`examples/train_shd_eprop.py`](examples/train_shd_eprop.py)). `sparx.nn.BatchMajor` runs a time-major stack on dew's batch-major records, so any sparx stack also trains under dew's generic `Supervised` objective, its loss a function of the outputs and the batch: [`examples/pattern_completion.py`](examples/pattern_completion.py) trains a plastic `Recurrent` network on Miconi et al.'s pattern completion that way: on their full task (1000 bits, 2000 episodes) it fills in all but 0.3 % of the zeroed bits, where the same network without fast weights gets half of them wrong. Every example takes `--smoke`, which trains a small network for a few steps on synthetic data and downloads nothing.
-
-A run's record names each of sparx's classes by its import path, as dew records any class: `run.json` holds a spiking model as `{"class": "sparx.models:SpikingMLP", "fields": {...}}`, its neuron as `{"class": "sparx.nn.neurons:ALIF", ...}`, the way it holds a transformer, and nothing is registered. `dew.pipeline(run_dir, trust=("sparx",))` loads a trained classifier back in a fresh process as a `SpikingClassification`; `trust` lets the record import sparx, as `trust_remote_code` does in transformers. A model of your own reloads the same way once it is defined at the top level of an importable module:
-
-```python
-import dew
-
-classifier = dew.pipeline("runs/shd", trust=("sparx",))
-predictions = classifier(test_spikes)              # [B]
-```
-
-[`recipes/snn/train.py`](recipes/snn/train.py) runs `sparx.config.SNNRunConfig`, dew's `RunConfig` for a spiking classifier on SHD. Every setting is a typed flag: each field of the model (`--model.hidden 128`, `--model.dtype bfloat16`), each keyword argument of the objective (`--objective.readout max`), the encoder as a subcommand (`encoder:rate --encoder.steps 8`), and a nested record as JSON. `run.json` names the run's class, so `dew train runs/shd/run.json --trust sparx --set trainer.steps=6000` rebuilds the run from it and trains on from its latest checkpoint. `--smoke` runs it for a few seconds on synthetic recordings:
-
-```bash
-python recipes/snn/train.py --data.channels 140 --trainer.batch-size 64 --trainer.steps 3000 \
-    --trainer.checkpoint-dir runs --trainer.name shd --model.hidden 128 --model.delays 15 \
-    --model.neuron '{"class": "sparx.nn.neurons:ALIF", "fields": {"tau": 5.0}}' \
-    --objective.schedules '{"sigma": {"class": "linear", "fields": {"peak": 7.5, "end": 0.5}}}'
-JAX_PLATFORMS=cpu python recipes/snn/train.py --smoke --trainer.checkpoint-dir /tmp/snn-smoke
-```
-
-Training on several devices is dew's: `Trainer(..., mesh=MeshSpec(fsdp=2))` places the run, and a test checks that eight simulated CPU devices train the same parameters as one, within 1.8e-7.
+Each rule is checked against what defines it. e-prop meets the two identities its authors verify their code with, OTTT matches their PyTorch modules, PC-ALM matches their JAX reference to 5e-14, and conversion matches their toolbox. REINFORCE is checked on enumerated trajectories, and exact spike times against finite differences. The [guide](docs/guide.md#learning-rules) describes each rule.
 
 ## Simulating circuits
 
-`sparx.dynamics` holds neuron, synapse and plasticity models in ms, mV, pA, nS and pF; `sparx.graph` wires them into a `Network`, a Flax module whose variables hold the connectome, trainable weights and the simulation state. This is Vogels and Abbott's network with conductance-based synapses, one of the benchmarks simulators are compared on:
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/circuits-dark.svg">
+  <img alt="Two populations connected by excitatory and inhibitory projections with delays, driven by Poisson input and simulated in chunks" src="docs/assets/circuits-light.svg" width="100%">
+</picture>
 
 ```python
 import jax
-from sparx.dynamics import Exponential, LeakyIntegrateAndFire, Receptor
-from sparx.graph import (FixedProbability, Network, Population, PopulationRate, Projection, SpikeRaster,
-                         StateMonitor, simulate)
-from sparx.spiketrains import cv_isi, rates_hz
+from sparx.graph import PopulationRate, SpikeRaster, simulate
+from sparx.graph.models import brunel
 
-neuron = LeakyIntegrateAndFire(tau_m=20.0, c_m=200.0, e_l=-60.0, v_th=-50.0, v_reset=-60.0, t_ref=5.0)
-receptors = {"ampa": Receptor(Exponential(5.0), "conductance"),  # LIF reverses ampa at 0 mV
-             "gaba_a": Receptor(Exponential(10.0), "conductance")}  # and gaba_a at -80 mV
-initial = {"v": lambda rng, n: rng.uniform(-60.0, -50.0, n),  # random voltages (mV)
-           "ampa": lambda rng, n: rng.normal(40.0, 15.0, n),  # and conductances (nS)
-           "gaba_a": lambda rng, n: rng.normal(200.0, 120.0, n)}
-
-network = Network(
-    populations=(Population("e", 3200, neuron, receptors, initial=initial),
-                 Population("i", 800, neuron, receptors, initial=initial)),
-    projections=tuple(Projection(pre, post, FixedProbability(0.02), weight=6.0 if pre == "e" else 67.0,
-                                 delay=0.0, receptor="ampa" if pre == "e" else "gaba_a")
-                      for pre in ("e", "i") for post in ("e", "i")),
-    dt=0.1,
-)
-monitors = {"spikes": SpikeRaster("e"), "rate": PopulationRate("e"),
-            "v": StateMonitor("e", neurons=(0, 1, 2))}  # three voltage traces
-result = simulate(network, network.init(jax.random.key(0)), duration=300.0, monitors=monitors)
-spikes = result.records["spikes"][1000:]  # [steps, 3200] after the first 100 ms
-print(rates_hz(spikes, 0.1).mean(), cv_isi(spikes).mean())  # about 17 Hz, CV about 0.8
-print(result.records["rate"][1000:].mean(), result.records["v"].shape)  # the same rate in Hz; (3000, 3)
+network = brunel(250, g=5.0, eta=2.0)        # 1,250 LIF neurons; brunel(2500) is the paper's 12,500
+result = simulate(network, network.init(jax.random.key(0)), duration=200.0, key=jax.random.key(1),
+                  monitors={"spikes": SpikeRaster("e"), "rate": PopulationRate("e")})
+spikes = result.records["spikes"]             # [2000, 1000]: one row of booleans per 0.1 ms step
 ```
 
-The network is checked when it is built: a projection or input onto a receptor its population lacks, a conductance receptor without a reversal potential in the neuron model, or a kinetic synapse onto a dimensionless model (`ALIFCell`, which takes voltage jumps through `Delta` receptors) raises a `ValueError` that names the population and receptor. Every projection and input names its receptor, which sets the weight's unit. Delays, `duration` and `chunk` must be whole numbers of steps, and a time between steps raises a `ValueError` too.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/network-dark.webp">
+  <img alt="A raster of 200 neurons of Brunel's network firing irregularly over 300 ms, with the population rate below" src="docs/assets/network-light.webp" width="100%">
+</picture>
 
-Records come back under the names the monitors were given, and every rate is in Hz, as `PoissonInput(rate=...)` and `rates_hz` are. After a run, `network.connections(result.variables)` reads each projection's synapses as NumPy arrays, the way NEST's `GetConnections` does: `pre, post, weight, delay = network.connections(result.variables)["e->e:ampa"]`, with STDP's weights as learned.
+Brunel's balanced network at the paper's size, 10,000 excitatory and 2,500 inhibitory LIF neurons, in its asynchronous irregular regime at 37 Hz.
 
-A step runs in NEST's order: synapses deliver what is due, membranes integrate (exactly where the equations are linear) and spike, spikes enter per-population ring buffers, kinetic synapses receive what arrives at the end of the step, plasticity updates, monitors record. `simulate` compiles one chunk of steps and carries the state between chunks, so a long run needs memory for one chunk of records, and a run continued from `result.variables` is the run it would have been unbroken. With `checkpoints=dew.Checkpoints(directory)` it writes the state after every chunk, and a run started again on the same directory continues from the last one. `sparx.graph` builds Brunel's (2000) network and the CUBA and COBA benchmarks (`brunel`, `cuba`, `coba`); `Projection`s take per-edge weights and delays, pair and triplet STDP and reward-modulated STDP (any `sparx.dynamics.Plasticity` rule), and short-term plasticity.
+The physical models match NEST 3.10 and Brian2 2.10 spike for spike where the dynamics are deterministic, and in rate, irregularity and synchrony where they are chaotic. Populations can hold graded neurons and connect through stochastic release, gap junctions and neuromodulators. Projections can carry STDP, triplet STDP, dopamine-modulated STDP and short-term plasticity ([guide](docs/guide.md#simulating-circuits)).
 
-A population holds any neuron model of `sparx.dynamics`, and its synapses reach the model through the neuron protocol: each model says where it is refractory (`is_refractory`) and how a voltage jump that lands after the threshold test changes it (`after_threshold`), and each synapse model says where its arrivals land (`lands`: into its own state, or as a jump before or after the threshold test).
+## Connectomes
 
-The builders have short names in `sparx.registry.networks`, so a network is a record that rebuilds in another process: `sparx.graph.from_record({"class": "brunel", "fields": {"order": 2500, "g": 5.0}})`, or for a model on a connectome, `{"class": "shiu2024", "fields": {"connectome": {"class": "sparx.graph.connectome:Connectome.from_shiu", "fields": {"completeness": ..., "connectivity": ...}}, "stimuli": ...}}`, which names the reader of its tables by import path.
+`sparx.graph.connectome` builds Shiu et al.'s (2024) model of the whole fly brain from FlyWire. It reproduces their published runs, with a rate correlation of 0.999 and the motor neuron MN9 at 67.1 Hz against their 67.0 ± 6.6, at about 30 s per simulated second on 4 CPU cores. `FLYNN` (Wang and Chen 2026) trains a connectome as a recurrent rate network with one learned weight per synapse; against their PyTorch cell its activity and gradients agree within 1e-15.
 
-### Graded signalling
+## RNeuralNet
 
-Many neurons never spike. Much of the fly's visual system releases transmitter continuously as a function of voltage, and FLYNN (Wang and Chen 2026) trains leaky tanh rate units on the whole fly connectome. A model's output is therefore `Output(value, offset)`, and a model that is `graded` sends a real value every step instead of a spike. `GradedPotential` is a passive membrane in mV whose output is a sigmoidal release of its voltage (Prinz et al. 2004), and a `Graded` synapse follows the weighted release with its own time constant. `RateCell` (`sparx.nn.Rate` as a layer) is FLYNN's unit, `h <- alpha h + (1 - alpha) tanh(W h + x + b)`, also with ReLU or a sigmoid. A graded population projects through edge or dense delivery; event delivery stays the path for spikes and refuses it.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/messages-dark.webp">
+  <img alt="Messages travelling along the connections of a small RNeuralNet, each connection with its own delay" src="docs/assets/messages-light.webp" width="100%">
+</picture>
 
-Three more mechanisms sit beside the projections. `StochasticRelease(p, quantal)` makes each synapse release with probability `p` at each presynaptic spike, drawn per edge from the `noise` key, and scaled by short-term depression when the projection has it. `GapJunction` couples two populations' membranes with `I = g (v_partner - v)` in both directions, solved to second order in `dt`. A `Modulator` turns a population's spikes into a volume-transmitted concentration with a time constant, which every `Plasticity` rule reads each step as a third factor:
+`sparx.learn.RNeuralNet` rebuilds RNeuralNet-Research (2018), an early project of the author's, deterministically. Graded neurons sit on a random graph, each connection delivers its messages after its own delay, and a reward spreads backward by a softmax of activity. Compiled and run in a fixed order, the original C++ and sparx agree within 7.2e-7. On a delayed cue-order task, REINFORCE through the same network learns the task on four of five seeds, while the reward-diffusion rule never changes the network's choice.
 
-```python
-import jax
-import numpy as np
-from sparx.dynamics import Exponential, Graded, GradedPotential, LeakyIntegrateAndFire, Receptor, StochasticRelease
-from sparx.graph import (CurrentInput, FixedProbability, GapJunction, Modulator, ModulatorTrace, Network,
-                         OutputTrace, Population, Projection, SpikeRaster, simulate)
+## Training on dew
 
-receptors = {"ampa": Receptor(Graded(tau=5.0), "conductance"),  # follows the graded release it receives
-             "gaba_a": Receptor(Exponential(10.0), "conductance")}
-network = Network(
-    populations=(Population("graded", 20, GradedPotential()),  # never spikes, sends its release (0 to 1)
-                 Population("relay", 50, LeakyIntegrateAndFire(), receptors)),
-    projections=(Projection("graded", "relay", FixedProbability(0.3), weight=3.0, delay=0.0, receptor="ampa"),
-                 Projection("relay", "relay", FixedProbability(0.2), weight=10.0, delay=1.0, receptor="gaba_a",
-                            release=StochasticRelease(p=0.4))),  # each synapse releases with p = 0.4
-    inputs=(CurrentInput("graded", "light"),),
-    junctions=(GapJunction("graded", "graded", FixedProbability(0.2), weight=2.0),),  # nS, both ways
-    modulators=(Modulator("dopamine", "relay", tau=200.0, release=0.01),),  # each relay spike adds 0.01
-    dt=0.1,
-)
-light = np.random.default_rng(0).uniform(100.0, 400.0, (3000, 20))  # pA, per step and graded neuron
-result = simulate(network, network.init(jax.random.key(0)), duration=300.0, key=jax.random.key(1),
-                  drive={"light": light}, monitors={"release": OutputTrace("graded"),
-                                                    "spikes": SpikeRaster("relay"),
-                                                    "dopamine": ModulatorTrace("dopamine")})
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/training-dark.svg">
+  <img alt="A Flax model and a sparx objective go to dew's trainer, which writes a run record that reloads, serves and exports" src="docs/assets/training-light.svg" width="100%">
+</picture>
 
-`DopamineSTDP` is Izhikevich's (2007) reward-modulated STDP, NEST's `stdp_dopamine_synapse`: pair STDP writes an eligibility trace on each synapse, and the weight integrates that trace times the dopamine concentration above a baseline, so a pairing changes the weight only when dopamine arrives within about a second of it. `Projection(..., plasticity=DopamineSTDP())` reads the modulator named `"dopamine"`, whose `tau` must be the rule's `tau_n` (200 ms), with `release=1 / 200` for NEST's increment per spike.
-
-`OutputTrace` records what a population sends, graded or not; the spike monitors refuse a graded population. [docs/fidelity.md](docs/fidelity.md#signalling-beyond-spikes) lists what each of these is checked against.
-
-## Learning beyond backpropagation through time
-
-`sparx.learn` holds the rules design.md section 7 names, each checked against what defines it (`tests/test_learn.py`):
-
-- `eprop`: e-prop (Bellec et al. 2020) for a recurrent layer of any elementwise sparx model and a leaky readout, `eprop_forward`'s network (a `RecurrentCell` and an `LICell`), computed online in memory independent of the sequence length. It equals backpropagation with the recurrent spikes' gradient cut, and its eligibility traces with the true learning signal equal backpropagation, the two identities their own code verifies. Time constants are `tau` in the unit of `dt`.
-- `ottt`: online training through time (Xiao et al. 2022), matching their PyTorch modules' gradients to 1e-10.
-- `reinforce`: REINFORCE (Williams 1992) for a recurrent layer of `BernoulliCell`s, LIF neurons that fire with probability `sigmoid(beta (v - threshold))` by noise the caller draws. Each synapse carries its eligibility, `d log P(spikes) / dw`, as the layer runs, in memory that does not grow with the sequence, and `policy_gradient(eligibility, rewards, baseline)` turns rewards into the estimate of the gradient of the expected reward. On a layer small enough to enumerate every trajectory, each eligibility is its trajectory's exact score and their expectation the exact gradient.
-- `RNeuralNet` and `reward_diffusion`: a deterministic reconstruction of RNeuralNet-Research (Ashish Kumar Singh, 2018), a randomly wired recurrent network of graded neurons (`sparx.dynamics.PulseCell`) whose connections deliver weighted messages after their own delays, and its learning rule, which spreads a reward backward from a feeder neuron, sharing each unit's reward among its inputs by a softmax of their absolute activity, and changes each weight by its share. The original runs its forward pass and its learning in threads that share the neurons without synchronization; `RNeuralNet` fixes one order of the original's own functions and computes it clocked, and against the original C++ compiled and run in that order, the outputs over 80 ticks and the local rewards and weights after three rewards agree within 7.2e-7. `paths="first"` is the original's depth-first spread, in which a unit passes on only the reward it holds when the spread first reaches it; `paths="all"` counts every path, discounted. Neither follows a gradient: the share ignores signs, so two inputs that should move apart move together. It stays as a baseline for the rules that do.
-- `PredictiveCoding`: predictive coding and PC-ALM, augmented Lagrangian predictive coding (Seely and Gould 2026), for any stack of layers (`sequential_blocks` reads a flax `nn.Sequential`). The hidden activity relaxes from the forward pass on each example's energy, the output's loss plus every layer's prediction error, and each weight's update reads only its own layer's error and the activity below. PC-ALM adds a multiplier per layer that accumulates the error between activity steps, which aligns the update with backpropagation's where PC's falls behind. Against their JAX reference, the settled activity, the multipliers and the update agree within 5e-14 in float64; `PredictiveCodingObjective` hands the update to dew's trainer, and [`examples/train_pcalm.py`](examples/train_pcalm.py) trains their residual MLP (`residual_mlp`) on Fashion-MNIST by PC-ALM, PC or backpropagation.
-- `spike_times` with `EventLIF`: exact spike times of LIF networks with current synapses in continuous time (ms), differentiable: the exact gradient EventProp (Wunderlich and Pehle 2021) computes, checked against finite differences.
-- `convert`: a ReLU network written as a flax `nn.Sequential` (dense and convolutional layers, batch norm, average and max pooling, `sparx.nn.Flatten`) to a `sparx.nn` stack of the same layers with `IF` neurons and a gated `SpikingMaxPool`, balancing thresholds at a percentile of the activations (Rueckauer et al. 2017); against their toolbox (snntoolbox), the same weights, the same first-layer spikes and the same predictions. The result runs, records rates and trains like any `sparx.nn` stack, and with `reset="zero"` a dense one exports to NIR.
-
-```python
-from functools import partial
-
-import flax.linen as nn
-import jax
-
-from sparx.learn import convert, fold_batch_norm, normalize, run_converted
-from sparx.nn import Flatten
-
-# A ReLU network as a flax nn.Sequential; in practice, a trained one.
-ann = nn.Sequential([nn.Conv(8, (3, 3)), nn.BatchNorm(use_running_average=True), nn.relu,
-                     partial(nn.max_pool, window_shape=(2, 2), strides=(2, 2)), Flatten(), nn.Dense(10)])
-images = jax.random.uniform(jax.random.key(0), (16, 16, 16, 1))  # [B, H, W, C], values in [0, 1]
-variables = ann.init(jax.random.key(1), images)
-ann, variables = fold_batch_norm(ann, variables)
-variables = normalize(ann, variables, images)  # threshold balancing on calibration images
-snn, snn_variables = convert(ann, variables)   # Conv, IF, SpikingMaxPool, Flatten, Dense, IF
-rates = run_converted(snn, snn_variables, images, steps=100)  # output firing rates, [16, 10]
-```
-- `sparx.objectives.ActivityFitObjective` fits a network's spikes to recorded ones by van Rossum distance (`sparx.losses.van_rossum`, exact on the grid) or smoothed rates.
-
-## Connectomes, serving and exchange
-
-- `sparx.graph.connectome` reads FlyWire (Shiu et al.'s tables) and the male CNS release into a `Connectome` and builds Shiu et al.'s (2024) whole-brain model; on FlyWire v630 it reproduces their published runs (rate correlation 0.999, MN9 at 67.1 Hz against their 67.0 +- 6.6) at about 30 s per simulated second on 4 CPU cores. On the male CNS, whose neurons receive about 1.7 times FlyWire's synapses, `matched_w_syn` rescales their weight (0.275 to 0.163 mV): sugar neurons then recruit about 670 neurons and drive MN9 at 81 Hz, against FlyWire's 400 and 67 Hz.
-- `sparx.graph.connectome.FLYNN` is Wang and Chen's trainable fly connectome network (arXiv 2607.00025): a leaky tanh unit per neuron of a `Connectome`, recurrent through its synapses (`sparx.dynamics.RecurrentCell` on a `Sparse` wiring, which gathers and sums along the edges in memory proportional to them), with a learned weight per synapse, a bias per neuron and a leak per cell class, input on chosen neurons and output from others. Against their PyTorch cell its activity and gradients agree within 1e-15 in float64. The weights start at the signed synapse counts scaled to a spectral radius of 0.9, computed exactly (`spectral_radius`, ARPACK above 2,000 neurons): their power iteration's estimate depends on its random start when the dominant eigenvalues are a complex pair, as a signed connectome's often are, and on the parity test's connectome it leaves a radius of 2.15. Through `nn.BatchMajor` it trains under dew's `Supervised` objective, and with a `rule` it learns fast weights on its synapses.
-- `simulate(trials=..., mesh=dew.MeshSpec(...))` spreads trials, or one network's neurons, over devices, with one device's results. The mesh is built as dew's `Trainer` builds it, and `sparx.graph.RULES` places the logical axes `trials` (on the data axis) and `neurons` (on fsdp, or on data when there is no trial axis): `MeshSpec()` partitions one network's neurons over every device, and `MeshSpec(fsdp=2)` runs trials over the data axis with each trial's neurons split in two.
-- `sparx.serve.StreamServer` serves streaming models to many sessions at once, each with its own neuron state in a slot of one batch; a session's outputs equal a direct call over its stream. A reloaded run serves as `StreamServer(classifier.model, classifier.variables, slots=8, frame=10, sample_shape=(700,))`, fed frames of its encoder's output; any model whose outputs are time-major can be served, and one that cannot stream (a `PSN`, or a readout averaged over time) is refused when the server is built.
-- `sparx.nir` exchanges networks through NIR: dense and 2-d convolutional layers, `Flatten`, hard-reset `LIF` and `IF`, and `Recurrent(LIF)`. Dense, convolutional and recurrent networks exported by snnTorch run in sparx spike for spike and export back with the same parameters.
+The `Trainer` from [dew](https://github.com/AshishKumar4/dew) runs sparx's objectives for classification, activity fitting, e-prop, predictive coding and RNeuralNet's rewards. A run's record names every class by import path, so `dew.pipeline("runs/shd", trust=("sparx",))` loads a trained network in a new process, and `sparx.serve.StreamServer` serves it to many streams at once. The [guide](docs/guide.md#training-on-dew) has a full SHD script.
 
 ## Results
 
-All runs below are the example scripts on a 4-core x86 CPU with JAX 0.11.2, float32, seed 0. They are short runs that show the library training real data end to end, not tuned results. They were measured at commit 6f5ed31, before the MNIST and e-prop examples moved from their own loops to dew's `Trainer`; the networks, losses and optimizers did not change, and the runs have not been repeated since.
+| Task | Network | Test accuracy |
+| --- | --- | --- |
+| MNIST, rate-coded, 8 steps | 784-512-512 LIF | 97.5% after 2 epochs |
+| SHD, Hammouamri et al.'s recipe, 20 of 150 epochs | 140-256-256 LIF with learned delays | 91.9% (their code on the same machine: 93.6%) |
+| SHD, 140 channels | 140-128 ALIF, with and without learned delays | 74.6% and 64.5% |
+| Fashion-MNIST, Seely and Gould's headline cell | ReLU residual MLP, depth 32 | PC-ALM 75.1%, PC 62.2%, backpropagation 77.8% |
+| Pattern completion, Miconi et al.'s task | plastic recurrent network | 0.3% of bits wrong; 50.1% without fast weights |
 
-| Task | Command | Network | Test accuracy | Time |
-| --- | --- | --- | --- | --- |
-| MNIST, rate-coded, 8 steps | `python examples/train_mnist.py --epochs 2` | 784-512-512 LIF, LI readout, measured with a plain JAX loop | 97.46% after 2 epochs | 15 s per epoch |
-| SHD, 100 steps of 14 ms | `python examples/train_shd.py --steps 3000` | 700-256 ALIF, LI readout (max), dew `Trainer` | 53.00% | 4 min 45 s |
-| SHD | `python examples/train_shd.py --steps 3000 --recurrent --surrogate superspike` | 256 recurrent ALIF | 45.23%, still rising at the last evaluation | 8 min |
-| SHD, channels pooled to 140 | `python examples/train_shd.py --steps 3000 --channels 140 --hidden 128` | 140-128 ALIF | 64.53% | 1 min 42 s |
-| SHD, channels pooled to 140 | `... --channels 140 --hidden 128 --delays 15` | the same, with a learned delay of 0 to 15 steps per input synapse | 74.56%, with every delay rounded to a whole step | 4 min 19 s |
-| SHD, Hammouamri et al.'s recipe, 20 of their 150 epochs | `python examples/train_shd.py --recipe snn-delays --epochs 20 --validation 0` | 140-256-256 LIF, a learned delay on every synapse (readout included), batch norm, summed-softmax readout | 91.87% at the last epoch, also the best (their code on the same machine and schedule: 93.59% last, 94.03% best) | 48 min |
-| SHD, channels pooled to 140 | `python examples/train_shd_eprop.py --rule eprop --epochs 5` | 140-128 recurrent ALIF (refractory 2 steps), leaky readout, trained online by e-prop | 53.36% (56.93% at epoch 3) | 3 min 30 s |
-| SHD, channels pooled to 140 | `... --rule bptt --epochs 5` | the same network by BPTT | 46.38% (53.80% at epoch 3) | 30 s |
-| Delayed cue order, the experiment the owner's notes propose for RNeuralNet | `python examples/reward_diffusion.py --rule first` (`--rule all`, `--rule reinforce`, `--rule none`), seeds 0 to 4 | 256-neuron `RNeuralNet`, 16 connections each with delays of 1 to 21 ticks, 19,200 rewarded trials | Reward diffusion, either spread: unchanged on every seed (44.5 to 50.2%, the network as drawn); REINFORCE through the network: 100% on 4 of 5 seeds; a linear readout of the network's state: 100% on all 5 | 95 s, 44 s, 26 s |
-| Fashion-MNIST, Seely and Gould's headline cell | `python examples/train_pcalm.py` (`--method pc`, `--method bp`) | 784-32-...-32-10 ReLU residual MLP, depth 32, at their mean-field scales, one epoch | PC-ALM 75.1%, PC 62.2%, BP 77.8% (seeds 1 and 2: 76.1 and 76.5%, 65.5 and 65.6%, 76.9 and 76.7%) | 83 s, 82 s, 41 s |
-
-The last two rows of the first five differ only in the delays, which add 10 points. The e-prop rows train the same network with the same optimizer: after five epochs e-prop scores 53% and BPTT 46%, and both move by several points from one epoch to the next (neither is tuned). e-prop's memory does not grow with the recording, but on a CPU it is about 7 times slower here: it advances an eligibility trace for every synapse every step, `B x N x (in + N)` numbers for the readout's filter and as many for the adaptive threshold, where BPTT does one backward pass ([performance](docs/performance.md#e-prop)). The SNN-delays row is a matched comparison: their official code (with the 2023 SpikingJelly it was written for) and sparx ran the same recipe and 20-epoch schedule on this machine, one seed each, every training recording used, test accuracy after each epoch. Sparx ends 1.7 points below their last epoch and 2.2 below their best; the gradients of one training step agree with theirs to 6e-7 (`docs/fidelity.md`), so the gap lies in what the step sees, the remaining differences the example's docstring lists (every recording padded to 124 steps where they pad to each batch's longest, 31 steps an epoch where they take 32, and different random streams), not in the arithmetic. One seed of each does not separate those from run-to-run spread. Sparx's epochs took 146 s against about 210 s for theirs on the same CPU. Their reported 95% is the best of 150 epochs, selected on the test set. For scale, Cramer et al. (2020) report about 71% for recurrent and under 50% for feedforward LIF networks on SHD, and Hammouamri et al. (ICLR 2024) reach 95% with learned synaptic delays.
-
-The Fashion-MNIST row trains the network of Seely and Gould's (2026) headline cell three ways through dew's trainer, by PC-ALM, by predictive coding at the same budget of 64 activity steps, and by backpropagation, measured on 7 October 2026. Their reference code, run on the same machine at seeds 0, 1 and 2, scores 77.73, 76.49 and 76.34% by PC-ALM, 68.17, 64.49 and 66.54% by PC, and 78.65, 76.85 and 77.31% by BP (seed 0 reproduces their README). The ranking is theirs; sparx's three seeds overlap theirs and average 1.0 point lower for PC-ALM, 2.0 for PC and 0.5 for BP, whose gradient matches theirs exactly, so part of the difference is the draws of weights and batches the two codes make, which three seeds do not separate from the rest. Their nine runs took 320 s. sparx's validation pass takes about 22 s with PC or PC-ALM against 12 s with BP, because its loss also computes the update it does not apply, 46 ms against 0.3 ms a batch: dew's `Objective.with_gradients` folds the update into the loss's value, where XLA cannot drop it.
-
-The cue-order row asks, as the notes do, whether RNeuralNet's reward diffusion can teach its network to report which of two cues came first after 10 ticks of distractors, rewarding each choice with 1 or -1; measured on 8 October 2026 at commit cd8b492. The network keeps the order: a least-squares readout of every neuron at the last tick is right on every test trial. REINFORCE on the same rewards, differentiated through the network, makes the network's own output neurons report it on four seeds; on the fifth the order of the cues, without distractors, changes their mean outputs at the last tick by at most 1.2e-7 at the start, and it stays at chance. Reward diffusion, the original's spread or every path's, never changes which output wins: its share ignores signs and which output was chosen, so a reward moves both outputs alike. With every connection at the shortest delay (`--myelin 0`) it does move the choice, in either direction: from 54.3 to 62.5% on seed 0 and from 52.3 to 17.8% on seed 3; REINFORCE reaches 100% on all five.
-
-The recurrent SHD run needs the steep SuperSpike surrogate. With ATan, backpropagation through the recurrence exploded once training grew the recurrent matrix's spectral radius from 1 to 5: the gradient norm passed 1e8 within 300 steps and test accuracy fell below 15%. `FastSigmoid(100)` kept the gradient norm below 10. The `Recurrent` docstring records this.
-
-## Performance
-
-The design keeps the sequential part of a spiking network small: synapses run over all time steps at once, and only the elementwise neuron update is scanned. [docs/performance.md](docs/performance.md) has the measurements behind the defaults, on a 4-core CPU, including two faster-sounding paths that were measured slower and not shipped. No GPU or TPU numbers have been taken yet.
+These are short, untuned runs on a 4-core CPU. The [guide](docs/guide.md#results-in-detail) gives the commands, times and comparisons. No GPU or TPU numbers exist yet.
 
 ## Correctness
 
-- Every cell is compared step by step with a float64 NumPy loop written from its docstring's equations (`tests/reference.py`), spikes exactly and membranes to float32 rounding.
-- LIF (soft, hard and detached reset) and the three PSNs match SpikingJelly's own modules: spikes exactly, gradients within 1.2e-6 (`tools/make_reference_fixtures.py`, `tests/test_reference.py`).
-- `latency`, `delta`, `per_step_cross_entropy` and `rate_mse` match snnTorch 1.0.0 (`tools/make_snntorch_fixtures.py`).
-- Each surrogate's gradient and forward-mode tangent match its published formula, and its area matches its stated normalization.
-- Invariants are tested directly: a run in chunks equals one run for every cell and layer, a call without the state collection starts at rest, `init` creates only parameters, bfloat16 inputs keep exact spikes over a float32 membrane.
-- `SpikingClassifierObjective` trains through dew's real `Trainer`, and its loss is checked against a manual computation. `EPropObjective`'s gradient through the trainer equals `sparx.learn.eprop`'s.
-- A `SpikingMLP` with every synapse delayed matches Hammouamri et al.'s SNN-delays network run from their code on DCLS: outputs and loss within 1.2e-7 and every gradient within 5.7e-7 in training, outputs within 2.4e-7 in evaluation. Their learning-rate, momentum and width schedules match over all 150 epochs, and `shd(binning="events")` reproduces their binned SHD exactly (`tools/make_snn_delays_fixtures.py`).
-- The physical models match NEST 3.10 and Brian2 2.10 (`tools/make_nest_fixtures.py`, `tools/make_brian2_fixtures.py`, `tests/test_simulators.py`): current-based LIF with exponential, alpha and delta synapses to 1e-11 mV and spike for spike; conductance-based LIF, AdEx, Izhikevich (bit for bit, op by op) and Hodgkin-Huxley spike for spike or within a stated step; Izhikevich's (2004) twenty firing patterns (`izhikevich_2004`) spike for spike against his own `figure1.m` run in Octave; STDP, triplet STDP, dopamine-modulated STDP and Tsodyks-Markram synapses to every transmitted weight.
-- Recurrent networks with per-edge delays fire with NEST spike for spike; Brunel's four regimes and the CUBA and COBA benchmarks match NEST's and Brian2's rates, irregularity and synchrony within their spread over seeds (`tests/test_graph.py`).
+Every model is checked against a reference: a float64 loop of its equations, the original authors' code, or NEST and Brian2. [docs/fidelity.md](docs/fidelity.md) lists each model's reference, the check, the observed error and every known difference. `pytest -q` runs all of it on CPU in about 16 minutes.
 
-[docs/fidelity.md](docs/fidelity.md) lists, for every model, its references, what was checked and each difference found between them. `pytest -q` runs all of it on CPU in about eight minutes; the whole-brain comparison runs when Shiu et al.'s repository is next to sparx (`SPARX_SHIU_REPO`).
-
-## Installation
-
-Sparx needs Python 3.12 or later and installs dew, which it trains, distributes, checkpoints and serves through, pinned at a commit of dew's main branch. It has been tested with JAX 0.11.2, Flax 0.12.10 and optax 0.2.8 on CPU.
-
-```bash
-git clone https://github.com/AshishKumar4/sparx.git
-cd sparx
-uv venv --python 3.12 && source .venv/bin/activate
-uv pip install -e .                    # the library, with dew
-uv pip install -e ".[datasets]"        # plus the SHD reader
-uv pip install -e ".[test]" && pytest -q
-```
-
-For a GPU or TPU, install the matching JAX build first (`jax[cuda12]` or `jax[tpu]`).
-
-## Roadmap
-
-- Accelerator measurements of the scan, the PSNs and synapse folding, then fused time-loop kernels (Pallas) where they pay.
-- An associative-scan path for linear dynamics, if it wins on accelerators.
-- Spiking self-attention and spiking sequence models, and more neuromorphic datasets (SSC, N-MNIST, DVS Gesture).
-- GPU and TPU measurements of networks and connectomes, and fused kernels where they pay (design.md phase 7).
-- Validating whole-brain models on the male CNS beyond one behaviour (its weight is calibrated to FlyWire's synapse counts, `matched_w_syn`).
-- Stateful serving in dew itself (AshishKumar4/dew#30), with `sparx.serve` as its first user.
+[`tools/make_figures.py`](tools/make_figures.py) draws the banner and diagrams, and [`tools/make_clips.py`](tools/make_clips.py) renders the clips. The spikes in the banner and the clips come from sparx runs.
 
 ## License
 

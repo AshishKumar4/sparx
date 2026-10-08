@@ -27,7 +27,7 @@ at its own rate (SGD at `0.01` per reward), every path's at the same rate,
 or REINFORCE by Adam. `none` evaluates the network as drawn. Each run
 reports the test accuracy of the network's own choice, the largest output.
 
-On seeds 0 to 4 (the README's results) the readout is right on every test
+On seeds 0 to 4 (the guide's results) the readout is right on every test
 trial, REINFORCE teaches the output neurons on four seeds, and reward
 diffusion leaves the choice as drawn on all five.
 """

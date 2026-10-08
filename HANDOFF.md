@@ -1,6 +1,6 @@
 # Handoff
 
-The state of sparx and its dew work as of 8 October 2026: what exists, what is open, and how to pick it up. `README.md` describes the library, `docs/design.md` its architecture and plan, `docs/fidelity.md` every model's reference and check, and `docs/performance.md` the measurements.
+The state of sparx and its dew work as of 8 October 2026: what exists, what is open, and how to pick it up. `README.md` introduces the library with figures and clips, `docs/guide.md` covers each part with code, `docs/design.md` its architecture and plan, `docs/fidelity.md` every model's reference and check, and `docs/performance.md` the measurements.
 
 ## State
 
@@ -35,12 +35,12 @@ The state of sparx and its dew work as of 8 October 2026: what exists, what is o
 
 ### Results worth knowing
 
-- **SHD, Hammouamri et al.'s recipe, 20 epochs, matched on one machine:** sparx 91.87%, against their official code's 93.59% at the last epoch and 94.03% at the best. A training step's gradients agree with theirs to 6e-7. The README lists the differences that remain.
+- **SHD, Hammouamri et al.'s recipe, 20 epochs, matched on one machine:** sparx 91.87%, against their official code's 93.59% at the last epoch and 94.03% at the best. A training step's gradients agree with theirs to 6e-7. The guide lists the differences that remain.
 - **FlyWire whole brain:** 1.9 ms per 0.1 ms step on a 4-core CPU.
 - **Fast weights:** Miconi et al.'s four plastic networks, run in PyTorch, agree with sparx's in activity, traces and gradients within 5e-14 in float64. On their full pattern completion (1000 bits, five patterns, 2000 episodes, 59 minutes on 4 CPU cores) the decaying trace leaves 0.3% of the zeroed bits wrong and the same network without fast weights 50.1%, chance. A sparse wiring of every pair computes the dense layer under every rule.
 - **PC-ALM:** Seely and Gould's JAX reference and sparx agree in settled activity, multipliers and weight updates within 5e-14 in float64. On their headline Fashion-MNIST cell (width and depth 32, one epoch, through dew's trainer) sparx scores 75.1, 76.1 and 76.5% by PC-ALM, 62.2, 65.5 and 65.6% by PC and 77.8, 76.9 and 76.7% by BP at seeds 0 to 2; their code on the same machine scores 77.73, 76.49 and 76.34%, 68.17, 64.49 and 66.54%, and 78.65, 76.85 and 77.31%. The ranking is theirs, and sparx averages 0.5 to 2 points lower in all three, backpropagation included.
 - **FLYNN:** Wang and Chen's PyTorch cell and sparx's agree in activity and gradients within 1e-15 in float64. Their code scales the weights by a power iteration whose estimate depends on its random start when the dominant eigenvalues are a complex pair, as a signed connectome's often are (on the parity test's connectome: 1.8 to 46 by start, against an exact 48.1); sparx scales by the exact radius.
-- **RNeuralNet:** its C++ (d4b7803), compiled unchanged and driven single-threaded, and `sparx.learn.RNeuralNet` agree within 7.2e-7 in outputs over 80 ticks and in local rewards and weights after three rewards. On the notes' delayed cue-order task (256 neurons, seeds 0 to 4) a linear readout of the network's state is 100% right, REINFORCE through the network teaches its output neurons on 4 of 5 seeds, and reward diffusion leaves their choice as drawn on all 5 (README results).
+- **RNeuralNet:** its C++ (d4b7803), compiled unchanged and driven single-threaded, and `sparx.learn.RNeuralNet` agree within 7.2e-7 in outputs over 80 ticks and in local rewards and weights after three rewards. On the notes' delayed cue-order task (256 neurons, seeds 0 to 4) a linear readout of the network's state is 100% right, REINFORCE through the network teaches its output neurons on 4 of 5 seeds, and reward diffusion leaves their choice as drawn on all 5 (the guide's results).
 - **No GPU or TPU numbers exist yet.**
 
 ## dew: the bedrock
@@ -84,7 +84,7 @@ Open in dew, for sparx:
 3. **Remaining DX review items** (the review's numbering):
    - item 7, a "Time, units and rates" reference page;
    - item 11, e-prop weights into an `nn` model;
-   - the documentation plan: tutorials from training to export, a cortical circuit with a Brian2/NEST lookup table, connectomes, mixing the halves, and generated API pages.
+   - the rest of the documentation plan: tutorials from training to export, a cortical circuit with a Brian2/NEST lookup table, connectomes, mixing the halves, and generated API pages. Done: a short README with a banner, six diagrams and three clips, and `docs/guide.md`, which holds the reference material the README used to; `tests/test_readme.py` runs the code blocks of both.
 4. **Speed benchmarks against Brian2 and NEST** on an idle machine. There are none today; the parity tests only check agreement.
 5. **A `docs/design.md` rewrite** to describe the code as it is. Sections 5 and 6 still sketch an older monitor and receptor API.
 6. **GPU and TPU measurements** (design phase 7), then kernels where profiling shows they pay: event delivery and bit-packed spikes. A plastic layer's step reads and writes several `[B, F, F]` arrays and backpropagating keeps one trace per step, so its CPU time is memory traffic (1.6 s per episode of 106 steps at F = 1001 on 4 cores); a remat of the step would trade compute for that memory.
@@ -107,6 +107,7 @@ Open in dew, for sparx:
   - `/home/user/.venv-torch` holds the PyTorch tools' references: torch 2.14.1+cpu, snnTorch 1.0.0, nir 1.0.8, nirtorch 2.6, dcls 0.1.1, torchvision and SpikingJelly's imports. Every torch-based fixture tool reproduces its fixture bit for bit there, except the order of edges in the `.nir` files (`PYTHONHASHSEED`). snntoolbox needs tensorflow 2.21 and tf-keras in a venv of its own.
   - Reference checkouts live in `/home/user/refs` (differentiable-plasticity, backpropamine, spikingjelly, OTTT-SNN, SNN-delays, pc-alm, fly-gym, RNeuralNet-Research); each tool's docstring names the commit and takes the path. `tools/make_rneuralnet_fixtures.py` needs g++.
   - Octave runs Izhikevich's `figure1.m` for `tools/make_izhikevich_2004_fixtures.py`.
+  - The figures and clips (`tools/make_figures.py`, `tools/make_clips.py [--mp4]`, drawn by `tools/drawing.py`) need fontTools and brotli in `/home/user/.venv`, apt's `fonts-inter`, JetBrains Mono from `npm pack @fontsource/jetbrains-mono@5.1.1` unpacked under `/home/user/refs/fonts`, a global Node playwright (1.56.1) with its Chromium, and ffmpeg with libwebp (6.1.1). The training clip downloads MNIST. Simulation and training results are cached in `.cache/figures`; delete it to recompute them. Re-render both after changing the palette or a figure, and look at the light and dark versions at GitHub's width (about 880 px) before committing.
 - **Keep `/home/user/dew` detached at the pinned commit.** sparx's tests import dew from that checkout, so a branch checked out there changes what they test. Do dew work in separate worktrees (`git worktree add ... /home/user/dew-wt/<topic>`).
 - **Data, which tests skip when absent:**
   - FlyWire tables in `../ref-shiu` (github.com/philshiu/Drosophila_brain_model);

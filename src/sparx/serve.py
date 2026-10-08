@@ -9,7 +9,7 @@
 A run that `dew.pipeline` reloads serves as `StreamServer(classifier.model,
 classifier.variables, ...)`; its frames are the encoder's output, time-major.
 
-A spiking model that streams (the `state` collection, README "Streaming")
+A spiking model that streams (the `state` collection, the guide's "Streaming")
 carries its neurons' state from one call to the next. A server keeps that
 state for `slots` sessions as the rows of one resident batch: each step
 runs one frame of every session that has one waiting, in one jitted call,

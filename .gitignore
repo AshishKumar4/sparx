@@ -10,3 +10,5 @@ __pycache__
 .worktrees/
 # where the examples write their output by default
 /runs/
+# data the figure tools cache between runs
+/.cache/

@@ -4,7 +4,7 @@ and a two-layer network with its synapses folded over time or applied per step.
     python benchmarks/bench_lif.py [--steps 100] [--batch 64] [--features 512]
 
 Prints the median of `--repeats` timed calls after two warm-up calls; each
-timed call blocks on its result. The numbers in the README came from this
+timed call blocks on its result. The numbers in docs/performance.md came from this
 script on the hardware they name.
 """
 

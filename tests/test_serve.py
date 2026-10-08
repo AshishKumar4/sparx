@@ -14,7 +14,7 @@ from sparx.models import SEWResNet, SpikingMLP
 from sparx.nn import ALIF, LI, LIF, PSN
 from sparx.serve import StreamServer
 
-README = Path(__file__).parents[1] / "README.md"
+GUIDE = Path(__file__).parents[1] / "docs" / "guide.md"
 
 
 class Net(nn.Module):
@@ -75,22 +75,22 @@ class Deployed(SEWResNet):
         return super().__call__(x, train)
 
 
-def _readme_convnet():
-    blocks = re.findall(r"```python\n(.*?)\n```", README.read_text(), re.S)
+def _guide_convnet():
+    blocks = re.findall(r"```python\n(.*?)\n```", GUIDE.read_text(), re.S)
     (block,) = [b for b in blocks if b.startswith("class ConvNet")]
     scope = {"nn": nn, "sparx": sparx}
     exec(block, scope)
     return scope["ConvNet"]()
 
 
-# Every model of sparx.models, plus the README's ConvNet. Each reshapes or
+# Every model of sparx.models, plus the guide's ConvNet. Each reshapes or
 # pools between its layers, and the ConvNet flattens with `reshape(..., -1)`.
 SERVED = {
     "mlp": (lambda: SpikingMLP((8,), 3), (2, 3)),
     "recurrent_alif_mlp": (lambda: SpikingMLP((8,), 3, neuron=ALIF(tau=3.0), recurrent=True), (6,)),
     "delayed_mlp": (lambda: SpikingMLP((8,), 3, delays=3), (6,)),
     "sew_resnet": (lambda: Deployed((1, 1, 1, 1), 3, width=4, stem="small"), (6, 6, 1)),
-    "readme_convnet": (_readme_convnet, (6, 6, 1)),
+    "guide_convnet": (_guide_convnet, (6, 6, 1)),
 }
 
 

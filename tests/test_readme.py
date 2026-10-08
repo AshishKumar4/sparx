@@ -1,4 +1,4 @@
-"""The README's code runs as written and does what its text says."""
+"""The code in the README and the guide runs as written and does what their text says."""
 
 import re
 from pathlib import Path
@@ -7,7 +7,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-BLOCKS = re.findall(r"```python\n(.*?)\n```", (Path(__file__).parents[1] / "README.md").read_text(), re.S)
+ROOT = Path(__file__).parents[1]
+BLOCKS = [block for page in ("README.md", "docs/guide.md")
+          for block in re.findall(r"```python\n(.*?)\n```", (ROOT / page).read_text(), re.S)]
 
 
 def _block(start):
@@ -86,8 +88,7 @@ def test_the_circuit_example_sustains_irregular_activity():
 
 def test_the_graded_signalling_example_releases_fires_and_modulates():
     scope = {}
-    exec(_block("import jax\nimport numpy as np\nfrom sparx.dynamics import Exponential, Graded, GradedPotential"),
-         scope)
+    exec(_block("import jax\nimport numpy as np\nfrom sparx.dynamics import Exponential, Graded"), scope)
     records = scope["result"].records
     release, spikes, dopamine = records["release"], records["spikes"], records["dopamine"]
     assert release.shape == (3000, 20) and 0 < release.min() < release.max() < 1
@@ -102,3 +103,13 @@ def test_the_conversion_example_builds_a_spiking_stack():
         "Conv", "IF", "SpikingMaxPool", "Flatten", "Dense", "IF"]
     rates = np.asarray(scope["rates"])
     assert rates.shape == (16, 10) and rates.min() >= 0 and rates.max() <= 1
+
+
+def test_the_brunel_snippet_records_the_excitatory_population():
+    scope = {}
+    exec(_block("import jax\nfrom sparx.graph"), scope)
+    spikes = np.asarray(scope["spikes"])
+    assert spikes.shape == (2000, 1000) and spikes.dtype == bool
+    rate = spikes.mean() / 1e-4  # Hz at 0.1 ms steps
+    assert 10 < rate < 200, rate
+    np.testing.assert_allclose(np.asarray(scope["result"].records["rate"]).mean(), rate, rtol=1e-3)
