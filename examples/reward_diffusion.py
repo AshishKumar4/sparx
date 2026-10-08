@@ -1,7 +1,9 @@
-"""RNeuralNet's reward diffusion against no learning and REINFORCE, on a delayed cue-order task.
+"""RNeuralNet's reward diffusion against no learning, AGREL and REINFORCE, on a delayed cue-order task.
 
     python examples/reward_diffusion.py --rule first        # the original's spread
     python examples/reward_diffusion.py --rule all          # every path, discounted
+    python examples/reward_diffusion.py --rule gated        # from the chosen output, the error signed
+    python examples/reward_diffusion.py --rule agrel        # and back through the weights over time
     python examples/reward_diffusion.py --rule reinforce    # REINFORCE through the network
     python examples/reward_diffusion.py --rule none         # no learning, and the readout
     JAX_PLATFORMS=cpu python examples/reward_diffusion.py --smoke --out /tmp/diffusion-smoke
@@ -23,13 +25,15 @@ linear readout of every neuron's output at the last tick, fit by least
 squares on the training trials, on the test trials. Then each rule learns
 from the same rewards on the same trials, through dew's Trainer
 (`sparx.objectives.RNeuralNetObjective`): the original's reward diffusion
-at its own rate (SGD at `0.01` per reward), every path's at the same rate,
-or REINFORCE by Adam. `none` evaluates the network as drawn. Each run
+at its own rate (SGD at `0.01` per reward), every path's or the gated
+spread at the same rate, or AGREL's update or REINFORCE by Adam. `none`
+evaluates the network as drawn. Each run
 reports the test accuracy of the network's own choice, the largest output.
 
 On seeds 0 to 4 (the guide's results) the readout is right on every test
-trial, REINFORCE teaches the output neurons on four seeds, and reward
-diffusion leaves the choice as drawn on all five.
+trial, REINFORCE and AGREL's update teach the output neurons on the same
+four seeds, reward diffusion leaves the choice as drawn on all five, and
+the gated spread learns the task on none.
 """
 
 from dataclasses import dataclass, replace
@@ -53,7 +57,7 @@ INPUTS, PULSE = 3, 3.0
 
 @dataclass
 class Config:
-    rule: Literal["first", "all", "reinforce", "none"] = "first"
+    rule: Literal["first", "all", "gated", "agrel", "reinforce", "none"] = "first"
     neurons: int = 256
     gap: int = 2
     delay: int = 10
@@ -65,9 +69,9 @@ class Config:
     test: int = 512
     batch: int = 32
     discount: float = 0.9
-    """Each connection's share of what it passes on, for `--rule all`."""
+    """Each connection's share of what it passes on, for `--rule all` and `gated`."""
     learning_rate: float = 1e-3
-    """Adam's rate for REINFORCE."""
+    """Adam's rate for AGREL's update and REINFORCE."""
     seed: int = 0
     out: Path = Path("runs/reward-diffusion")
     """The run's directory; a run there resumes."""
@@ -119,7 +123,7 @@ def main(config: Config) -> None:
         return
     objective = RNeuralNetObjective(net, Field("cues", (ticks, INPUTS)), rule=config.rule,
                                     discount=config.discount)
-    if config.rule == "reinforce":
+    if config.rule in ("agrel", "reinforce"):
         optimizer = optax.adam(config.learning_rate)
     else:
         optimizer = optax.sgd(0.01 * config.batch)  # the original's W_CONST for each reward of the batch

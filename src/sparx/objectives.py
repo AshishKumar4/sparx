@@ -610,7 +610,8 @@ class PredictiveCodingObjective(Objective[Ratio]):
 
 
 
-type RewardRule = Literal["first", "all", "reinforce"]
+type RewardRule = Literal["first", "all", "gated", "agrel", "reinforce"]
+"""How `RNeuralNetObjective` learns from a reward; its docstring describes each."""
 
 
 class RNeuralNetObjective(Objective[Ratio]):
@@ -630,12 +631,24 @@ class RNeuralNetObjective(Objective[Ratio]):
     last tick's outputs, and the mean of the examples' weight changes goes
     to dew's trainer as the loss's gradient with its sign flipped
     (`Objective.with_gradients`), so `optax.sgd(0.01 * batch)` applies the
-    original's `W_CONST` of 0.01 for every reward. `rule="reinforce"` is
-    REINFORCE (Williams 1992) on the choice, `-(R - b) log p(choice)` per
-    example with `b` the mean reward of the batch's other examples,
-    differentiated through the network over time. Whatever the rule, the
-    reported loss is the negative mean reward of the choices drawn, and
-    evaluation returns `TokenScores` for `sparx.metrics.Accuracy`.
+    original's `W_CONST` of 0.01 for every reward.
+
+    Two rules add the changes attention-gated reinforcement learning (AGREL,
+    Roelfsema and van Ooyen 2005) makes to a spread of reward. Both spread
+    the reward prediction error `R - b`, with `b` the mean reward of the
+    batch's other examples, where AGREL takes an expansive function of its
+    error. `rule="gated"` spreads it from the chosen output neuron instead
+    of the feeder, along every path (`paths="all"`, with `discount`), still
+    shared by the softmax of absolute activity. `rule="agrel"` also sends it
+    back through the connections' weights and the neurons' slopes along
+    every delayed path, so each weight changes by `R - b` times the
+    derivative of the chosen output's last activity. AGREL's feedback
+    computes that update layer by layer in a layered network (Pozzi, Bohte
+    and Roelfsema 2020); here it is differentiated through the network over
+    time. `rule="reinforce"` is REINFORCE (Williams 1992) on the choice,
+    `-(R - b) log p(choice)` per example, differentiated the same way. Whatever the rule, the reported loss
+    is the negative mean reward of the choices drawn, and evaluation returns
+    `TokenScores` for `sparx.metrics.Accuracy`.
     """
 
     artifact = TokenScores
@@ -643,8 +656,8 @@ class RNeuralNetObjective(Objective[Ratio]):
 
     def __init__(self, net: RNeuralNet, sample: Field, *, rule: RewardRule = "first", discount: float = 1.0,
                  beta: float = 4.0, labels: str = "label"):
-        if rule not in ("first", "all", "reinforce"):
-            raise ValueError(f"rule must be first, all or reinforce, not {rule!r}")
+        if rule not in ("first", "all", "gated", "agrel", "reinforce"):
+            raise ValueError(f"rule must be first, all, gated, agrel or reinforce, not {rule!r}")
         if sample.shape[1:] != (net.inputs,):
             raise ValueError(f"the sample is one sequence [T, {net.inputs}], not shape {sample.shape}")
         self.net = net
@@ -676,23 +689,32 @@ class RNeuralNetObjective(Objective[Ratio]):
     def loss(self, variables: Variables, batch: Batch, step: Step) -> tuple[Ratio, Aux]:
         weight = jax.lax.stop_gradient(variables["params"]["weight"])
         rows = _row_weights(batch, len(batch[self.labels]))
-        if self.rule == "reinforce":
+
+        def error(r: jax.Array) -> jax.Array:
+            """Each reward less the mean reward of the batch's other real examples."""
+            return r - (jnp.sum(rows * r) - rows * r) / jnp.maximum(jnp.sum(rows) - 1, 1)
+
+        if self.rule in ("reinforce", "agrel"):
             def surrogate(w: jax.Array) -> tuple[jax.Array, jax.Array]:
-                _, log_p, _, r = self._chosen(w, batch, step.key)
-                baseline = (jnp.sum(rows * r) - rows * r) / jnp.maximum(jnp.sum(rows) - 1, 1)
-                return -jnp.sum(rows * (r - baseline) * log_p), r
+                last, log_p, choice, r = self._chosen(w, batch, step.key)
+                chosen = jnp.take_along_axis(last[:, self.net.outputs], choice[:, None], axis=-1)[:, 0]
+                score = log_p if self.rule == "reinforce" else chosen
+                return -jnp.sum(rows * jax.lax.stop_gradient(error(r)) * score), r
 
             update, reward = jax.grad(surrogate, has_aux=True)(weight)
         else:
-            last, _, _, reward = self._chosen(weight, batch, step.key)
+            last, _, choice, reward = self._chosen(weight, batch, step.key)
             wiring = replace(self.net.wiring, weight=weight)
             paths: Literal["first", "all"] = "first" if self.rule == "first" else "all"
+            gated = self.rule == "gated"
+            roots = jnp.asarray(self.net.outputs)[choice] if gated else jnp.full_like(choice, self.net.feeder)
+            signal = error(reward) if gated else reward
 
-            def change(activity: jax.Array, r: jax.Array) -> jax.Array:
-                return reward_diffusion(wiring, activity, r, root=self.net.feeder, paths=paths,
-                                        discount=self.discount, eta=1.0).change
+            def change(activity: jax.Array, r: jax.Array, root: jax.Array) -> jax.Array:
+                return reward_diffusion(wiring, activity, r, root=root, paths=paths, discount=self.discount,
+                                        eta=1.0).change
 
-            update = -jnp.sum(rows[:, None] * jax.vmap(change)(last, reward), axis=0)
+            update = -jnp.sum(rows[:, None] * jax.vmap(change)(last, signal, roots), axis=0)
         stats = Ratio(-jnp.sum(rows * reward), jnp.sum(rows))
         metrics = {"reward": jnp.sum(rows * reward) / jnp.sum(rows)}
         return _with_rule(self, stats, {"weight": update}, variables["params"]), Aux(metrics=metrics)

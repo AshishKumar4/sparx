@@ -134,7 +134,7 @@ The physical models match NEST 3.10 and Brian2 2.10 spike for spike where the dy
   <img alt="Messages travelling along the connections of a small RNeuralNet, each connection with its own delay" src="docs/assets/messages-light.webp" width="100%">
 </picture>
 
-`sparx.learn.RNeuralNet` rebuilds RNeuralNet-Research (2018), an early project of the author's, deterministically. Graded neurons sit on a random graph, each connection delivers its messages after its own delay, and a reward spreads backward by a softmax of activity. Compiled and run in a fixed order, the original C++ and sparx agree within 7.2e-7. On a delayed cue-order task, REINFORCE through the same network learns the task on four of five seeds, while the reward-diffusion rule never changes the network's choice.
+`sparx.learn.RNeuralNet` rebuilds RNeuralNet-Research (2018), an early project of the author's, deterministically. Graded neurons sit on a random graph, each connection delivers its messages after its own delay, and a reward spreads backward by a softmax of activity. Compiled and run in a fixed order, the original C++ and sparx agree within 7.2e-7. On a delayed cue-order task, REINFORCE through the same network learns the task on four of five seeds, and the reward-diffusion rule never changes the network's choice. AGREL's update, a signed error sent back from the chosen output through the weights, learns it on the same four seeds; the same error spread by the original's shares does not.
 
 ## Training on dew
 

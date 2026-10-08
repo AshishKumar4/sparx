@@ -239,12 +239,13 @@ def reward_shares(wiring: Sparse, activity: jax.Array) -> jax.Array:
     return e / jax.ops.segment_sum(e, wiring.post, wiring.size)[wiring.post]
 
 
-def reward_diffusion(wiring: Sparse, activity: jax.Array, reward: jax.Array | float, *, root: int,
+def reward_diffusion(wiring: Sparse, activity: jax.Array, reward: jax.Array | float, *, root: int | jax.Array,
                      paths: Paths = "first", discount: float = 1.0, eta: float = 0.01) -> Diffusion:
     """Spread `reward` from the unit `root` backward along `wiring`, and each connection's weight change.
 
-    For one example: `activity` is each unit's last output, `[size]`, and
-    `reward` a scalar; `jax.vmap` it over a batch. `paths="first"` is the
+    For one example: `activity` is each unit's last output, `[size]`,
+    `reward` a scalar and `root` a unit, which may differ by example;
+    `jax.vmap` it over a batch. `paths="first"` is the
     original's depth-first spread, where each unit passes on the reward it
     holds when the spread first reaches it, through its incoming
     connections in their order in the wiring; a unit that holds no reward
@@ -267,7 +268,7 @@ def reward_diffusion(wiring: Sparse, activity: jax.Array, reward: jax.Array | fl
     return Diffusion(change, credit, share)
 
 
-def _first_visits(wiring: Sparse, passed: jax.Array, reward: jax.Array, root: int) -> jax.Array:
+def _first_visits(wiring: Sparse, passed: jax.Array, reward: jax.Array, root: int | jax.Array) -> jax.Array:
     """`Global_RewardSpreader`'s recursion, iterated over an explicit stack.
 
     A frame is a unit, how far it has got through its incoming connections
@@ -317,7 +318,7 @@ def _first_visits(wiring: Sparse, passed: jax.Array, reward: jax.Array, root: in
     return jax.lax.while_loop(busy, take, (credit, stack, taken, held, visited, depth))[0]
 
 
-def _all_paths(wiring: Sparse, passed: jax.Array, reward: jax.Array, root: int) -> jax.Array:
+def _all_paths(wiring: Sparse, passed: jax.Array, reward: jax.Array, root: int | jax.Array) -> jax.Array:
     """`c = r + P c` by its series, one path length a term, until a term's total falls below rounding.
 
     Each target passes on at most `discount` of what it holds, so a term

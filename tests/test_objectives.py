@@ -598,7 +598,7 @@ def rneuralnet_batch(seed, rows=8):
             "label": rng.integers(0, 2, rows).astype(np.int32)}
 
 
-@pytest.mark.parametrize("rule", ["first", "all", "reinforce"])
+@pytest.mark.parametrize("rule", ["first", "all", "gated", "agrel", "reinforce"])
 def test_the_rneuralnet_objectives_gradient_is_its_rules(rule):
     objective = RNeuralNetObjective(RNEURALNET, Field("cues", (24, 2)), rule=rule, discount=0.9)
     variables = objective.init(jax.random.key(0))
@@ -607,32 +607,46 @@ def test_the_rneuralnet_objectives_gradient_is_its_rules(rule):
     grads = jax.grad(lambda v: objective.scalar_loss(v, batch, step)[0])(variables)["params"]["weight"]
     outputs = RNEURALNET.outputs
 
-    def chosen(weight):
+    def network(weight):
         wiring = RNEURALNET.wiring.replace(weight=weight)
-        net = RNEURALNET.replace(cell=RNEURALNET.cell.replace(wiring=wiring))
-        last = net.run(batch["cues"].swapaxes(0, 1))[0][-1]
+        return RNEURALNET.replace(cell=RNEURALNET.cell.replace(wiring=wiring))
+
+    def chosen(weight):
+        last = network(weight).run(batch["cues"].swapaxes(0, 1))[0][-1]
         logits = 4.0 * last[:, outputs]
         choice = jax.random.categorical(step.key, logits)
         reward = jnp.where(choice == batch["label"], 1.0, -1.0)
-        return last, jax.nn.log_softmax(logits)[jnp.arange(8), choice], reward
+        return last, jax.nn.log_softmax(logits)[jnp.arange(8), choice], choice, reward
 
     weight = variables["params"]["weight"]
-    last, _, reward = chosen(weight)
+    last, _, choice, reward = chosen(weight)
+    error = reward - (jnp.sum(reward) - reward) / 7  # each reward less the mean of the other seven
+    # The trainer descends the mean over the batch of 8 of each rule's update.
     if rule == "reinforce":
         def surrogate(w):
-            _, log_p, r = chosen(w)
+            _, log_p, _, r = chosen(w)
             return -jnp.mean((r - (jnp.sum(r) - r) / 7) * log_p)
 
         expected = jax.grad(surrogate)(weight)
+    elif rule == "agrel":
+        # Each example's error times the gradient of its chosen output's last activity.
+        def chosen_output(w, cues, unit):
+            return network(w).run(cues[:, None])[0][-1, 0, unit]
+
+        slope = jax.vmap(jax.grad(chosen_output), in_axes=(None, 0, 0))
+        slopes = slope(weight, batch["cues"], outputs[choice])
+        expected = -jnp.mean(error[:, None] * slopes, axis=0)
     else:
-        # The trainer descends the mean over the batch of 8 of the rule's changes, their sign flipped.
-        def change(a, r):
-            return reward_diffusion(RNEURALNET.wiring, a, r, root=RNEURALNET.feeder, paths=rule, discount=0.9,
+        paths = "first" if rule == "first" else "all"
+        roots = outputs[choice] if rule == "gated" else jnp.full(8, RNEURALNET.feeder)
+        signal = error if rule == "gated" else reward
+
+        def change(a, r, root):
+            return reward_diffusion(RNEURALNET.wiring, a, r, root=root, paths=paths, discount=0.9,
                                     eta=1.0).change
 
-        spread = jax.vmap(change)
-        expected = -jnp.mean(spread(last, reward), axis=0)
-    np.testing.assert_allclose(grads, expected, rtol=1e-5, atol=1e-8)  # observed 0
+        expected = -jnp.mean(jax.vmap(change)(last, signal, roots), axis=0)
+    np.testing.assert_allclose(grads, expected, rtol=1e-5, atol=1e-8)  # observed 0; 5.6e-9 for agrel
     assert np.any(np.asarray(grads) != 0) and 0 < np.sum(np.asarray(reward) > 0) < 8
     _, aux = objective.loss(variables, batch, step)
     np.testing.assert_allclose(aux.metrics["reward"], jnp.mean(reward), rtol=1e-6)
