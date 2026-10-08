@@ -73,6 +73,7 @@ that step's threshold test.
 
 from __future__ import annotations
 
+import functools
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -83,6 +84,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from dew.objectives.base import Variables
+from jax.custom_derivatives import SymbolicZero
 
 from sparx.dynamics.core import Gap, NeuronModel, Output, Term
 from sparx.dynamics.plasticity import Plasticity, TsodyksMarkram, TsodyksMarkramState
@@ -568,6 +570,45 @@ def _landing(e: Mapping[str, jax.Array], edge: jax.Array, out: jax.Array, t: jax
         return (post,)
     lag = e["delay"].at[edge].get(mode="fill", fill_value=0)
     return ((t + lag) % out.shape[0], post)
+
+
+@functools.partial(jax.custom_jvp, nondiff_argnums=(0,))
+def _as_edges(deliver: Callable[..., jax.Array], weight: jax.Array, sent: jax.Array, out: jax.Array,
+              e: Mapping[str, jax.Array], t: jax.Array | None) -> jax.Array:
+    """`deliver(weight, sent, out, e, t)`, an event projection's delivery, differentiated as its edge list.
+
+    Each edge adds `weight * sent[pre]` where it lands in `out`, a map
+    linear in what the neurons send, so its tangent is the same sum over
+    every edge, which autodiff transposes for the gradient. A membrane near
+    threshold has a surrogate tangent without a spike, so the tangent visits
+    every edge, as differentiating `format="edges"` does. With `t`, an
+    edge's value lands in row `(t + delay) % rows`: it is scattered by delay
+    and then rolled by `t`, so the indices the gradient keeps are the same
+    every step.
+    """
+    return deliver(weight, sent, out, e, t)
+
+
+def _edge_tangent(deliver: Callable[..., jax.Array], primals: tuple, tangents: tuple
+                  ) -> tuple[jax.Array, jax.Array]:
+    """`_as_edges`' delivery and its tangent; a tangent that is zero by construction is skipped."""
+    weight, sent, out, e, t = primals
+    d_weight, d_sent, d_out = tangents[:3]
+    edges, size = weight.shape[0], sent.shape[0]
+    pre = jnp.repeat(jnp.arange(size), e["count"][:-1], total_repeat_length=edges)
+    value = jnp.zeros(edges, out.dtype)
+    if not isinstance(d_sent, SymbolicZero):
+        value = value + weight * d_sent[pre]
+    if not isinstance(d_weight, SymbolicZero):
+        value = value + d_weight * sent[pre]
+    if t is None:
+        arrived = jnp.zeros_like(out).at[e["by_pre"]].add(value)
+    else:
+        arrived = jnp.roll(jnp.zeros_like(out).at[e["delay"], e["by_pre"]].add(value), t, axis=0)
+    return deliver(weight, sent, out, e, t), arrived if isinstance(d_out, SymbolicZero) else d_out + arrived
+
+
+_as_edges.defjvp(_edge_tangent, symbolic_zeros=True)
 
 
 def _event_edges(edges: EdgeList, weight: np.ndarray, delays: np.ndarray, pre: int) -> dict[str, np.ndarray]:
@@ -1198,9 +1239,20 @@ class _Stepper:
         slot finds its neuron by binary search. With stochastic release, each
         pass, and each block of a pass, draws from `key` folded with its
         index, the key of the step that sends.
+
+        A `while_loop` has no reverse mode, so without stochastic release the
+        delivery is differentiated as its edge list (`_as_edges`).
         """
         if weight.shape[0] == 0:
             return out
+        passes = functools.partial(self._passes, p, key=key)
+        if p.release is not None:
+            return passes(weight, sent, out, e, t)
+        return _as_edges(passes, weight, sent, out, e, t)
+
+    def _passes(self, p: Projection, weight, sent, out: jax.Array, e, t: jax.Array | None,
+                key: jax.Array | None) -> jax.Array:
+        """`events`' passes over the spiking neurons."""
         size = sent.shape[0]
         width = min(p.per_pass, size)
         deliver = self._rows if "rows" in e else self._slots

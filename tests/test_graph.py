@@ -1,6 +1,7 @@
 """Networks: structure, timing, and recurrent networks against NEST spike for spike."""
 
 import dataclasses
+from functools import partial
 from pathlib import Path
 
 import jax
@@ -32,6 +33,7 @@ from sparx.graph import (
     FromEdges,
     Network,
     OneToOne,
+    OutputTrace,
     PoissonInput,
     Population,
     PopulationRate,
@@ -587,6 +589,44 @@ def test_gradients_through_a_network_are_exact_where_no_membrane_nears_threshold
                 up = loss({**variables["params"], name: weight.at[k].add(1e-3)})[0]
                 down = loss({**variables["params"], name: weight.at[k].add(-1e-3)})[0]
                 np.testing.assert_allclose(grads[name][k], (up - down) / 2e-3, rtol=1e-6)  # observed 2.6e-9
+
+
+@pytest.mark.parametrize("delays", ["one", "per edge"])
+def test_gradients_through_event_delivery_are_the_edge_lists(delays):
+    # A trainable projection drives a population whose fixed recurrence delivers by events. The gradient
+    # reaches the trainable weights back through that recurrence as it does through the same edges listed.
+    neuron = LeakyIntegrateAndFire(tau_m=10.0, c_m=250.0, e_l=-65.0, v_th=-50.0, v_reset=-65.0, t_ref=2.0,
+                                   detach_reset=True)
+    receptors = {"ampa": Receptor(Exponential(2.0)), "gaba_a": Receptor(Exponential(5.0))}
+
+    def recurrent(rng, n):
+        return 0.1 * rng.integers(1, 20, n) if delays == "per edge" else np.full(n, 1.0)
+
+    def loss(network, variables, params):
+        records, _ = network.apply({**variables, "params": params}, drive, mutable=["state"],
+                                   monitors={"v": StateMonitor("b"), "s": OutputTrace("b")})
+        return jnp.sum((records["v"] + 55.0) ** 2) + 100.0 * jnp.sum(records["s"]), records["s"].sum()
+
+    with jax.enable_x64(new_val=True):
+        events = Network((Population("in", 20, neuron, receptors), Population("b", 30, neuron, receptors)), (
+            Projection("in", "b", FixedProbability(0.5), weight=400.0, delay=1.0, receptor="ampa",
+                       trainable=True),
+            Projection("b", "b", FixedProbability(0.3), weight=lambda rng, n: rng.normal(0.0, 150.0, n),
+                       delay=recurrent, receptor="gaba_a")),
+            inputs=(CurrentInput("in", "stimulus"),), dt=0.1, dtype=jnp.float64)
+        listed = events.clone(projections=(events.projections[0],
+                                           dataclasses.replace(events.projections[1], format="edges")))
+        drive = {"stimulus": np.random.default_rng(0).uniform(300.0, 800.0, (400, 20))}
+        grads = []
+        for network in (events, listed):
+            variables = network.init(jax.random.key(0))
+            params = variables.pop("params")
+            (_, spikes), grad = jax.value_and_grad(partial(loss, network, variables), has_aux=True)(params)
+            grads.append(grad["weight:in->b:ampa"])
+            assert spikes > 50
+        assert "by_pre" in events.init(jax.random.key(0))["connectome"]["edges"]["b->b:gaba_a"]
+        # observed 6e-16 and 8e-15 of the largest gradient
+        np.testing.assert_allclose(grads[0], grads[1], rtol=1e-9, atol=1e-9 * float(jnp.abs(grads[1]).max()))
 
 
 def test_connections_read_plastic_weights_as_learned():
