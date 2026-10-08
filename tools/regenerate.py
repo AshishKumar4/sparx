@@ -12,7 +12,9 @@ fixture the tool makes (`references.MADE_BY`) is then compared with
 which names the arrays that changed; arrays that vary from run to run, the
 wall-clock times a fixture keeps (`VARIES`), are left out of that
 comparison, and a NIR graph is compared as nodes and edges, whose order in
-the file follows Python's string hashing. With `--update`, a fixture that
+the file follows Python's string hashing. A float array within `ULPS` units
+in the last place of its largest value is reproduced to rounding: torch's
+CPU kernels round differently on another instruction set. With `--update`, a fixture that
 changed replaces the committed one and its checksum. Exits with 1 when a
 fixture changed and `--update` is not given.
 """
@@ -33,15 +35,33 @@ from references import FIXTURES, MADE_BY, ROOT, digest, recorded, write_checksum
 VARIES: dict[str, str] = {"microcircuit.npz": "/seconds"}
 """Fixtures with arrays that differ between identical runs, by the suffix of their names."""
 
+ULPS = 16
 
-def changed_arrays(made: Path, committed: Path) -> list[str]:
-    """The arrays of two NPZ files that differ, by name, beside those `VARIES` leaves out."""
+
+def rounded(a: np.ndarray, b: np.ndarray) -> bool:
+    """Whether float arrays `a` and `b` differ by at most `ULPS` units in the last place of `b`'s largest
+    value."""
+    if a.dtype != b.dtype or a.dtype.kind != "f" or a.shape != b.shape:
+        return False
+    scale = float(np.max(np.abs(b[np.isfinite(b)]), initial=0.0))
+    return bool(np.allclose(a, b, rtol=0, atol=ULPS * float(np.spacing(np.asarray(scale, b.dtype))),
+                            equal_nan=True))
+
+
+def changed_arrays(made: Path, committed: Path) -> tuple[list[str], list[str]]:
+    """The arrays of two NPZ files that differ, and those of them that differ by rounding alone, by name,
+    beside those `VARIES` leaves out."""
     varying = VARIES.get(committed.name)
+
+    def same(a: np.ndarray, b: np.ndarray) -> bool:
+        return np.array_equal(a, b, equal_nan=a.dtype.kind in "fc" and b.dtype.kind in "fc")
+
     with np.load(made) as new, np.load(committed) as old:
         names = sorted(set(new.files) | set(old.files))
-        return [name for name in names if not (varying and name.endswith(varying))
-                and (name not in new.files or name not in old.files
-                     or not np.array_equal(new[name], old[name], equal_nan=True))]
+        changed = [name for name in names if not (varying and name.endswith(varying))
+                   and (name not in new.files or name not in old.files or not same(new[name], old[name]))]
+        return changed, [name for name in changed if name in new.files and name in old.files
+                         and rounded(new[name], old[name])]
 
 
 def same_graph(made: Path, committed: Path) -> bool:
@@ -59,14 +79,19 @@ def same_graph(made: Path, committed: Path) -> bool:
     return True
 
 
-def compare(made: Path, committed: Path) -> str | None:
-    """None when `made` is the committed fixture, else what differs."""
+def compare(made: Path, committed: Path) -> tuple[str, bool]:
+    """How `made` compares with the committed fixture, and whether that counts as reproduced."""
     if digest(made) == recorded()[committed.name]:
-        return None
+        return "reproduced", True
     if committed.suffix == ".nir":
-        return None if same_graph(made, committed) else "its nodes or edges"
-    arrays = changed_arrays(made, committed)
-    return f"arrays {', '.join(arrays)}" if arrays else None
+        graphs = same_graph(made, committed)
+        return ("reproduced", True) if graphs else ("differs in its nodes or edges", False)
+    changed, rounding = changed_arrays(made, committed)
+    if not changed:
+        return "reproduced", True
+    if changed == rounding:
+        return f"reproduced to rounding in arrays {', '.join(changed)}", True
+    return f"differs in arrays {', '.join(name for name in changed if name not in rounding)}", False
 
 
 def main() -> None:
@@ -85,18 +110,17 @@ def main() -> None:
         # The tool writes beside its own copy; paths among its arguments stay the caller's.
         subprocess.run([sys.executable, str(copy / "tools" / args.tool), *args.arguments], env=environment,
                        check=True)
-        differing = {}
+        failed = []
         for name in made:
-            difference = compare(copy / "tests" / "fixtures" / name, FIXTURES / name)
-            if difference is not None:
-                differing[name] = difference
+            outcome, reproduced = compare(copy / "tests" / "fixtures" / name, FIXTURES / name)
+            print(f"{name}: {outcome}")
+            if not reproduced:
+                failed.append(name)
                 if args.update:
                     shutil.copyfile(copy / "tests" / "fixtures" / name, FIXTURES / name)
-    for name in made:
-        print(f"{name}: {'differs in ' + differing[name] if name in differing else 'reproduced'}")
-    if differing and args.update:
+    if failed and args.update:
         write_checksums()
-    elif differing:
+    elif failed:
         sys.exit(1)
 
 

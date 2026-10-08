@@ -106,7 +106,15 @@ OVERRIDES: dict[str, tuple[str, ...]] = {"modelfitting": ("numpy<2",)}
 """Pins that replace what a package declares: brian2 2.10.1 declares numpy>=2, which brian2modelfitting 0.4
 cannot import (`numpy.NaN`), and gamma.npz was made with both on numpy 1."""
 
-TORCH_INDEX = "https://download.pytorch.org/whl/cpu"
+WHEELS: dict[str, str] = {
+    name: f"{name} @ https://download.pytorch.org/whl/cpu/{name}-{version}%2Bcpu-cp312-cp312-"
+          f"manylinux_2_28_x86_64.whl#sha256={digest}"
+    for name, version, digest in (
+        ("torch", "2.14.1", "5a6363570c753812540a05eb82380e329469cbe668643e88111414c12627711f"),
+        ("torchvision", "0.29.1", "ef220d4b21878c58947851beb7337382897159105f012f0c9c07bf7e84174d7e"))}
+"""PyTorch's CPU builds by their wheels, for Linux on x86-64, so the rest of the torch environment resolves
+from PyPI alone: an index beside PyPI's offers its own builds of other packages, with other hashes. Each
+wheel carries its own hash, which uv otherwise replaces with those of every build of the version."""
 
 
 def installed(distribution: str) -> str:
@@ -155,22 +163,22 @@ def lock() -> None:
     """Compile each pip environment's lock file, pinned by `PINS` where it names a version, with hashes."""
     ENVIRONMENTS.mkdir(exist_ok=True)
     for environment, requirements in LOCKED.items():
-        pinned = [f"{name}=={PINS[name][1]}" if name in PINS else name for name in requirements]
+        pinned = [WHEELS.get(name) or (f"{name}=={PINS[name][1]}" if name in PINS else name)
+                  for name in requirements]
         source = ENVIRONMENTS / f"{environment}.in"
         source.write_text("".join(f"{line}\n" for line in pinned))
-        # uv reads an extra index before the default one, here and in `uv pip sync`, which the lock file
-        # names them to, so torch's CPU build is taken from PyTorch's index.
-        torch = ["--index-url", "https://pypi.org/simple", "--extra-index-url", TORCH_INDEX,
-                 "--emit-index-url"]
-        index = torch if environment == "torch" else []
+        overridden = []
         if environment in OVERRIDES:
             overrides = ENVIRONMENTS / f"{environment}.overrides"
             overrides.write_text("".join(f"{line}\n" for line in OVERRIDES[environment]))
-            index += ["--override", str(overrides.relative_to(ROOT))]
+            overridden = ["--override", str(overrides.relative_to(ROOT))]
         locked = (ENVIRONMENTS / f"{environment}.txt").relative_to(ROOT)
-        subprocess.run(["uv", "pip", "compile", "--quiet", "--generate-hashes", "--python-version", "3.12",
-                        "--universal", *index, str(source.relative_to(ROOT)), "-o", str(locked)],
-                       check=True, cwd=ROOT)
+        # Resolved afresh: uv takes an existing output's pins and hashes as preferences, and its cache keeps
+        # what another index once offered of a package.
+        (ROOT / locked).unlink(missing_ok=True)
+        subprocess.run(["uv", "pip", "compile", "--quiet", "--refresh", "--generate-hashes", "--universal",
+                        "--python-version", "3.12", *overridden, str(source.relative_to(ROOT)),
+                        "-o", str(locked)], check=True, cwd=ROOT)
 
 
 def main() -> None:

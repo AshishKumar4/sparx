@@ -1,9 +1,9 @@
-torch==2.14.1+cpu
+torch @ https://download.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=5a6363570c753812540a05eb82380e329469cbe668643e88111414c12627711f
 snntorch==1.0.0
 nir==1.0.8
 nirtorch==2.6
 dcls==0.1.1
-torchvision
+torchvision @ https://download.pytorch.org/whl/cpu/torchvision-0.29.1%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=ef220d4b21878c58947851beb7337382897159105f012f0c9c07bf7e84174d7e
 loguru
 packaging
 scipy
