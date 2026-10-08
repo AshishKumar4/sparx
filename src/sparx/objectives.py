@@ -106,12 +106,6 @@ def _with_rule(objective: Objective[Ratio], stats: Ratio, update: Variables, par
     return objective.with_gradients(stats, gradients, params)
 
 
-def _row_weights(batch: Batch, rows: int) -> jax.Array:
-    """1 for each real row of `batch` and 0 for each repeat (`VALID_ROWS`); all 1 in training."""
-    valid = batch.get(VALID_ROWS)
-    return jnp.ones(rows, jnp.float32) if valid is None else jnp.asarray(valid, jnp.float32)
-
-
 def _fields(batch: Batch, *keys: str) -> dict[str, jax.Array]:
     """The fields `keys` of `batch`, and its `VALID_ROWS` when it has them, as arrays: what a compiled
     evaluation takes. Dew calls `evaluate` outside `jit`, so each objective compiles its own scoring,
@@ -256,7 +250,7 @@ class SpikingClassifierObjective(Objective[Ratio]):
         metrics |= {f"rate/{name}": rate for name, rate in firing_rates(updated).items()}
         if self.rates is not None:
             penalty = rate_penalty(updated, self.rates.lower, self.rates.upper,
-                                   rows=_row_weights(batch, labels.shape[0]))
+                                   rows=self.row_weights(batch, labels.shape[0]))
             metrics["rate_penalty"] = penalty
             stats = Ratio(stats.total + self.rates.weight * penalty * stats.mass, stats.mass)
         kept = {name: value for name, value in updated.items() if name != RATES}
@@ -355,7 +349,7 @@ class ActivityFitObjective(Objective[Ratio]):
             def smooth(train: jax.Array) -> jax.Array:
                 return jnp.convolve(train, kernel, mode="same")
 
-            weights = _row_weights(batch, spikes.shape[1])
+            weights = self.row_weights(batch, spikes.shape[1])
 
             def psth(trains: jax.Array) -> jax.Array:  # [T, B, N] -> [T, N]
                 mean = jnp.einsum("tbn,b->tn", trains, weights) / jnp.sum(weights)
@@ -489,7 +483,7 @@ class EPropObjective(Objective[Ratio]):
         params, inputs, labels = self._network(variables["params"], batch)
         steps = inputs.shape[0]
         targets = jnp.broadcast_to(labels, (steps, *labels.shape))
-        weights = _row_weights(batch, labels.shape[0])
+        weights = self.row_weights(batch, labels.shape[0])
 
         def step_loss(y: jax.Array, label: jax.Array) -> jax.Array:
             return jnp.sum(weights * optax.softmax_cross_entropy_with_integer_labels(y, label)) / steps
@@ -612,7 +606,7 @@ class PredictiveCodingObjective(Objective[Ratio]):
             return stats, Aux(metrics=metrics)
         held = variables["params"]
         blocks, params = sequential_blocks(self.stack, jax.lax.stop_gradient(held))
-        grads = self.rule.gradient(blocks, params, x, target, rows=_row_weights(batch, x.shape[0]))
+        grads = self.rule.gradient(blocks, params, x, target, rows=self.row_weights(batch, x.shape[0]))
         # The update mirrors the parameters: a layer without any, an activation, has none to update.
         update = {f"layers_{k}": grad for k, grad in enumerate(grads) if f"layers_{k}" in held}
         return _with_rule(self, stats, update, held), Aux(metrics=metrics)
@@ -706,7 +700,7 @@ class RNeuralNetObjective(Objective[Ratio]):
 
     def loss(self, variables: Variables, batch: Batch, step: Step) -> tuple[Ratio, Aux]:
         weight = jax.lax.stop_gradient(variables["params"]["weight"])
-        rows = _row_weights(batch, len(batch[self.labels]))
+        rows = self.row_weights(batch, len(batch[self.labels]))
 
         def error(r: jax.Array) -> jax.Array:
             """Each reward less the mean reward of the batch's other real examples."""
