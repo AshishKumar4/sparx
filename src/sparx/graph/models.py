@@ -180,7 +180,11 @@ def microcircuit(neurons: float = 1.0, indegrees: float = 1.0, *,
     drawn again below half a step and rounded to steps, as NEST rounds them.
     The cortico-cortical input is a constant current per population
     (`background="dc"`, the reference's default) or Poisson spikes at 8 Hz
-    from each of its inputs.
+    from each of its inputs. A population fires at a few Hz, so a step's
+    events from one population are few, and each projection delivers them
+    in passes of 4: at a fifth, 8.8 s per simulated second on a 4-core CPU,
+    against 9.7 s for passes of 2, 9.9 s for 8 and 12.8 s for 16
+    (`benchmarks/bench_networks.py`).
 
     `neurons` scales the population sizes and `indegrees` the inputs per
     neuron. With fewer inputs, each weight grows by one over the square
@@ -225,7 +229,7 @@ def microcircuit(neurons: float = 1.0, indegrees: float = 1.0, *,
                    FixedTotalNumber(int(synapses[target, source]), autapses=True, multapses=True),
                    weight=_signed_weights(float(weight[target, source])),
                    delay=_delays(1.5 if excitatory[source] else 0.75, dt),
-                   receptor="ampa" if excitatory[source] else "gaba_a")
+                   receptor="ampa" if excitatory[source] else "gaba_a", per_pass=4)
         for target in range(count) for source in range(count) if synapses[target, source] > 0)
     inputs = () if background == "dc" else tuple(
         PoissonInput(name, rate=8.0, weight=float(weight_external), receptor="ampa",

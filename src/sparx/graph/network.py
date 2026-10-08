@@ -593,10 +593,14 @@ def _pending(projections: Sequence[Projection], edges: Mapping[str, Mapping[str,
     out: dict[str, tuple[str, int]] = {}
     for p in projections:
         if _ahead(edges[p.key]):
-            key = f"{p.post}:{p.receptor}"
             rows = int(np.max(np.asarray(edges[p.key]["delay"]), initial=0)) + 1
-            out[key] = (p.post, max(rows, out.get(key, (p.post, 1))[1]))
+            out[_target(p)] = (p.post, max(rows, out.get(_target(p), (p.post, 1))[1]))
     return out
+
+
+def _target(p: Projection) -> str:
+    """The receptor `p` feeds, `population:receptor`."""
+    return f"{p.post}:{p.receptor}"
 
 
 def _rows(counts: np.ndarray, edges: int) -> np.ndarray:
@@ -660,6 +664,9 @@ class NetworkState(TypedDict):
     pending: dict[str, jax.Array]
     """By `population:receptor`, the weights event projections over edges of their own delays have sent
     and that are not yet due, `[rows, size]`: row `t % rows` arrives at the end of step `t`."""
+    ready: dict[str, jax.Array]
+    """By `population:receptor` of a delta receptor in `pending`, what arrives at the end of the next
+    step, `[size]`, read once the step that reached it has sent its spikes."""
     plastic: dict[str, PlasticState]
     """By projection key, the projections with plasticity."""
     short_term: dict[str, ReleaseState]
@@ -957,11 +964,16 @@ class Network(nn.Module):
             if p.short_term is not None:
                 short_term[p.key] = {"release": p.short_term.init_state((pre,), dtype),
                                      "buffer": jnp.zeros((lags[p.pre], pre), dtype)}
+        held = _pending(self.projections, edges)
         pending = {key: jnp.zeros((rows, populations[post].size), dtype)
-                   for key, (post, rows) in _pending(self.projections, edges).items()}
+                   for key, (post, rows) in held.items()}
+        delta = {_target(p) for p in self.projections
+                 if populations[p.post].receptors[p.receptor].synapse.lands == "before_threshold"}
+        ready = {key: jnp.zeros(populations[post].size, dtype)
+                 for key, (post, _) in held.items() if key in delta}
         modulators = {m.name: jnp.zeros((), dtype) for m in self.modulators}
-        return {"populations": out, "pending": pending, "plastic": plastic, "short_term": short_term,
-                "modulators": modulators, "t": jnp.zeros((), jnp.int32)}
+        return {"populations": out, "pending": pending, "ready": ready, "plastic": plastic,
+                "short_term": short_term, "modulators": modulators, "t": jnp.zeros((), jnp.int32)}
 
     def _noise(self) -> jax.Array | None:
         """The key Poisson inputs and stochastic release draw from, None when nothing draws."""
@@ -1102,6 +1114,7 @@ class _Stepper:
         self.streams = {p.key: len(network.inputs) + i for i, p in enumerate(network.projections)
                         if p.release is not None}
         self.ahead = [p for p in network.projections if _ahead(edges[p.key])]
+        self.targets = {_target(p): (p.post, p.receptor) for p in self.ahead}
 
     def is_delta(self, population: str, receptor: str) -> bool:
         return self.populations[population].receptors[receptor].synapse.lands == "before_threshold"
@@ -1134,23 +1147,31 @@ class _Stepper:
         return jax.ops.segment_sum(transmitted, e["post"], num_segments=self.populations[p.post].size,
                                    indices_are_sorted=True)
 
-    def send(self, t, rings: Mapping[str, jax.Array], weights, pending: dict[str, jax.Array]
+    def send(self, t, rings: Mapping[str, jax.Array], weights, pending: Mapping[str, jax.Array]
              ) -> dict[str, jax.Array]:
         """`pending` with the spikes of step `t` sent ahead by the event projections whose edges have their
-        own delays, each edge's weight in the row of the step it is due in."""
-        pending = dict(pending)
+        own delays, each edge's weight in the row of the step it is due in, after emptying the row each
+        receptor read last: a kinetic one's of step `t - 1`, a delta one's of step `t`, read at the end of
+        step `t - 1`.
+
+        A row read in a step before the buffer is written would make XLA
+        copy the whole buffer to keep the read, every step: 0.36 ms against
+        0.012 ms for 51 rows of 15,435 neurons on a 4-core CPU. So a step
+        writes first and reads after, and a delta receptor's row for the
+        next step is read at the end of this one (`NetworkState.ready`).
+        """
+        pending = {key: rows.at[(t - (0 if self.is_delta(*self.targets[key]) else 1)) % rows.shape[0]].set(0)
+                   for key, rows in pending.items()}
         for p in self.ahead:
             ring = rings[p.key]
-            target = f"{p.post}:{p.receptor}"
-            pending[target] = self.events(p, self.edges[p.key], weights[p.key], ring[t % ring.shape[0]],
-                                          self.release_key(t, p), pending[target], t)
+            pending[_target(p)] = self.events(p, self.edges[p.key], weights[p.key], ring[t % ring.shape[0]],
+                                              self.release_key(t, p), pending[_target(p)], t)
         return pending
 
-    def received(self, pending: Mapping[str, jax.Array], t, delta: bool) -> dict[str, jax.Array]:
-        """`pending` with the rows its delta (or kinetic) receptors took at the end of step `t` emptied."""
-        targets = {f"{p.post}:{p.receptor}": (p.post, p.receptor) for p in self.ahead}
-        return {key: rows.at[t % rows.shape[0]].set(0) if self.is_delta(*targets[key]) == delta else rows
-                for key, rows in pending.items()}
+    def next_ready(self, pending: Mapping[str, jax.Array], t) -> dict[str, jax.Array]:
+        """What each delta receptor in `pending` receives at the end of step `t + 1`, once step `t` sent."""
+        return {key: rows[(t + 1) % rows.shape[0]] for key, rows in pending.items()
+                if self.is_delta(*self.targets[key])}
 
     def events(self, p: Projection, e, weight, sent, key: jax.Array | None, out: jax.Array,
                t: jax.Array | None = None) -> jax.Array:
@@ -1267,18 +1288,20 @@ class _Stepper:
             arrivals[source.target][source.receptor] = incoming + source.weight * draws
         return arrivals, currents
 
-    def gather(self, name, t, external, rings, weights, pending: Mapping[str, jax.Array],
+    def gather(self, name, t, external, rings, weights, sent: Mapping[str, jax.Array],
                delta: bool) -> dict[str, jax.Array]:
-        """Everything due at the end of step `t` on `name`'s delta (or kinetic) receptors."""
+        """Everything due at the end of step `t` on `name`'s delta (or kinetic) receptors; `sent` holds
+        what was sent ahead to them, the ready row of a delta receptor, the pending rows of a kinetic one."""
         arrivals = {k: v for k, v in external.items() if self.is_delta(name, k) == delta}
         for p in self.into[name]:
             if self.is_delta(name, p.receptor) == delta and not _ahead(self.edges[p.key]):
                 due = self.deliver(t, p, weights[p.key], rings[p.key])
                 arrivals[p.receptor] = arrivals.get(p.receptor, 0.0) + due
         for receptor in self.populations[name].receptors:
-            rows = pending.get(f"{name}:{receptor}")
-            if rows is not None and self.is_delta(name, receptor) == delta:
-                arrivals[receptor] = arrivals.get(receptor, 0.0) + rows[t % rows.shape[0]]
+            ahead = sent.get(f"{name}:{receptor}")
+            if ahead is not None and self.is_delta(name, receptor) == delta:
+                due = ahead if delta else ahead[t % ahead.shape[0]]
+                arrivals[receptor] = arrivals.get(receptor, 0.0) + due
         return arrivals
 
     def gaps(self, start: Mapping[str, jax.Array], end: Mapping[str, jax.Array]) -> dict[str, Gap]:
@@ -1342,11 +1365,9 @@ class _Stepper:
         frozen = {name: pop.point_neuron.frozen(pops[name]["point_neuron"], self.dt)
                   for name, pop in self.populations.items()}
         before = rings({name: pops[name]["buffer"] for name in self.populations})
-        pending = state["pending"]
-        jumps = {name: pop.point_neuron.delta(self.gather(name, t, external[name], before, weights, pending,
-                                                          delta=True))
+        jumps = {name: pop.point_neuron.delta(self.gather(name, t, external[name], before, weights,
+                                                          state["ready"], delta=True))
                  for name, pop in self.populations.items()}
-        pending = self.received(pending, t, delta=True)
 
         def advance(name: str, gap: Gap | None) -> tuple[PointNeuronState, Output]:
             return self.populations[name].point_neuron.advance(
@@ -1379,7 +1400,7 @@ class _Stepper:
                                      "buffer": ring.at[t % ring.shape[0]].set(efficacy.astype(ring.dtype))}
 
         after = rings(buffers)
-        pending = self.send(t, after, weights, pending)
+        pending = self.send(t, after, weights, state["pending"])
 
         # 4. Every other synapse receives what is due at the end of the step.
         new_pops: dict[str, PopulationState] = {}
@@ -1387,11 +1408,11 @@ class _Stepper:
             due = self.gather(name, t, external[name], after, weights, pending, delta=False)
             point_neuron = pop.point_neuron.receive(moved[name], due, self.dt, outputs[name], frozen[name])
             new_pops[name] = {"point_neuron": point_neuron, "buffer": buffers[name]}
-        pending = self.received(pending, t, delta=False)
+        ready = self.next_ready(pending, t)
 
         # 5-6. Plasticity, then monitors.
         self.plasticity(t, plastic, outputs, buffers, modulators)
         states = {n: v["point_neuron"] for n, v in new_pops.items()}
         records = {name: m.record(outputs, states, self.dt, modulators) for name, m in self.monitors.items()}
-        return {"populations": new_pops, "pending": pending, "plastic": plastic, "short_term": short_term,
-                "modulators": modulators, "t": t + 1}, records
+        return {"populations": new_pops, "pending": pending, "ready": ready, "plastic": plastic,
+                "short_term": short_term, "modulators": modulators, "t": t + 1}, records

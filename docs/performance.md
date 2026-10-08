@@ -87,9 +87,12 @@ The readout's leak still needs one filtered trace per synapse, `B x N x (in + N)
 | Brunel | 12,500, 15.6M | 37.3 to 37.6 Hz | 9.6 s | 7.5 s | 11.8 s | 16.1 s |
 | CUBA | 4,000, 320,000 | 5.4 to 5.6 Hz | 0.71 s | 0.42 s | 0.33 s | 0.59 s |
 | COBA | 4,000, 320,000 | 18 to 20 Hz | 1.01 s | 3.85 s | 0.54 s | 0.98 s |
-| Microcircuit, a fifth | 15,435, 12.0M | 0.6 to 0.7 Hz (layer 2/3) | 21.0 s | 2.89 s | | |
+| Microcircuit, a fifth | 15,435, 12.0M | 0.6 to 0.7 Hz (layer 2/3) | 8.76 s | 2.89 s | | |
 
-Each simulator's rate is within the spread of the others', so they run the same networks. The microcircuit row was measured the same day, after its event delivery gained delays per edge: building it took sparx 9.4 s and compiling a chunk 9.3 s, against NEST's 4.5 s. A step of it carries about 4 spikes over 55 projections, and sparx takes 2.1 ms for it. NEST integrates `iaf_cond_exp` with adaptive Runge-Kutta per neuron, which is more accurate and costs it the COBA row; sparx and Brian2 hold the conductance over the step. Building Brunel's network and drawing its synapses took sparx 12.5 s and compiling a chunk 2.7 s, against NEST's 2.8 s to build, and Brian2's 10.2 s (standalone, its C++ compilation included) and 26.7 s (Cython).
+Each simulator's rate is within the spread of the others', so they run the same networks. The microcircuit row was measured the same day, after its event delivery gained delays per edge: building it took sparx 8.8 s and compiling a chunk 8.8 s, against NEST's 4.5 s. A step of it carries about 4 spikes over 55 projections, and sparx takes 0.88 ms for it. Two changes took it there from 21.0 s per simulated second:
+
+- A step writes each receptor's arrivals before it reads them. Read first, the row being read made XLA copy the whole buffer of arrivals, 51 rows of 15,435 neurons, every step: 0.36 ms against 0.012 ms in isolation, and 12.4 s against 21.0 s for the network.
+- Its projections deliver in passes of 4 spiking neurons, since each carries few events a step: 8.8 s, against 9.7 s for passes of 2, 9.9 s for 8 and 12.8 s for 16. The other networks keep 16: CUBA took 0.69, 0.69 and 0.81 s for passes of 4, 8 and 16, COBA 1.25, 1.05 and 1.02 s, Brunel 21.6, 13.7 and 9.9 s. NEST integrates `iaf_cond_exp` with adaptive Runge-Kutta per neuron, which is more accurate and costs it the COBA row; sparx and Brian2 hold the conductance over the step. Building Brunel's network and drawing its synapses took sparx 12.5 s and compiling a chunk 2.7 s, against NEST's 2.8 s to build, and Brian2's 10.2 s (standalone, its C++ compilation included) and 26.7 s (Cython).
 
 Until 8 October 2026 a projection under `format="auto"` was a dense matrix or an edge list, and every step paid for every synapse: Brunel took 457 s per simulated second, CUBA 15.5 s and COBA 15.3 s. The changes that brought them to the table's times, each measured on these three networks:
 
