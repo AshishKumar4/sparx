@@ -172,7 +172,7 @@ def bench_brian2_runtime(name, seconds):
 def bench_brian2_standalone(name, threads, seconds):
     import brian2 as b2
 
-    b2.set_device("cpp_standalone", directory=tempfile.mkdtemp(prefix=f"brian2-{name}-"), build_on_run=False)
+    b2.set_device("cpp_standalone", build_on_run=False)
     b2.prefs.devices.cpp_standalone.openmp_threads = threads
     b2.start_scope()
     b2.seed(1)
@@ -180,14 +180,13 @@ def bench_brian2_standalone(name, threads, seconds):
     network.run(WARMUP * b2.ms)
     network.run(1000.0 * seconds * b2.ms, profile=True)
     start = time.perf_counter()
-    b2.device.build(run=True)
+    b2.device.build(directory=tempfile.mkdtemp(prefix=f"brian2-{name}-"), run=True)
     total = time.perf_counter() - start
     profile = network.profiling_info
     simulated = sum(float(t) for code, t in profile if "synapses_create" not in code)
     times = np.asarray(monitor.t / b2.ms)
     rate = np.sum(times >= WARMUP) / excitatory / seconds
     b2.device.reinit()
-    b2.device.activate()
     b2.set_device("runtime")
     return total - simulated, simulated / seconds, rate
 
