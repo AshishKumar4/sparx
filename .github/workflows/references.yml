@@ -62,9 +62,9 @@ jobs:
         test -z "$failed" || { echo "failed:$failed"; exit 1; }
     - name: Parity tests against what differs
       run: |
-        changed=$(git diff --name-only -- tests/fixtures | grep -v SHA256SUMS | xargs -rn1 basename)
+        changed=$(git diff --name-only -- tests/fixtures | { grep -v SHA256SUMS || true; } | xargs -rn1 basename)
         echo "kept beyond rounding: ${changed:-none}"
-        files=$(for f in $changed; do grep -l "$f" tests/*.py; done | sort -u)
+        files=$(for f in $changed; do grep -l "$f" tests/*.py || true; done | sort -u)
         test -z "$files" || JAX_PLATFORMS=cpu ../sparx-env/bin/python -m pytest -q $files
 
   brian2:
@@ -102,9 +102,9 @@ jobs:
         test -z "$failed" || { echo "failed:$failed"; exit 1; }
     - name: Parity tests against what differs
       run: |
-        changed=$(git diff --name-only -- tests/fixtures | grep -v SHA256SUMS | xargs -rn1 basename)
+        changed=$(git diff --name-only -- tests/fixtures | { grep -v SHA256SUMS || true; } | xargs -rn1 basename)
         echo "kept beyond rounding: ${changed:-none}"
-        files=$(for f in $changed; do grep -l "$f" tests/*.py; done | sort -u)
+        files=$(for f in $changed; do grep -l "$f" tests/*.py || true; done | sort -u)
         test -z "$files" || JAX_PLATFORMS=cpu ../sparx-env/bin/python -m pytest -q $files
 
   nest:
@@ -139,7 +139,7 @@ jobs:
         test -z "$failed" || { echo "failed:$failed"; exit 1; }
     - name: Parity tests against what differs
       run: |
-        changed=$(git diff --name-only -- tests/fixtures | grep -v SHA256SUMS | xargs -rn1 basename)
+        changed=$(git diff --name-only -- tests/fixtures | { grep -v SHA256SUMS || true; } | xargs -rn1 basename)
         echo "kept beyond rounding: ${changed:-none}"
-        files=$(for f in $changed; do grep -l "$f" tests/*.py; done | sort -u)
+        files=$(for f in $changed; do grep -l "$f" tests/*.py || true; done | sort -u)
         test -z "$files" || JAX_PLATFORMS=cpu ../sparx-env/bin/python -m pytest -q $files
