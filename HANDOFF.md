@@ -2,6 +2,17 @@
 
 The state of sparx and its dew work as of 8 October 2026: what exists, what is open, and how to pick it up. `README.md` introduces the library with figures and clips, `docs/guide.md` covers each part with code, `docs/design.md` its architecture and plan, `docs/fidelity.md` every model's reference and check, and `docs/performance.md` the measurements.
 
+## Start here
+
+The last session (8 October 2026) ended early, at `412d5cd` on both `main` and `claude/zen-brown-b0kxzw`. In order:
+
+1. Run `JAX_PLATFORMS=cpu pytest tests -q`. The suite passed at `4e5140f`; `412d5cd` (the coincidence factor and the fit-a-circuit tutorial) passed its own tests and the lint gate, and its full run was cut short at 30%.
+2. Rebuild the merged event loop from item 4 below, the session's unfinished work: it took the microcircuit from 9.8 to 3.8 s per simulated second, and its prototype was lost with the session's scratch space.
+3. Re-run `benchmarks/bench_networks.py` after it and update `docs/performance.md`, the per-pass widths in `Projection.per_pass` and the microcircuit's `per_pass=4` in `sparx.graph.models` with the new times.
+4. Add to `docs/design.md` section 6.2 that event delivery's gradient is the edge list's (a `custom_jvp` in `sparx.graph.network._as_edges`), and the merged loop once it lands.
+
+What the session added, each with its test: trainable projections that apply after `init` (`e333da6`); `LeakyIntegrateAndFire(detach_reset=True)` (`7666f74`); gradients through event delivery (`4e5140f`); `sparx.spiketrains.coincidence_factor` with `tools/make_gamma_fixtures.py`, and `docs/tutorials/fit-a-circuit.md` (`412d5cd`).
+
 ## State
 
 - The suite passes: 670 tests at `4e5140f`; the commit after it (the coincidence factor and the fit-a-circuit tutorial) passed its own tests and the lint gate, but its full-suite run was cut short. Among the tests are every example run in its `--smoke` mode, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
@@ -92,8 +103,24 @@ Open in dew, for sparx:
    - the connectome rows of `docs/performance.md` predate the event delivery of 8 October 2026 and need measuring again with the FlyWire tables;
    - drawing Brunel's 15.6M synapses takes 12.5 s against NEST's 2.8 s;
    - a step of CUBA costs twice Brian2's; most of it is the fixed work of finding spikes and running four projections' loops;
-   - the microcircuit at a fifth takes 8.8 s per simulated second against NEST's 2.9 s: a step carries about 4 spikes over 55 projections, each running its own event loop. The same network as 2 projections in one population takes 0.55 ms a step, against 1.24 ms for the 55, both in passes of 16. Every event projection could send ahead (as those with a delay per edge now do), which would let one loop per step deliver every projection's spikes. A prototype that merges every event projection without stochastic release or short-term plasticity into one edge list and one buffer (`[rows, receptors' columns]`, delta receptors' edges a row early) fired spike for spike with edge lists and took the microcircuit from 9.8 to 3.8 s per simulated second, CUBA from 0.89 to 0.62 s and COBA from 1.11 to 0.77 s, with Brunel 10.0 against 10.6 s (9.7 s at `per_pass=32`); it was not committed before the session ended and needs rewriting from this description, with the full suite, which holds the NEST parity tests.
-5. **`docs/design.md`** describes the code as it is (rewritten 8 October 2026), with what is not built in its section 12. Keep it true: a change to a contract, a format or a collection updates it in the same commit.
+   - the microcircuit at a fifth takes 8.8 s per simulated second against NEST's 2.9 s: a step carries about 4 spikes over 55 projections, each running its own event loop (`_Stepper.events`). One loop per step for every event projection without stochastic release or short-term plasticity was prototyped and lost with the session; rebuild it in `sparx/graph/network.py` from this:
+     - **Which projections.** Those `_events(p, pre)` takes with `p.release is None` and `p.short_term is None`. A frozen `_Merged` dataclass, built from the projections and populations alone, lists them, gives each source population its first neuron in one range laid end to end and each `population:receptor` it feeds its first column, and takes as its pass width the widest `per_pass` among them, capped by the neuron count.
+     - **Storage.** In `_build`, draw every projection as now (the draws must stay in order, or the NEST fixtures break), then concatenate the merged ones' edges: neuron plus source offset, post plus column offset, a row lag of `delay` (`delay - 1` onto a delta receptor), the weight, and the projection's index. Sort them with `_event_edges` (give it the per-edge index to sort along) and keep them in the connectome as `events`; the merged projections get no `edges` entry and no `weight:` variable. Store the lag as one scalar when all lags are equal, and let `_landing` take a scalar delay.
+     - **State.** One buffer `pending["events"]`, `[longest lag + 1, columns]`, and `ready["events"]`, its row, when any receptor is a delta one. The key holds no colon, so no `population:receptor` key can equal it.
+     - **Step.** In `send`, clear row `t - 1` of the buffer, concatenate the step's outputs of the source populations, and deliver through `_as_edges` with the passes of `_passes` (give `_passes`, `_rows` and `_slots` the width and the release as arguments in place of a `Projection`). At the end of the step every merged receptor reads row `t`, a kinetic receptor as its arrivals and a delta receptor as next step's `ready`. Skip merged projections in `_lags`, `_pending`, `gather`'s per-projection delivery, the weights and `_Stepper.ahead`.
+     - **Reading back.** `Network.connections` selects each projection's edges from `events` by the stored index and subtracts the offsets; a delta receptor's delay is its lag plus one.
+     - **Tests.** A network of two populations with five event projections onto kinetic and delta receptors, with one delay and delays per edge, fired spike for spike with all projections as `format="edges"`, in one chunk and in chunks of 30 ms, and read back the same connections. Dropping the delta lag shift, reading `ready` a row late, or storing every edge under projection 0 each failed it. Tests in `tests/test_graph.py` that read `connectome["edges"][key]["by_pre"]` or `connectome["weight:a->a:ex"]` of a merged projection must read `connectome["events"]` or `connections()` instead.
+     - **Measured** (4-core CPU, float32, `dt = 0.1` ms, 1 simulated s after 300 ms of warm-up chunks, single runs, about 5% apart run to run). Per-projection loops against the merged loop, in s per simulated second:
+
+       | Network | Per projection | Merged, by pass width |
+       | --- | --- | --- |
+       | Microcircuit, a fifth | 9.84 (width 4) | 3.78 (4), 3.53 (8), 4.11 (16) |
+       | CUBA | 0.89 (16) | 0.60 (8), 0.62 (16), 0.78 (32) |
+       | COBA | 1.11 (16) | 0.87 (8), 0.77 (16), 0.84 (32) |
+       | Brunel, 12,500 neurons | 10.01 (16) | 10.60 (16), 9.65 (32), 9.95 (64) |
+
+       Every pair fired at the same rate. Brunel is the one network the merged loop did not speed up at the default width; its step is dominated by its Poisson input and its 46 spikes' 57,000 synapses, and the merged buffer is `[15, 25,000]`.
+5. **`docs/design.md`** describes the code as it is (rewritten 8 October 2026), with what is not built in its section 12, except that section 6.2 does not yet say event delivery's gradient is the edge list's. Keep it true: a change to a contract, a format or a collection updates it in the same commit.
 6. **GPU and TPU measurements** (design phase 7), then kernels where profiling shows they pay: event delivery and bit-packed spikes. A plastic layer's step reads and writes several `[B, F, F]` arrays and backpropagating keeps one trace per step, so its CPU time is memory traffic (1.6 s per episode of 106 steps at F = 1001 on 4 cores); a remat of the step would trade compute for that memory.
 7. **Smaller deferred items:**
    - stochastic release should deplete Tsodyks-Markram resources by actual releases;
