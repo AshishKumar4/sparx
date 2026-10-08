@@ -175,6 +175,37 @@ def test_fast_weights_on_delayed_connections_pair_what_each_one_delivers():
     assert np.abs(trace).max() > 0.05 and len(np.unique(delay)) == 4
 
 
+def test_fast_weights_on_some_connections_are_the_others_with_no_plasticity():
+    # Picking the plastic edges by index gives the network whose other edges have alpha 0, with traces
+    # kept for the picked edges alone, here with delays and a modulated rule.
+    rng = np.random.default_rng(1)
+    size, edges, steps = 8, 30, 20
+    pre, post, delay = rng.integers(0, size, edges), rng.integers(0, size, edges), rng.integers(1, 4, edges)
+    plastic = np.sort(rng.choice(edges, 9, replace=False))
+    alpha = rng.normal(0, 0.5, len(plastic))
+    rule = ModulatedHebb(jnp.asarray(rng.normal(0, 1, size)), 0.1, 0.5, 0.05)
+    with jax.enable_x64(new_val=True):
+        wiring = Sparse(jnp.asarray(pre), jnp.asarray(post), jnp.asarray(rng.normal(0, 0.6, edges)), size,
+                        jnp.asarray(delay), longest_delay=3)
+        picked = FastWeights(jnp.asarray(alpha), rule, jnp.asarray(plastic))
+        some = RecurrentCell(RateCell(0.5), wiring, picked)
+        every = RecurrentCell(RateCell(0.5), wiring,
+                              FastWeights(jnp.zeros(edges).at[plastic].set(alpha), rule))
+        xs = jnp.asarray(rng.normal(0, 1, (steps, 3, size)))
+        (out, state), (want, full) = run(some, xs), run(every, xs)
+        np.testing.assert_allclose(out.value, want.value, rtol=1e-12, atol=1e-12)  # observed 1.7e-16
+        np.testing.assert_allclose(state.trace, full.trace[..., plastic], rtol=1e-12,
+                                   atol=1e-12)  # observed 1.1e-16
+        assert state.trace.shape == (3, len(plastic)) and np.abs(np.asarray(state.trace)).max() > 0.01
+
+
+def test_plastic_connections_are_picked_from_a_sparse_wiring():
+    with pytest.raises(ValueError, match="Sparse"):
+        fast = FastWeights(0.1, DecayingHebb(0.3), jnp.arange(2))
+        cell = RecurrentCell(RateCell(0.5), Dense(jnp.eye(3)), fast)
+        run(cell, jnp.ones((2, 3)))
+
+
 def test_a_decaying_trace_over_two_half_steps_is_one_whole_step():
     # keep = (1 - eta) ** dt: the trace decays as a rate per unit of time, whatever the step.
     rng = np.random.default_rng(0)

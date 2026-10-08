@@ -102,7 +102,7 @@ A spiking model reports where in the step its membrane crossed threshold, by lin
 | Physical neurons | `LeakyIntegrateAndFire`, `AdEx` (Brette and Gerstner 2005), `Izhikevich` (2003, and the twenty patterns of 2004), `HodgkinHuxley`, `GradedPotential` (Prinz et al. 2004) |
 | Synapses | `Delta`, `Exponential`, `Alpha`, `BiExponential`, `Graded`, each a current or a conductance by its `Receptor`; `MgBlock` (Jahr and Stevens 1990); `StochasticRelease` |
 | Plasticity | `PairSTDP`, `TripletSTDP` (Pfister and Gerstner 2006), `DopamineSTDP` (Izhikevich 2007), `TsodyksMarkram` |
-| Recurrence | `RecurrentCell` over a `Dense` or `Sparse` wiring, a `Sparse` one with a delay per edge, with optional `FastWeights` and a `HebbianRule`: `DecayingHebb`, `OjaHebb`, `ModulatedHebb`, `RetroactiveHebb` |
+| Recurrence | `RecurrentCell` over a `Dense` or `Sparse` wiring, a `Sparse` one with a delay per edge, with optional `FastWeights` on all its connections or a chosen few, and a `HebbianRule`: `DecayingHebb`, `OjaHebb`, `ModulatedHebb`, `RetroactiveHebb` |
 
 Linear synapses sum, so each receptor of a population holds one state per neuron, not one per synapse: `N` states in place of `E`, which is what makes a connectome affordable. Plastic projections keep per-edge weights and traces; short-term plasticity keeps one state per presynaptic neuron.
 

@@ -750,10 +750,18 @@ class FastWeights[Trace]:
     stores in it is what that sequence taught it. The rules are
     `DecayingHebb` and `OjaHebb` (2018), `ModulatedHebb` and
     `RetroactiveHebb` (Backpropamine, 2019), or any `HebbianRule`.
+
+    `connections` makes only some connections of a `Sparse` wiring plastic,
+    by their indices in its edge list: the rule keeps a trace for those
+    alone, `alpha` is one per plastic connection, and the others keep their
+    weights. A network whose few connections adapt fast, as most of a
+    brain's synapses do not, then holds and backpropagates through traces
+    for those few.
     """
 
     alpha: jax.Array | float
     rule: HebbianRule[Trace]
+    connections: jax.Array | None = None
 
 
 @struct.dataclass
@@ -841,7 +849,7 @@ class RecurrentCell[State, Trace]:
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> RecurrentState[State, Trace]:
         self.wiring.connections(shape)
         rule = None if self.fast_weights is None else self.fast_weights.rule
-        trace = None if rule is None else rule.init_trace(self.wiring, shape, dtype)
+        trace = None if rule is None else rule.init_trace(self._plastic(), shape, dtype)
         output = jnp.zeros(shape, dtype)
         # What is on its way is held in the dtype the wiring sends in, so it reaches the units unrounded.
         sent = jax.eval_shape(self._send, output, trace)
@@ -870,7 +878,23 @@ class RecurrentCell[State, Trace]:
             return self.wiring.send(sent, None)
         assert trace is not None, "init_state gives a cell with fast weights its trace"
         hebb = self.fast_weights.rule.hebb(trace)
-        return self.wiring.send(sent.astype(hebb.dtype), self.fast_weights.alpha * hebb)
+        fast = self.fast_weights.alpha * hebb
+        if self.fast_weights.connections is None:
+            return self.wiring.send(sent.astype(hebb.dtype), fast)
+        return self.wiring.send(sent, None) + self._plastic().send(sent.astype(hebb.dtype), fast)
+
+    def _plastic(self) -> Wiring:
+        """The connections the fast weights act on: the wiring, or the plastic ones of a sparse wiring, with
+        no weight of their own, since the wiring sends that."""
+        connections = None if self.fast_weights is None else self.fast_weights.connections
+        if connections is None:
+            return self.wiring
+        if not isinstance(self.wiring, Sparse):
+            raise ValueError("plastic connections are edges of a Sparse wiring, picked by index")
+        w = self.wiring
+        delay = None if w.delay is None else w.delay[connections]
+        return Sparse(w.pre[connections], w.post[connections], jnp.zeros_like(w.weight[connections]), w.size,
+                      delay, w.longest_delay)
 
     def _learned(self, state: RecurrentState[State, Trace], value: jax.Array, dt: float) -> Trace | None:
         """The trace after the step that output `value`, in its dtypes; None without fast weights."""
@@ -879,7 +903,7 @@ class RecurrentCell[State, Trace]:
         assert state.trace is not None, "init_state gives a cell with fast weights its trace"
         rule = self.fast_weights.rule
         kept = rule.hebb(state.trace).dtype
-        wiring = self.wiring
+        wiring = self._plastic()
         if state.history is not None:
             assert isinstance(wiring, Sparse), "only a sparse wiring has delays longer than a step"
             wiring = _Arrivals(wiring, state.history.astype(kept))

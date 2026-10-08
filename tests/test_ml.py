@@ -285,10 +285,13 @@ def test_a_delay_the_cell_does_not_keep_is_refused():
         run(RecurrentCell(RateCell(0.5), undelayed), jnp.asarray(currents(23)))
 
 
-def test_a_delayed_plastic_recurrence_fed_in_chunks_is_the_whole_run():
-    # The state carries what is on its way and the outputs the traces still pair with.
+@pytest.mark.parametrize("connections", [None, (1, 4, 6)])
+def test_a_delayed_plastic_recurrence_fed_in_chunks_is_the_whole_run(connections):
+    # The state carries what is on its way and the outputs the traces still pair with, for every edge
+    # plastic or a few.
     wiring = Sparse(jnp.asarray(PRE), jnp.asarray(POST), jnp.ones(9), F, jnp.asarray(DELAY), 4)
-    plastic = RecurrentCell(RateCell(0.5), wiring, FastWeights(0.1, DecayingHebb(0.3)))
+    picked = None if connections is None else jnp.asarray(connections)
+    plastic = RecurrentCell(RateCell(0.5), wiring, FastWeights(0.1, DecayingHebb(0.3), picked))
     x = jnp.asarray(currents(24))
     whole, final = run(plastic, x)
     first, state = run(plastic, x[:7])
