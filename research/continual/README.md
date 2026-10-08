@@ -60,4 +60,4 @@ Accuracy on the last trial at each evaluation during training on four doors:
 - Credit for exploration: with `--discount` above 0 a press is credited with what it teaches later trials, which the notes ask for and which a variance-reducing baseline (a learned value) would need first.
 - Replay and consolidation, and PC-ALM against BPTT for the slow weights, the notes' later stages.
 - A task whose dynamics change without announcement, the notes' first suggestion for an agent that must retain earlier skills.
-- A faster recurrence over the sparse wiring: the cores' steps take 17 and 35 times the dense network's.
+- A faster recurrence over the sparse wiring: since its gathers take rows (`docs/performance.md`), the cores' training steps take 9 and 25 times the dense network's.

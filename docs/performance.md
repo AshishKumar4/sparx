@@ -56,6 +56,10 @@ Steady-state steps per second as dew's display or the script reports them, on th
 
 The recurrent run differs in two ways, the `[64, 256] x [256, 256]` feedback product inside the time loop and the surrogate, and the cost of each has not been separated.
 
+### A recurrence over a sparse wiring
+
+A `RecurrentCell` over a `Sparse` wiring gathers each edge's source and sums at its target with `segment_sum`, and backpropagating through a gather scatters its gradient back. Gathering one value per edge and example along the last axis made that a scatter of single values. Putting the units first, so each edge gathers a row of the batch, makes it a scatter of rows. On the continual core of `research/continual` (256 units, 20,480 edges with delays of 1 to 8 steps, batch 32, 24 steps), sending through the wiring and back took 146 ms per sequence with single values and 80 ms with rows. A training step of the core went from 5.6 to 9.5 per second, and of the core with fast weights on 4,096 of its edges, whose rule reads each edge's units the same way, from 2.8 to 3.6 (`research/continual/train.py --doors 4`, measured 8 October 2026). Dense matrices, one per delay, took 32 to 40 ms for the same send: at this size and density (7.8% of the pairs of each delay) they would be faster still, and are not built.
+
 
 ## e-prop
 
