@@ -1,0 +1,18 @@
+# NEST 3.10.0 comes from conda-forge, which PyPI does not carry; the NEST tools
+# (make_nest_fixtures, make_nest_gap_fixtures, make_brunel_fixtures, the
+# `nest` step of make_microcircuit_fixtures) and
+# benchmarks/bench_reference_simulators.py run here.
+#
+#     conda env create -f tools/environments/nest.yml && conda activate sparx-nest
+name: sparx-nest
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - nest-simulator=3.10.0
+  - numpy
+  - scipy
+  - matplotlib
+  - pip
+  - pip:
+      - brian2==2.10.1

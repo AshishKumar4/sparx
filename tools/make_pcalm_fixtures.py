@@ -29,6 +29,7 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import numpy as np
+from references import require, require_checkout
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tests" / "fixtures" / "pcalm.npz"
@@ -48,6 +49,8 @@ METHODS = {
 
 def main():
     repo = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT.parent / "ref-pc-alm"
+    require("jax")
+    require_checkout(repo, "pc-alm")
     sys.path.insert(0, str(repo))
     jax.config.update("jax_enable_x64", val=True)
     from pcalm.inference import Schedule, infer_for_schedule, method_grad

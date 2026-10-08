@@ -24,7 +24,7 @@ the hash the fixture records. Commits fb03f787 (2023-12-05) to 06303ba8
 check always fails there:
 
     git -C <SpikingJelly checkout> checkout 6fbee6ed34ed5a65187f4721d1a412f6a526ca6a
-    pip install dcls==0.1.1 torch torchvision scipy matplotlib tqdm h5py
+    uv pip sync tools/environments/torch.txt
     PYTHONPATH=<SpikingJelly checkout>:<SNN-delays checkout> python tools/make_snn_delays_fixtures.py
 
 `model.py` imports wandb, and `datasets.py` torchaudio, at module level;
@@ -43,6 +43,7 @@ import spikingjelly
 import torch
 import torch.nn.functional as F
 from config import Config
+from references import require, require_checkout
 from snn_delays import SnnDelays
 from spikingjelly.activation_based import functional, surrogate
 from spikingjelly.datasets.shd import integrate_events_by_fixed_duration_shd
@@ -182,6 +183,9 @@ def schedules() -> dict[str, np.ndarray]:
 
 
 def main():
+    require("torch", "dcls")
+    require_checkout(Path(spikingjelly.__file__).resolve().parent.parent, "spikingjelly-2023")
+    require_checkout(Path(inspect.getfile(SnnDelays)).resolve().parent, "SNN-delays")
     # The first inputs whose hidden membranes all stay 1e-3 from threshold, so
     # float32 rounding cannot flip a spike between the two implementations.
     for seed in range(100):

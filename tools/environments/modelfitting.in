@@ -1,0 +1,4 @@
+brian2==2.10.1
+brian2modelfitting==0.4
+scipy<1.14
+bayesian-optimization<2

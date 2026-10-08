@@ -5,7 +5,7 @@ to `tests/fixtures/snntorch.npz`, which `tests/test_encode.py` compares
 `sparx.encode` against. The committed fixture came from snnTorch 1.0.0 with
 torch 2.14.1+cpu:
 
-    pip install snntorch==1.0.0
+    uv pip sync tools/environments/torch.txt
     python tools/make_snntorch_fixtures.py
 """
 
@@ -16,6 +16,7 @@ import snntorch
 import snntorch.functional as SF
 import snntorch.spikegen as spikegen
 import torch
+from references import require
 
 OUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "snntorch.npz"
 
@@ -94,6 +95,7 @@ def _neuron_cases(rng: np.random.Generator) -> dict[str, np.ndarray]:
 
 
 def main():
+    require("torch", "snntorch")
     rng = np.random.default_rng(0)
     data = rng.uniform(0, 1, (6, 7)).astype(np.float32)
     # The edges: zero and a value under the threshold never fire, one fires first.

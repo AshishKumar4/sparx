@@ -14,11 +14,13 @@ the eligibility vectors live.
 import argparse
 import statistics
 import time
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import results
 
 from sparx.dynamics import ALIFCell, LIFCell, decay
 from sparx.learn import EPropParams, bptt_loss, eprop
@@ -49,6 +51,7 @@ def main():
     parser.add_argument("--inputs", type=int, default=140)
     parser.add_argument("--hidden", type=int, default=128)
     parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--results", type=Path, help="append the measurements to this JSON lines file")
     args = parser.parse_args()
     print(jax.devices())
     rng = np.random.default_rng(0)
@@ -65,6 +68,7 @@ def main():
         return optax.softmax_cross_entropy_with_integer_labels(y, label).mean() / args.steps
 
     print(f"T={args.steps} B={args.batch} in={n} N={h}")
+    rows: list[results.Measurement] = []
     for name, cell in CELLS.items():
         rules = {
             "eprop": lambda p, cell=cell: eprop(cell, p, inputs, targets, loss, tau=20.0),
@@ -77,6 +81,11 @@ def main():
             scratch = memory.temp_size_in_bytes / 2 ** 20 if memory is not None else float("nan")
             seconds = timed(compiled, params, repeats=args.repeats)
             print(f"  {name:<5} {rule:<6} {seconds * 1e3:9.1f} ms   scratch {scratch:7.1f} MiB")
+            rows.append({"cell": name, "rule": rule, "median_ms": seconds * 1e3, "scratch_mib": scratch,
+                         "steps": args.steps, "batch": args.batch, "inputs": n, "hidden": h,
+                         "repeats": args.repeats})
+    taken = results.conditions(results.SPARX, [device.device_kind for device in jax.devices()])
+    results.write(args.results, "bench_eprop", rows, taken)
 
 
 if __name__ == "__main__":

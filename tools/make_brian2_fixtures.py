@@ -8,7 +8,7 @@ of each step (`run_regularly(when="end")`), after the threshold and reset,
 which is when Brian2's `on_pre` lands a spike sent with no delay. Saves the
 voltage after every step and the spikes to `tests/fixtures/brian2.npz`.
 
-    pip install brian2==<version below>
+    uv pip sync tools/environments/brian2.txt
     python tools/make_brian2_fixtures.py
 """
 
@@ -16,6 +16,7 @@ from pathlib import Path
 
 import brian2 as b2
 import numpy as np
+from references import require
 
 FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 OUT = FIXTURES / "brian2.npz"
@@ -144,6 +145,7 @@ def run(equations, method, unit, arrivals, nest, model):
 
 
 def main():
+    require("brian2")
     nest = np.load(FIXTURES / "nest.npz")
     cases = {"meta/brian2": np.array(b2.__version__)}
     coba = {"ex": nest["iaf_cond_exp/arrivals_ex"], "in": -nest["iaf_cond_exp/arrivals_in"]}

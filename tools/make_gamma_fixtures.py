@@ -7,7 +7,7 @@ another rate, one spike, or none. For each pair and three precisions,
 `get_gamma_factor(..., rate_correction=False)`, which is 1 - Γ, to
 `tests/fixtures/gamma.npz`.
 
-    pip install brian2modelfitting==0.4 "numpy<2" "scipy<1.14" "bayesian-optimization<2"
+    uv pip sync tools/environments/modelfitting.txt
     python tools/make_gamma_fixtures.py
 """
 
@@ -18,6 +18,7 @@ import brian2modelfitting
 import numpy as np
 from brian2 import ms
 from brian2modelfitting.metric import get_gamma_factor
+from references import require
 
 OUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "gamma.npz"
 DT, STEPS = 0.1, 20000
@@ -36,6 +37,7 @@ def jitter(rng, steps, width):
 
 
 def main():
+    require("brian2", "brian2modelfitting")
     rng = np.random.default_rng(0)
     data, model = [], []
     for _ in range(3):

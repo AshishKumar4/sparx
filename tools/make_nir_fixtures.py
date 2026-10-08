@@ -18,7 +18,7 @@ Each `.npz` holds the input, the output spikes and the first spiking
 layer's spikes (`hidden`). `tests/test_nir.py` imports each graph into
 sparx, runs it, and exports it back.
 
-    pip install snntorch==1.0.0 nir==1.0.8 nirtorch==2.6
+    uv pip sync tools/environments/torch.txt
     python tools/make_nir_fixtures.py
 
 `snntorch.export_nir` imports nirtorch, which builds a graph's edges from a
@@ -32,6 +32,7 @@ import nir
 import numpy as np
 import snntorch as snn
 import torch
+from references import require
 from snntorch import utils as snn_utils
 from snntorch.export_nir import export_to_nir
 
@@ -127,6 +128,7 @@ def rleaky() -> None:
 
 
 if __name__ == "__main__":
+    require("torch", "snntorch", "nir", "nirtorch")
     dense()
     conv()
     rleaky()

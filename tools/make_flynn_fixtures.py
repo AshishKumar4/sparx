@@ -27,6 +27,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from lifted import lift
+from references import require, require_checkout
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tests" / "fixtures" / "flynn.npz"
@@ -42,6 +43,8 @@ def spectral_rescaling(path: Path):
 
 def main():
     repo = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT.parent / "ref-fly-gym"
+    require("torch")
+    require_checkout(repo, "fly-gym")
     sys.path.insert(0, str(repo))
     rescale_spectral_radius_ = spectral_rescaling(repo / "core" / "utils.py")
     from models.connectome_rnn_model import LeakyConnectomeRNNCell

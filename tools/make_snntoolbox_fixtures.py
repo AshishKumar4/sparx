@@ -15,7 +15,7 @@ snntoolbox 0.6 predates Keras 3 and numpy 2. It runs with tf-keras
 (`TF_USE_LEGACY_KERAS=1`, set below) after two shims: `np.product`, and
 writing its numpy-scalar scale factors to json.
 
-    pip install snntoolbox tf-keras
+    uv pip sync tools/environments/snntoolbox.txt
     python tools/make_snntoolbox_fixtures.py
 """
 
@@ -32,6 +32,7 @@ os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 from importlib.metadata import version
 
 import numpy as np
+from references import require
 
 np.product = np.prod  # removed in numpy 2, still called by snntoolbox 0.6
 ROOT = Path(__file__).resolve().parent.parent
@@ -68,6 +69,7 @@ def cnn(keras, last):
 
 
 def main():
+    require("tensorflow", "snntoolbox")
     import tensorflow as tf
     from tensorflow import keras
 

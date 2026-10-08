@@ -1,6 +1,6 @@
 # Performance
 
-What was measured, on which hardware, and what was decided from it. Every number here comes from a command in this repository; rerun it on your hardware before relying on it.
+What was measured, on which hardware, and what was decided from it. Every number here comes from a command in this repository; rerun it on your hardware before relying on it. Each benchmark under `benchmarks/` takes `--results PATH` and appends its measurements there as JSON lines, each with the commit, the machine, its devices and the versions of the packages it ran (`benchmarks/results.py`).
 
 All numbers below are from a 4-core x86 CPU container (`jax.devices()` reports `cpu`), JAX 0.11.2, Flax 0.12.10, float32, median of 10 timed calls after 2 warm-up calls. No GPU or TPU was available, so nothing here describes accelerator behavior.
 
@@ -84,7 +84,7 @@ The readout's leak still needs one filtered trace per synapse, `B x N x (in + N)
 
 ## Against NEST and Brian2
 
-`python benchmarks/bench_networks.py` times sparx, and `python tools/bench_reference_simulators.py` (in the reference environment of HANDOFF.md) times NEST 3.10 and Brian2 2.10, on the same networks at `dt = 0.1` ms: Brunel's (2000) network at the paper's size in its asynchronous irregular regime, Brette et al.'s (2007) CUBA and COBA, and Potjans and Diesmann's (2014) cortical microcircuit at a fifth of its neurons and inputs, which NEST builds with the reference's own PyNEST code. The machine is a 4-core Intel Xeon at 2.8 GHz with 15 GB, otherwise idle; NEST runs 4 threads, Brian2's C++ standalone 4 OpenMP threads, and sparx JAX 0.11.2 on CPU in float32. Measured on 8 October 2026. Wall time per simulated second, after building and compiling:
+`python benchmarks/bench_networks.py` times sparx, and `python benchmarks/bench_reference_simulators.py` (in the NEST environment, `tools/environments/nest.yml`) times NEST 3.10 and Brian2 2.10, on the same networks at `dt = 0.1` ms: Brunel's (2000) network at the paper's size in its asynchronous irregular regime, Brette et al.'s (2007) CUBA and COBA, and Potjans and Diesmann's (2014) cortical microcircuit at a fifth of its neurons and inputs, which NEST builds with the reference's own PyNEST code. The machine is a 4-core Intel Xeon at 2.8 GHz with 15 GB, otherwise idle; NEST runs 4 threads, Brian2's C++ standalone 4 OpenMP threads, and sparx JAX 0.11.2 on CPU in float32. Measured on 8 October 2026. Wall time per simulated second, after building and compiling:
 
 | Network | Neurons, synapses | Excitatory rate | sparx | NEST | Brian2 standalone | Brian2 Cython |
 | --- | --- | --- | --- | --- | --- | --- |

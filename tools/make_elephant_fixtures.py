@@ -4,7 +4,7 @@ Random spike trains on a 0.5 ms grid, their van Rossum distances at three
 time constants and Victor-Purpura distances at three costs, from Elephant
 (NeuralEnsemble), to `tests/fixtures/elephant.npz`.
 
-    pip install elephant neo quantities
+    uv pip sync tools/environments/elephant.txt
     python tools/make_elephant_fixtures.py
 """
 
@@ -15,12 +15,14 @@ import neo
 import numpy as np
 import quantities as pq
 from elephant.spike_train_dissimilarity import van_rossum_distance, victor_purpura_distance
+from references import require
 
 OUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "elephant.npz"
 DT, STEPS, TRAINS = 0.5, 400, 6
 
 
 def main():
+    require("elephant")
     rng = np.random.default_rng(0)
     spikes = (rng.random((STEPS, TRAINS)) < 0.03).astype(np.float64)
     trains = [neo.SpikeTrain(np.flatnonzero(spikes[:, i]) * DT * pq.ms, t_stop=STEPS * DT * pq.ms)

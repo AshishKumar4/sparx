@@ -10,7 +10,7 @@ model. This reduces them to each spiking neuron's mean rate and its
 standard deviation over trials, in `tests/fixtures/shiu.npz`, which
 `tests/test_connectome.py` compares sparx's `shiu2024` against.
 
-    pip install pandas pyarrow
+    uv pip sync tools/environments/brian2.txt
     python tools/make_shiu_fixtures.py [path to the cloned repository]
 """
 

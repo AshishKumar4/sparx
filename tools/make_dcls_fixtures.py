@@ -7,7 +7,7 @@ with rounded positions and zero `SIG` at evaluation. Saves inputs,
 parameters, outputs and gradients to `tests/fixtures/dcls.npz`, which
 `tests/test_reference.py` compares `sparx.nn.DelayedDense` against.
 
-    pip install dcls==0.1.1 torch
+    uv pip sync tools/environments/torch.txt
     python tools/make_dcls_fixtures.py
 
 The reference's right padding, which lengthens the output by `(K - 1) // 2`
@@ -22,6 +22,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from DCLS.construct.modules import Dcls1d
+from references import require
 
 OUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "dcls.npz"
 INPUTS, OUTPUTS, KERNEL, STEPS, BATCH = 4, 5, 7, 12, 2
@@ -40,6 +41,7 @@ def run(layer: Dcls1d, x: np.ndarray, weights: np.ndarray) -> dict[str, np.ndarr
 
 
 def main():
+    require("torch", "dcls")
     torch.manual_seed(0)
     rng = np.random.default_rng(0)
     x = rng.normal(size=(STEPS, BATCH, INPUTS)).astype(np.float32)

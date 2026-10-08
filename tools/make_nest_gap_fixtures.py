@@ -8,7 +8,7 @@ different currents and are joined by one `gap_junction` of conductance `g`
 (nS), with NEST's waveform relaxation (`use_wfr`, its default) and without
 it. Saves the voltages after every step to `tests/fixtures/nest_gap.npz`.
 
-    pip install nest-simulator==<version below>
+    conda env create -f tools/environments/nest.yml
     python tools/make_nest_gap_fixtures.py
 
 The voltage NEST records at `T` is sparx's after step `T / dt - 1`.
@@ -18,6 +18,7 @@ from pathlib import Path
 
 import nest
 import numpy as np
+from references import require
 
 OUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "nest_gap.npz"
 DT, STEPS = 0.1, 200
@@ -48,6 +49,7 @@ def run(g: float, wfr: bool) -> np.ndarray:
 
 
 def main():
+    require("nest-simulator")
     nest.set_verbosity("M_ERROR")
     cases = {"meta/nest": np.array(nest.__version__), "meta/dt": np.array(DT),
              "currents": np.array(CURRENTS), "start": np.array(START),

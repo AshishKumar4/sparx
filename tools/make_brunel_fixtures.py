@@ -9,7 +9,7 @@ not match spike for spike, so `tests/test_graph.py` compares these
 statistics, with the spread over seeds as the scale of agreement. The
 statistics are `sparx.spiketrains`, loaded from its file.
 
-    pip install nest-simulator==<version below>
+    conda env create -f tools/environments/nest.yml
     python tools/make_brunel_fixtures.py
 """
 
@@ -18,6 +18,7 @@ from pathlib import Path
 
 import nest
 import numpy as np
+from references import require
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tests" / "fixtures" / "brunel.npz"
@@ -56,6 +57,7 @@ def run(g, eta, seed, j=0.1, delay=1.5):
 
 
 def main():
+    require("nest-simulator")
     nest.set_verbosity("M_ERROR")
     cases = {"meta/nest": np.array(nest.__version__), "meta/order": np.array(ORDER),
              "meta/duration": np.array(DURATION), "meta/skip": np.array(SKIP)}

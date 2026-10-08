@@ -10,7 +10,7 @@ Saves inputs, labels, weights and gradients to `tests/fixtures/ottt.npz`.
 The committed fixture came from OTTT-SNN c15d5da05eea0c48e1fa837a4f8073297006d93f
 with torch 2.14.1+cpu:
 
-    pip install torch
+    uv pip sync tools/environments/torch.txt
     python tools/make_ottt_fixtures.py [path to the cloned repository]
 
 The default path is next to the checkout the tool runs from, so a run from
@@ -23,6 +23,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
+from references import require, require_checkout
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tests" / "fixtures" / "ottt.npz"
@@ -31,6 +32,8 @@ STEPS, BATCH, SIZES, TAU = 12, 4, (6, 10, 8, 3), 2.0
 
 def main():
     repo = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT.parent / "ref-ottt"
+    require("torch")
+    require_checkout(repo, "OTTT-SNN")
     sys.path.insert(0, str(repo))
     from models.spiking_vgg import WrapedSNNOp
     from modules.neuron import OnlineLIFNode

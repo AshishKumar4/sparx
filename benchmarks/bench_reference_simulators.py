@@ -1,8 +1,8 @@
 """Time NEST and Brian2 on the networks `benchmarks/bench_networks.py` times in sparx.
 
-    python tools/bench_reference_simulators.py                       # every network and simulator
-    python tools/bench_reference_simulators.py --networks cuba --simulators nest
-    python tools/bench_reference_simulators.py --networks microcircuit --simulators nest \
+    python benchmarks/bench_reference_simulators.py                       # every network and simulator
+    python benchmarks/bench_reference_simulators.py --networks cuba --simulators nest
+    python benchmarks/bench_reference_simulators.py --networks microcircuit --simulators nest \
         --microcircuit microcircuit-PD14-model
 
 Brunel's (2000) network at the paper's size, 12,500 neurons in the
@@ -34,8 +34,10 @@ import argparse
 import os
 import tempfile
 import time
+from pathlib import Path
 
 import numpy as np
+import results
 
 DT = 0.1
 WARMUP = 100.0
@@ -238,11 +240,13 @@ def main():
                         choices=["nest", "brian2-cython", "brian2-standalone"])
     parser.add_argument("--threads", type=int, default=os.cpu_count())
     parser.add_argument("--seconds", type=float, default=1.0)
+    parser.add_argument("--results", type=Path, help="append the measurements to this JSON lines file")
     args = parser.parse_args()
     import brian2
     import nest
 
     print(f"NEST {nest.__version__}, Brian2 {brian2.__version__}, {args.threads} threads")
+    rows: list[results.Measurement] = []
     for name in args.networks:
         for simulator in args.simulators:
             if name == "microcircuit" and simulator != "nest":
@@ -258,6 +262,13 @@ def main():
                 built, per_second, rate = bench_brian2_standalone(name, args.threads, args.seconds)
             print(f"{name:7s} {simulator:18s} build {built:6.2f} s  "
                   f"per simulated second {per_second:6.2f} s  excitatory rate {rate:5.1f} Hz", flush=True)
+            rows.append({"network": name, "simulator": simulator, "build_s": built,
+                         "seconds_per_simulated_second": per_second, "rate_hz": rate,
+                         "simulated_s": args.seconds, "threads": args.threads, "dt_ms": DT})
+    # conda's NEST has no package metadata, so its version is its module's.
+    taken = results.conditions(("brian2", "numpy"), ["cpu"] * args.threads,
+                               known={"nest-simulator": nest.__version__})
+    results.write(args.results, "bench_reference_simulators", rows, taken)
 
 
 if __name__ == "__main__":

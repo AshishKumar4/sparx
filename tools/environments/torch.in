@@ -1,0 +1,12 @@
+torch==2.14.1+cpu
+snntorch==1.0.0
+nir==1.0.8
+nirtorch==2.6
+dcls==0.1.1
+torchvision
+loguru
+packaging
+scipy
+matplotlib
+tqdm
+h5py

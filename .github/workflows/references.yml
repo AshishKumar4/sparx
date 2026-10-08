@@ -1,0 +1,97 @@
+# Regenerates the reference fixtures in their locked environments
+# (tools/environments, tools/references.py) and compares each with
+# tests/fixtures/SHA256SUMS (tools/regenerate.py). Run by hand, or by pushing
+# a `references/**` branch; a job reports every tool it runs, and fails when
+# one does not reproduce its fixture.
+
+name: References
+
+on:
+  push:
+    branches: [ "references/**" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  torch:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Environment
+      run: |
+        python -m pip install uv
+        uv venv ../env && VIRTUAL_ENV=../env uv pip sync tools/environments/torch.txt
+    - name: Reference checkouts
+      run: |
+        clone() { git clone -q "https://github.com/$1" "../$2" && git -C "../$2" checkout -q "$3"; }
+        clone fangwei123456/spikingjelly spikingjelly c6cb8e46738bf6010cb94904fe5995e66d6451fc
+        clone fangwei123456/spikingjelly spikingjelly-2023 6fbee6ed34ed5a65187f4721d1a412f6a526ca6a
+        clone Thvnvtos/SNN-delays SNN-delays d169b4e3
+        clone pkuxmq/OTTT-SNN ref-ottt c15d5da05eea0c48e1fa837a4f8073297006d93f
+        clone uber-research/differentiable-plasticity ref-differentiable-plasticity 5bd29a18
+        clone uber-research/backpropamine ref-backpropamine 180c9101
+        clone ben-gitdev/fly-gym ref-fly-gym 8d964599119b420de67ee259434d273651a1a76d
+        # SNN-delays imports these at module level and never runs them.
+        mkdir ../stubs && touch ../stubs/wandb.py ../stubs/torchaudio.py
+    - name: Regenerate
+      run: |
+        # regenerate PYTHONPATH TOOL [ARGUMENTS]
+        regenerate() { env PYTHONPATH="$1" ../env/bin/python tools/regenerate.py "${@:2}" || failed="$failed $2"; }
+        up=$(realpath ..)
+        regenerate "" make_snntorch_fixtures.py
+        regenerate "" make_nir_fixtures.py
+        regenerate "" make_dcls_fixtures.py
+        regenerate "" make_ottt_fixtures.py ../ref-ottt
+        regenerate "" make_miconi_fixtures.py ../ref-differentiable-plasticity ../ref-backpropamine
+        regenerate "" make_flynn_fixtures.py ../ref-fly-gym
+        regenerate "$up/spikingjelly" make_reference_fixtures.py
+        regenerate "$up/spikingjelly-2023:$up/SNN-delays:$up/stubs" make_snn_delays_fixtures.py
+        test -z "$failed" || { echo "not reproduced:$failed"; exit 1; }
+
+  brian2:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Environments
+      run: |
+        python -m pip install uv
+        for env in brian2 modelfitting elephant snntoolbox; do
+          uv venv "../$env" && VIRTUAL_ENV="../$env" uv pip sync "tools/environments/$env.txt"
+        done
+    - name: Regenerate
+      run: |
+        regenerate() { "../$1/bin/python" tools/regenerate.py "${@:2}" || failed="$failed $2"; }
+        regenerate brian2 make_brian2_fixtures.py
+        regenerate brian2 make_brian2_benchmarks.py
+        regenerate modelfitting make_gamma_fixtures.py
+        regenerate elephant make_elephant_fixtures.py
+        regenerate snntoolbox make_snntoolbox_fixtures.py
+        test -z "$failed" || { echo "not reproduced:$failed"; exit 1; }
+
+  nest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: conda-incubator/setup-miniconda@v3
+      with:
+        environment-file: tools/environments/nest.yml
+        activate-environment: sparx-nest
+        miniforge-version: latest
+    - name: Regenerate
+      run: |
+        regenerate() { python tools/regenerate.py "$@" || failed="$failed $1"; }
+        regenerate make_nest_fixtures.py
+        regenerate make_nest_gap_fixtures.py
+        regenerate make_brunel_fixtures.py
+        test -z "$failed" || { echo "not reproduced:$failed"; exit 1; }

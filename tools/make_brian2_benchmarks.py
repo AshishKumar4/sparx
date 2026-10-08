@@ -11,7 +11,7 @@ delay. Saves, per seed, the excitatory and inhibitory mean rates, the mean
 CV of interspike intervals and the population Fano factor over
 `[SKIP, DURATION]` ms to `tests/fixtures/benchmarks.npz`.
 
-    pip install brian2==<version below>
+    uv pip sync tools/environments/brian2.txt
     python tools/make_brian2_benchmarks.py
 """
 
@@ -20,6 +20,7 @@ from pathlib import Path
 
 import brian2 as b2
 import numpy as np
+from references import require
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tests" / "fixtures" / "benchmarks.npz"
@@ -75,6 +76,7 @@ def run(model, seed):
 
 
 def main():
+    require("brian2")
     cases = {"meta/brian2": np.array(b2.__version__), "meta/duration": np.array(DURATION),
              "meta/skip": np.array(SKIP)}
     for model in ("cuba", "coba"):

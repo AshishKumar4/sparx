@@ -7,7 +7,7 @@ networks; and records the weights plastic synapses transmit. Saves them with
 the inputs to `tests/fixtures/nest.npz`, which `tests/test_simulators.py`,
 `tests/test_graph.py` and `tests/test_plasticity.py` compare sparx against.
 
-    pip install nest-simulator==<version below>
+    conda env create -f tools/environments/nest.yml
     python tools/make_nest_fixtures.py
 
 Times are mapped onto sparx's steps (`sparx.dynamics.core`): NEST stamps an
@@ -20,6 +20,7 @@ from pathlib import Path
 
 import nest
 import numpy as np
+from references import require
 
 OUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "nest.npz"
 DT, STEPS, NEURONS, DELAY = 0.1, 3000, 3, 0.1
@@ -328,6 +329,7 @@ def network(rng, model, params, weights):
 
 
 def main():
+    require("nest-simulator")
     nest.set_verbosity("M_ERROR")
     rng = np.random.default_rng(0)
     cases = {"meta/nest": np.array(nest.__version__), "meta/dt": np.array(DT)}

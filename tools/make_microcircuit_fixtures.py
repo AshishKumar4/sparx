@@ -42,6 +42,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+from references import require, require_checkout
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tests" / "fixtures" / "microcircuit.npz"
@@ -199,8 +200,11 @@ def main():
     run.add_argument("network", type=Path, help="the network `export` wrote")
     args = parser.parse_args()
     if args.command == "export":
+        require("jax")
         export(args.network)
         return
+    require("nest-simulator")
+    require_checkout(args.reference, "microcircuit-PD14-model")
     import nest
 
     nest.set_verbosity("M_ERROR")

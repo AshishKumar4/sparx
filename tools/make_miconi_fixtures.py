@@ -32,7 +32,7 @@ Saves all four to `tests/fixtures/miconi.npz`. The committed fixture came
 from differentiable-plasticity 5bd29a18 and backpropamine 180c9101, with
 torch 2.14.1+cpu:
 
-    pip install torch
+    uv pip sync tools/environments/torch.txt
     python tools/make_miconi_fixtures.py [differentiable-plasticity] [backpropamine]
 
 The repositories default to `ref-differentiable-plasticity` and
@@ -48,6 +48,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from lifted import lift
+from references import require, require_checkout
 from torch import nn
 from torch.autograd import Variable
 
@@ -216,6 +217,9 @@ def retroactive(backpropamine: Path) -> dict[str, np.ndarray]:
 def main():
     plasticity = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT.parent / "ref-differentiable-plasticity"
     backpropamine = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT.parent / "ref-backpropamine"
+    require("torch")
+    require_checkout(plasticity, "differentiable-plasticity")
+    require_checkout(backpropamine, "backpropamine")
     torch.set_default_dtype(torch.float64)
     cases = {"meta/torch": np.array(torch.__version__)}
     for name, case in (("hebb", hebb(plasticity)), ("oja", oja(plasticity)),

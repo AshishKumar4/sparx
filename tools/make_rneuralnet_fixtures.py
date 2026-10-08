@@ -30,6 +30,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+from references import require_checkout
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tests" / "fixtures" / "rneuralnet.npz"
@@ -73,6 +74,7 @@ def network(rng):
 
 def main():
     repo = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT.parent / "ref-RNeuralNet-Research"
+    require_checkout(repo, "RNeuralNet-Research")
     commit = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True,
                             check=True).stdout.strip()
     version = subprocess.run(["g++", "--version"], capture_output=True, text=True, check=True)

@@ -10,7 +10,7 @@ c6cb8e46738bf6010cb94904fe5995e66d6451fc with torch 2.14.1+cpu:
 
     git clone https://github.com/fangwei123456/spikingjelly ../spikingjelly
     git -C ../spikingjelly checkout c6cb8e46738bf6010cb94904fe5995e66d6451fc
-    pip install torch torchvision loguru packaging    # SpikingJelly's own imports
+    uv pip sync tools/environments/torch.txt
     PYTHONPATH=../spikingjelly python tools/make_reference_fixtures.py
 
 Every case asserts that no membrane comes within `MARGIN` of its threshold,
@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 import spikingjelly
 import torch
+from references import require, require_checkout
 from spikingjelly.activation_based import neuron, surrogate
 
 MARGIN = 1e-4
@@ -160,6 +161,8 @@ def main():
     torch.manual_seed(0)
     rng = np.random.default_rng(0)
     source = Path(spikingjelly.__file__).resolve().parent.parent
+    require("torch")
+    require_checkout(source, "spikingjelly")
     commit = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], capture_output=True, text=True,
                             check=True).stdout.strip()
     cases = lif_cases(rng) | psn_cases(rng) | sew_cases(rng)

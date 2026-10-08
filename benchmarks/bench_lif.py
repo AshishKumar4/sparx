@@ -11,10 +11,12 @@ script on the hardware they name.
 import argparse
 import statistics
 import time
+from pathlib import Path
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+import results
 
 import sparx
 from sparx.dynamics import LIFCell, SynapticInput, decay, run
@@ -31,14 +33,18 @@ def timed(fn, *args, repeats):
     return statistics.median(times)
 
 
-def lif_unroll(args):
+def lif_unroll(args) -> list[results.Measurement]:
     x = jax.random.normal(jax.random.key(0), (args.steps, args.batch, args.features))
     print(f"LIF forward+backward, T={args.steps} B={args.batch} F={args.features}")
+    rows = []
     for unroll in (1, 2, 4, 8, 16):
         def loss(x, unroll=unroll):
             return jnp.sum(run(LIFCell(0.8), x, unroll=unroll)[0].value)
         fn = jax.jit(jax.grad(loss))
-        print(f"  unroll={unroll:<3} {timed(fn, x, repeats=args.repeats) * 1e3:8.2f} ms")
+        milliseconds = timed(fn, x, repeats=args.repeats) * 1e3
+        print(f"  unroll={unroll:<3} {milliseconds:8.2f} ms")
+        rows.append({"case": f"unroll {unroll}", "median_ms": milliseconds, **shape(args)})
+    return rows
 
 
 class Folded(nn.Module):
@@ -67,15 +73,23 @@ def per_step(params, x):
     return jax.lax.scan(step, states, x)[1]
 
 
-def folding(args):
+def folding(args) -> list[results.Measurement]:
     x = (jax.random.uniform(jax.random.key(0), (args.steps, args.batch, args.features)) < 0.2)
     x = x.astype(jnp.float32)
     print(f"Two Dense+LIF layers forward+backward, T={args.steps} B={args.batch} F={args.features}")
     net = Folded(args.features)
     params = net.init(jax.random.key(1), x)
+    rows = []
     for name, forward in (("folded over time", net.apply), ("per step in the scan", per_step)):
         fn = jax.jit(jax.grad(lambda p, x, forward=forward: jnp.sum(forward(p, x))))
-        print(f"  {name:<22} {timed(fn, params, x, repeats=args.repeats) * 1e3:8.2f} ms")
+        milliseconds = timed(fn, params, x, repeats=args.repeats) * 1e3
+        print(f"  {name:<22} {milliseconds:8.2f} ms")
+        rows.append({"case": name, "median_ms": milliseconds, **shape(args)})
+    return rows
+
+
+def shape(args) -> dict[str, int]:
+    return {"steps": args.steps, "batch": args.batch, "features": args.features, "repeats": args.repeats}
 
 
 def main():
@@ -84,10 +98,12 @@ def main():
     parser.add_argument("--batch", type=int, default=64)
     parser.add_argument("--features", type=int, default=512)
     parser.add_argument("--repeats", type=int, default=10)
+    parser.add_argument("--results", type=Path, help="append the measurements to this JSON lines file")
     args = parser.parse_args()
     print(jax.devices())
-    lif_unroll(args)
-    folding(args)
+    rows = lif_unroll(args) + folding(args)
+    taken = results.conditions(results.SPARX, [device.device_kind for device in jax.devices()])
+    results.write(args.results, "bench_lif", rows, taken)
 
 
 if __name__ == "__main__":

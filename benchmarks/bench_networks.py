@@ -14,16 +14,18 @@ that chunk from the state it leaves, as `simulate` does, after one chunk to
 settle (five for the microcircuit, whose onset lasts 500 ms). It also
 prints an excitatory population's mean rate over the timed chunks (layer
 2/3's in the microcircuit), to show the run is the network
-`tools/bench_reference_simulators.py` runs in NEST and Brian2. `--format`
+`benchmarks/bench_reference_simulators.py` runs in NEST and Brian2. `--format`
 sets every projection's format in place of the builders' `"auto"`.
 """
 
 import argparse
 import dataclasses
 import time
+from pathlib import Path
 
 import jax
 import numpy as np
+import results
 
 from sparx.graph import PopulationRate
 from sparx.graph.models import brunel, coba, cuba, microcircuit
@@ -38,7 +40,7 @@ CHUNK = 100.0
 """ms; `simulate`'s default."""
 
 
-def bench(name: str, seconds: float, format: str | None) -> None:
+def bench(name: str, seconds: float, format: str | None) -> results.Measurement:
     start = time.perf_counter()
     network = NETWORKS[name]()
     if format is not None:
@@ -75,6 +77,9 @@ def bench(name: str, seconds: float, format: str | None) -> None:
     rate = float(np.mean(np.concatenate([np.asarray(r) for r in rates])))
     print(f"{name:7s} {format or 'auto':6s} build {built:6.2f} s  compile {compiling:6.2f} s  "
           f"per simulated second {per_second:6.2f} s  excitatory rate {rate:5.1f} Hz", flush=True)
+    return {"network": name, "format": format or "auto", "build_s": built, "compile_s": compiling,
+            "seconds_per_simulated_second": per_second, "rate_hz": rate, "simulated_s": seconds,
+            "dt_ms": network.dt, "chunk_ms": CHUNK}
 
 
 def main() -> None:
@@ -82,10 +87,12 @@ def main() -> None:
     parser.add_argument("--networks", nargs="+", default=list(NETWORKS), choices=list(NETWORKS))
     parser.add_argument("--seconds", type=float, default=2.0, help="simulated seconds timed per network")
     parser.add_argument("--format", choices=["edges", "dense", "events"], default=None)
+    parser.add_argument("--results", type=Path, help="append the measurements to this JSON lines file")
     args = parser.parse_args()
     print(f"jax {jax.__version__} on {jax.devices()[0].device_kind}, {jax.device_count()} device(s)")
-    for name in args.networks:
-        bench(name, args.seconds, args.format)
+    rows = [bench(name, args.seconds, args.format) for name in args.networks]
+    taken = results.conditions(results.SPARX, [device.device_kind for device in jax.devices()])
+    results.write(args.results, "bench_networks", rows, taken)
 
 
 if __name__ == "__main__":
