@@ -43,7 +43,7 @@ import spikingjelly
 import torch
 import torch.nn.functional as F
 from config import Config
-from references import require, require_checkout
+from references import CHECKOUTS, require, require_checkout
 from snn_delays import SnnDelays
 from spikingjelly.activation_based import functional, surrogate
 from spikingjelly.datasets.shd import integrate_events_by_fixed_duration_shd
@@ -151,9 +151,9 @@ def record(seed: int) -> tuple[dict[str, np.ndarray], float]:
 
     source = Path(inspect.getfile(integrate_events_by_fixed_duration_shd)).read_bytes()
     cases = {"x": x, "labels": labels, "tau": np.float64(Small.init_tau), "sig": np.float32(SIG), **weights,
-             **positions, **train, **evaluated, "margin": np.float64(closest),
+             **positions, **train, **evaluated, "margin": np.float32(closest),
              "events/times": times, "events/units": units, "events/frames": frames,
-             "meta/spikingjelly": np.array(str(Path(spikingjelly.__file__).parent)),
+             "meta/spikingjelly_commit": np.array(CHECKOUTS["spikingjelly-2023"]),
              "meta/spikingjelly_shd_sha256": np.array(hashlib.sha256(source).hexdigest()),
              "meta/dcls": np.array(importlib.metadata.version("dcls")),
              "meta/torch": np.array(torch.__version__), "meta/seed": np.array(seed)}
