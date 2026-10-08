@@ -196,7 +196,7 @@ Projections compile to one of these execution formats, chosen per projection by 
 | Dense matmul | `pre x post` | layers, small dense projections, accelerators' matrix units |
 | Convolution | per kernel | spatially structured layers |
 | Edge list with `segment_sum` by postsynaptic index | `E` | sparse recurrent graphs, connectomes |
-| Event list, capacity-bounded | `active x fan-out` | very sparse firing; a fixed capacity keeps shapes static, and overflow is detected and raises |
+| Events, in passes of a few spiking neurons | `active x fan-out` | spiking populations with one delay and fixed weights, the default; a step makes as many passes as it has spikes, so shapes stay static and no spike is dropped |
 
 Delays use a ring buffer of the last `D` steps of spikes per population, stored as bits. Each edge reads its presynaptic neuron at its own delay. Per-edge delays cost one gather per edge per step; projections with one delay per projection read one slice.
 

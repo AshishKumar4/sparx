@@ -121,7 +121,7 @@ spikes = result.records["spikes"]             # [2000, 1000]: one row of boolean
 
 Brunel's balanced network at the paper's size, 10,000 excitatory and 2,500 inhibitory LIF neurons, in its asynchronous irregular regime at 37 Hz.
 
-The physical models match NEST 3.10 and Brian2 2.10 spike for spike where the dynamics are deterministic, and in rate, irregularity and synchrony where they are chaotic. Populations can hold graded neurons and connect through stochastic release, gap junctions and neuromodulators. Projections can carry STDP, triplet STDP, dopamine-modulated STDP and short-term plasticity ([guide](docs/guide.md#simulating-circuits)).
+The physical models match NEST 3.10 and Brian2 2.10 spike for spike where the dynamics are deterministic, and in rate, irregularity and synchrony where they are chaotic. On a 4-core CPU, sparx simulates a second of Brunel's network in 9.6 s, NEST in 7.5 s and Brian2 in 11.8 s ([performance](docs/performance.md#against-nest-and-brian2)). Populations can hold graded neurons and connect through stochastic release, gap junctions and neuromodulators. Projections can carry STDP, triplet STDP, dopamine-modulated STDP and short-term plasticity ([guide](docs/guide.md#simulating-circuits)).
 
 ## Connectomes
 

@@ -184,6 +184,18 @@ def small_network():
     return network, network.init(jax.random.key(0))
 
 
+def test_auto_delivers_by_events_what_it_can_and_the_spikes_are_the_edge_lists():
+    network, variables = small_network()
+    assert "by_pre" in variables["connectome"]["edges"]["a->a:ex"]  # spiking, one delay, fixed weights
+    plastic = network.clone(projections=(dataclasses.replace(network.projections[0], trainable=True),))
+    assert "by_pre" not in plastic.init(jax.random.key(0))["connectome"]["edges"]["a->a:ex"]
+    edges = network.clone(projections=(dataclasses.replace(network.projections[0], format="edges"),))
+    runs = [simulate(n, n.init(jax.random.key(0)), duration=50.0, key=jax.random.key(1),
+                     monitors={"a": SpikeRaster("a")}).records["a"] for n in (network, edges)]
+    np.testing.assert_array_equal(*runs)
+    assert runs[0].sum() > 100
+
+
 def test_simulate_does_not_depend_on_the_chunk_length():
     network, variables = small_network()
     runs = [simulate(network, variables, duration=50.0, key=jax.random.key(1),
@@ -370,7 +382,7 @@ def shiu_network(format):
                                                 "drive": Receptor(Delta(after_threshold=True))},
                             reset_synapses=True, freeze_synapses=True)
     projection = Projection("n", "n", FromEdges(case["pre"], case["post"]), weight=case["counts"] * 0.275,
-                            delay=1.8, receptor="syn", format=format, capacity=64)
+                            delay=1.8, receptor="syn", format=format, per_pass=4)
     network = Network((population,), (projection,), inputs=(ArrivalInput("n", "stim", "drive"),), dt=DT,
                       dtype=jnp.float64)
     drive = np.zeros_like(case["spikes"])
@@ -388,11 +400,15 @@ def test_shius_neuron_model_fires_with_brian2_spike_for_spike(format):
     assert expected[:, 10:].sum() > 40  # the network, not only the stimulated neurons, fires
 
 
-def test_event_projections_raise_when_over_capacity():
-    network, drive, _ = shiu_network("events")
-    network = network.clone(projections=(dataclasses.replace(network.projections[0], capacity=2),))
-    with jax.enable_x64(new_val=True), pytest.raises(RuntimeError, match="capacity"):
-        simulate(network, network.init(jax.random.key(0)), duration=len(drive) * DT, drive={"stim": drive})
+def test_event_delivery_takes_as_many_passes_as_a_step_has_spikes():
+    # One neuron a pass: every step with more spikes than that takes several, and fires as Brian2 does.
+    network, drive, expected = shiu_network("events")
+    network = network.clone(projections=(dataclasses.replace(network.projections[0], per_pass=1),))
+    with jax.enable_x64(new_val=True):
+        result = simulate(network, network.init(jax.random.key(0)), duration=len(drive) * DT,
+                          drive={"stim": drive}, monitors={"n": SpikeRaster("n")})
+    np.testing.assert_array_equal(result.records["n"], expected > 0)
+    assert (expected > 0).sum(axis=1).max() > 1
 
 
 def test_population_rate_is_the_raster_mean_in_hz():

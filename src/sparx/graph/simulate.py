@@ -143,7 +143,6 @@ def simulate(network: Network, variables: Variables, *, duration: float,
                              stop - start)
         if place is not None:
             state = jax.device_put(state, place(state))
-        _check_capacity(state, stop * network.dt)
         if checkpoints is not None:
             _save(checkpoints, stop, state, key, network.dt, trials)
         chunks.append(jax.device_get(records))
@@ -160,14 +159,6 @@ def _checked(drive: Drive | None, steps: int, time_axis: int) -> dict[str, np.nd
             raise ValueError(f"drive {name!r} needs a time axis of {steps} steps at {time_axis}, "
                              f"got shape {value.shape}")
     return checked
-
-
-def _check_capacity(state: Variables, until: float) -> None:
-    overflow = jax.device_get(state["network"]["overflow"])
-    over = {name: int(np.max(count)) for name, count in overflow.items() if np.max(count)}
-    if over:
-        raise RuntimeError(f"event projections exceeded their capacity in {over} steps (by projection) "
-                           f"before {until} ms; raise Projection.capacity")
 
 
 def _join(monitors: Mapping[str, Monitor], chunks: list[dict[str, np.ndarray]],

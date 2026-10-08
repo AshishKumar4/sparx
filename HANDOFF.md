@@ -82,7 +82,10 @@ Open in dew, for sparx:
    - Anything awkward to express there is a gap to fix in sparx or dew.
 3. **Remaining DX review items** (the review's numbering). Items 7 and 11 are done: `docs/units.md` lists the two conventions of time and units and the two units of rates, and `EPropObjective` trains a `SpikingMLP`, so an e-prop run loads back as that model. Open:
    - the rest of the documentation plan: tutorials from training to export, a cortical circuit with a Brian2/NEST lookup table, connectomes, mixing the halves, and generated API pages. Done: a short README with a banner, six diagrams and three clips, and `docs/guide.md`, which holds the reference material the README used to; `tests/test_readme.py` runs the code blocks of both.
-4. **Speed benchmarks against Brian2 and NEST** on an idle machine. There are none today; the parity tests only check agreement.
+4. **Speed.** `benchmarks/bench_networks.py` and `tools/bench_reference_simulators.py` compare sparx with NEST and Brian2 (`docs/performance.md`): per simulated second, Brunel's 12,500 neurons take sparx 9.6 s, NEST 7.5 s and Brian2 11.8 s; CUBA 0.71, 0.42 and 0.33 s; COBA 1.01, 3.85 and 0.54 s. Open:
+   - the connectome rows of `docs/performance.md` predate the event delivery of 8 October 2026 and need measuring again with the FlyWire tables;
+   - drawing Brunel's 15.6M synapses takes 12.5 s against NEST's 2.8 s;
+   - a step of CUBA costs twice Brian2's; most of it is the fixed work of finding spikes and running four projections' loops.
 5. **A `docs/design.md` rewrite** to describe the code as it is. Sections 5 and 6 still sketch an older monitor and receptor API, section 4.1 lists no `jump` in `SynapticInput`, section 4.4 promises a `units` table no code has (`docs/units.md` is the convention), and section 4.2 gives LIF and AdEx the wrong integration schemes.
 6. **GPU and TPU measurements** (design phase 7), then kernels where profiling shows they pay: event delivery and bit-packed spikes. A plastic layer's step reads and writes several `[B, F, F]` arrays and backpropagating keeps one trace per step, so its CPU time is memory traffic (1.6 s per episode of 106 steps at F = 1001 on 4 cores); a remat of the step would trade compute for that memory.
 7. **Smaller deferred items:**

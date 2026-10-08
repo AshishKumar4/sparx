@@ -188,8 +188,8 @@ def matched_w_syn(connectome: Connectome, *, w_syn: float = 0.275,
 
 
 def shiu2024(connectome: Connectome, *, stimuli: Sequence[tuple[Sequence[int], float]] = (),
-             silenced: Sequence[int] = (), dt: float = 0.1, capacity: int = 4096,
-             w_syn: float = 0.275, stimulus_scale: float = 250.0) -> Network:
+             silenced: Sequence[int] = (), dt: float = 0.1, w_syn: float = 0.275,
+             stimulus_scale: float = 250.0) -> Network:
     """Shiu et al.'s (Nature 2024) leaky integrate-and-fire model of the whole fly brain.
 
     Every neuron is one LIF: membrane 20 ms, rest and reset -52 mV,
@@ -221,8 +221,7 @@ def shiu2024(connectome: Connectome, *, stimuli: Sequence[tuple[Sequence[int], f
     receptors = {"syn": Receptor(Exponential(5.0)), "stimulus": Receptor(Delta(after_threshold=True))}
     brain = Population("brain", connectome.size, neuron, receptors, reset_synapses=True, freeze_synapses=True)
     synapses = Projection("brain", "brain", FromEdges(connectome.pre, connectome.post),
-                          weight=connectome.synapses * w_syn, delay=1.8, receptor="syn", format="events",
-                          capacity=capacity)
+                          weight=connectome.synapses * w_syn, delay=1.8, receptor="syn", format="events")
     inputs = tuple(PoissonInput("brain", rate=rate, weight=stimulus_scale * w_syn, receptor="stimulus",
                                 neurons=tuple(int(i) for i in neurons)) for neurons, rate in stimuli)
     return Network((brain,), (synapses,), inputs, dt=dt)

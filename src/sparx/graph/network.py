@@ -93,6 +93,11 @@ __all__ = ["ArrivalInput", "Connections", "CurrentInput", "Drive", "GapJunction"
 
 DENSE_LIMIT = 2 ** 25
 EVENT_BLOCK = 4096
+EVENT_PADDING = 2.0
+"""An event projection whose out-degrees are this close to even, the widest at most this many times the
+mean, keeps each neuron's out-edges as one padded row, read without a search; so does one whose padded
+rows hold at most `EVENT_ROWS` entries, whatever the spread."""
+EVENT_ROWS = 2 ** 20
 DENSE_DENSITY = 0.02
 GRID_TOLERANCE = 1e-3
 """How far from a whole number of steps, in steps, a time may be and still count as on the grid: wide
@@ -206,17 +211,20 @@ class Projection:
     trainable: bool = False
     name: str | None = None
     format: Literal["auto", "edges", "dense", "events"] = "auto"
-    """How the projection is stored and delivered: an edge list gathered and summed per postsynaptic neuron,
-    or a dense `[pre, post]` matrix multiplied by the spikes. `"auto"` takes the matrix for a projection with
-    one delay and fixed weights when it has at most `DENSE_LIMIT` entries and a density of at least
-    `DENSE_DENSITY`, where a matrix product costs less than the gather on CPUs and accelerators.
-    `"events"` visits only the edges of neurons that spiked, for large graphs with sparse activity
-    (connectomes): its cost per step is the spiking neurons' out-degree, not the edge count. A graded
-    population has no silent neurons to skip, so its projections are edges or dense; one with stochastic
-    release draws per edge, so it is edges or events."""
-    capacity: int = 4096
-    """For `format="events"`: the most presynaptic neurons spiking in one step that a step delivers. A step
-    over capacity is counted, and `simulate` raises. Their edges have no limit."""
+    """How the projection is stored and delivered. `"events"` visits only the edges of neurons that spiked,
+    so a step costs the spiking neurons' out-degree, not the edge count; `"edges"` gathers and sums an edge
+    list per postsynaptic neuron; `"dense"` multiplies the spikes by a `[pre, post]` matrix. `"auto"` takes
+    events whenever it can, from a spiking population with one delay and fixed weights. Otherwise it takes
+    the matrix when it has at most `DENSE_LIMIT` entries and a density of at least `DENSE_DENSITY`, where a
+    matrix product costs less than the gather, and the edge list beyond. A graded population has no silent
+    neurons to skip, so its projections are edges or dense; one with stochastic release draws per edge, so
+    it is edges or events. On Brunel's network at 12,500 neurons, events took 11.5 s per simulated second
+    and edges 457 s (`benchmarks/bench_networks.py`, a 4-core CPU)."""
+    per_pass: int = 16
+    """For `format="events"`: how many spiking neurons one pass of a step delivers; a step makes as many
+    passes as its spikes need. Each pass finds them with `jax.lax.top_k` over the population. On a 4-core
+    CPU, 16 was fastest for CUBA and COBA (2 and 7 spikes a step) and 32 for Brunel's 12,500 neurons (46),
+    10% either way (`benchmarks/bench_networks.py`)."""
 
     @property
     def key(self) -> str:
@@ -520,6 +528,15 @@ def _initial(population: Population, state: PointNeuronState, rng: np.random.Gen
     return PointNeuronState(neuron, synapses)
 
 
+def _events(p: Projection, delays: np.ndarray, pre: Population) -> bool:
+    """Whether `p` delivers by events: as asked, or under `"auto"` whenever it can, from a spiking
+    population with one delay and fixed weights, since its cost then follows the spikes, not the edges."""
+    fixed = not np.ndim(delays) and p.plasticity is None and not p.trainable
+    if p.format == "events" and not fixed:
+        raise ValueError(f"{p.key}: an event projection needs one delay and fixed weights")
+    return p.format == "events" or (p.format == "auto" and fixed and not pre.graded)
+
+
 def _dense(p: Projection, delays: np.ndarray, edges: int, pre: int, post: int) -> bool:
     if p.format != "auto":
         if p.format == "dense" and (np.ndim(delays) or p.plasticity is not None or p.trainable):
@@ -530,6 +547,31 @@ def _dense(p: Projection, delays: np.ndarray, edges: int, pre: int, post: int) -
         return p.format == "dense"
     small = pre * post <= DENSE_LIMIT and edges >= DENSE_DENSITY * pre * post
     return small and not np.ndim(delays) and p.plasticity is None and not p.trainable and p.release is None
+
+
+def _event_edges(edges: EdgeList, weight: np.ndarray, delays: np.ndarray, pre: int) -> dict[str, np.ndarray]:
+    """An event projection's edges sorted by presynaptic neuron, with where each neuron's run starts and
+    how long it is, and its padded rows when the out-degrees are near even or few (`EVENT_PADDING`)."""
+    order = np.lexsort((edges.post, edges.pre))
+    counts = np.bincount(edges.pre, minlength=pre)
+    built = {"delay": np.asarray(np.ravel(delays)[0] if np.size(delays) else 0, np.int32),
+             "by_pre": edges.post[order],
+             "start": np.append(np.cumsum(counts) - counts, 0).astype(np.int32),
+             "count": np.append(counts, 0).astype(np.int32),
+             "weight": weight[order]}
+    if len(edges) and counts.max() * pre <= max(EVENT_PADDING * len(edges), EVENT_ROWS):
+        built["rows"] = _rows(counts, len(edges))
+    return built
+
+
+def _rows(counts: np.ndarray, edges: int) -> np.ndarray:
+    """Each presynaptic neuron's out-edges, by their index in presynaptic order, as one row padded with
+    `edges`, past the last edge; a last row of padding stands for no neuron."""
+    widest = int(counts.max())
+    starts = np.cumsum(counts) - counts
+    column = np.arange(widest)
+    rows = np.where(column < counts[:, None], starts[:, None] + column, edges)
+    return np.concatenate([rows, np.full((1, widest), edges)]).astype(np.int32)
 
 
 def _poisson_table(mean: float) -> np.ndarray:
@@ -584,8 +626,6 @@ class NetworkState(TypedDict):
     """By projection key, the projections with plasticity."""
     short_term: dict[str, ReleaseState]
     """By projection key, the projections with short-term release."""
-    overflow: dict[str, jax.Array]
-    """Per event projection, how many steps had more spiking neurons than its capacity."""
     modulators: dict[str, jax.Array]
     """Each modulator's concentration, by name."""
     t: jax.Array
@@ -827,16 +867,8 @@ class Network(nn.Module):
             elif np.all(delays == delays[0]):
                 delays = np.asarray(delays[0], np.int32)  # one delay: read one row of the ring per step
             weight = _per_edge(p.weight, rng, edges, f"{p.key} weight").astype(np.dtype(self.dtype))
-            if p.format == "events":
-                if np.ndim(delays) or p.plasticity is not None or p.trainable:
-                    raise ValueError(f"{p.key}: an event projection needs one delay and fixed weights")
-                order = np.lexsort((edges.post, edges.pre))
-                counts = np.bincount(edges.pre, minlength=pre.size)
-                built[p.key] = {"delay": np.asarray(np.ravel(delays)[0] if np.size(delays) else 0, np.int32),
-                                "by_pre": edges.post[order],
-                                "start": np.append(np.cumsum(counts) - counts, 0).astype(np.int32),
-                                "count": np.append(counts, 0).astype(np.int32),
-                                "weight": weight[order]}
+            if _events(p, delays, pre):
+                built[p.key] = _event_edges(edges, weight, delays, pre.size)
             elif _dense(p, delays, len(edges), pre.size, post.size):
                 matrix = np.zeros((pre.size, post.size), weight.dtype)
                 np.add.at(matrix, (edges.pre, edges.post), weight)  # repeated pairs sum
@@ -886,10 +918,9 @@ class Network(nn.Module):
             if p.short_term is not None:
                 short_term[p.key] = {"release": p.short_term.init_state((pre,), dtype),
                                      "buffer": jnp.zeros((lags[p.pre], pre), dtype)}
-        overflow = {p.key: jnp.zeros((), jnp.int32) for p in self.projections if p.format == "events"}
         modulators = {m.name: jnp.zeros((), dtype) for m in self.modulators}
-        return {"populations": out, "plastic": plastic, "short_term": short_term, "overflow": overflow,
-                "modulators": modulators, "t": jnp.zeros((), jnp.int32)}
+        return {"populations": out, "plastic": plastic, "short_term": short_term, "modulators": modulators,
+                "t": jnp.zeros((), jnp.int32)}
 
     def _noise(self) -> jax.Array | None:
         """The key Poisson inputs and stochastic release draw from, None when nothing draws."""
@@ -900,7 +931,11 @@ class Network(nn.Module):
         if not self.has_rng("noise"):
             raise ValueError(f"the network draws from the `noise` key ({', '.join(drawing)}): apply it with "
                              f"rngs={{'noise': key}}")
-        return self.make_rng("noise")
+        # Every step draws from it, and JAX's default Threefry-2x32 compiles to a loop on CPU, where
+        # Threefry-4x32 compiles unrolled: 10,000 uniform draws took 208 us against 34 us on a 4-core CPU,
+        # and Brunel's network at 12,500 neurons 12.4 s per simulated second against 9.6 s.
+        bits = jax.random.bits(self.make_rng("noise"), (4,), jnp.uint32)
+        return jax.random.wrap_key_data(bits, impl="threefry4x32")
 
     def connections(self, variables: Variables) -> dict[str, Connections]:
         """Every projection's synapses after a run, by projection key, as NEST's `GetConnections` reads them.
@@ -1059,28 +1094,66 @@ class _Stepper:
     def events(self, p: Projection, e, weight, sent, key: jax.Array | None) -> jax.Array:
         """Delivery that visits only the edges of neurons that spiked.
 
-        The spiking neurons' out-edges, contiguous when edges are sorted by
-        presynaptic neuron, are laid end to end by a prefix sum of their
-        out-degrees and walked in blocks of `EVENT_BLOCK` slots, as many as
-        the step needs; each slot finds its neuron by binary search. The
-        cost follows the activity, not the edge count. More than
-        `p.capacity` spiking neurons in a step is counted in the state.
-        With stochastic release, each block draws its slots' releases from
-        `key` folded with the block's index.
+        A step delivers its spiking neurons in passes of up to `p.per_pass`,
+        as many passes as it has spikes for (none in a silent step), so its
+        cost follows the activity, not the edge count, and no spike is left
+        out. Each pass takes the next spiking neurons with `jax.lax.top_k`.
+        With out-degrees near even or few (`EVENT_PADDING`, `EVENT_ROWS`)
+        each neuron's out-edges are one padded row, and a pass gathers its
+        neurons' rows. Otherwise their out-edges, contiguous when edges are
+        sorted by presynaptic neuron, are laid end to end by a prefix sum of
+        their out-degrees and walked in blocks of `EVENT_BLOCK` slots; each
+        slot finds its neuron by binary search. With stochastic release, each
+        pass, and each block of a pass, draws from `key` folded with its
+        index.
         """
         out = jnp.zeros(self.populations[p.post].size, weight.dtype)
         if weight.shape[0] == 0:
             return out
         size = sent.shape[0]
-        active = jnp.nonzero(sent, size=p.capacity, fill_value=size)[0]
+        width = min(p.per_pass, size)
+        deliver = self._rows if "rows" in e else self._slots
+
+        def busy(carry: tuple[jax.Array, jax.Array, jax.Array]) -> jax.Array:
+            return jnp.any(carry[1] != 0)
+
+        def one_pass(carry: tuple[jax.Array, jax.Array, jax.Array]) -> tuple[jax.Array, jax.Array, jax.Array]:
+            out, left, n = carry
+            value, index = jax.lax.top_k(left, width)  # what a neuron sends is never below 0
+            active = jnp.where(value != 0, index, size)
+            passed = None if key is None else jax.random.fold_in(key, n)
+            out = deliver(p, e, weight, sent, passed, active, out)
+            return out, left.at[active].set(0, mode="drop"), n + 1
+
+        return jax.lax.while_loop(busy, one_pass, (out, sent, jnp.zeros((), jnp.int32)))[0]
+
+    def _rows(self, p: Projection, e, weight, sent, key: jax.Array | None, active: jax.Array,
+              out: jax.Array) -> jax.Array:
+        """The `active` neurons' padded rows of out-edges, gathered and summed onto their targets; an
+        index past the last neuron stands for none."""
+        # A padding slot, or a neuron that stands for none, is an edge index past the last edge.
+        edge = e["rows"][active]
+        valid = edge < weight.shape[0]
+        spiked = sent.at[active].get(mode="fill", fill_value=0)[:, None]
+        weights = weight.at[edge].get(mode="fill", fill_value=0)
+        if p.release is None:
+            value = jnp.where(valid, weights * spiked, 0)
+        else:
+            assert key is not None
+            value = jnp.where(valid, p.release.transmit(key, weights, spiked), 0)
+        target = e["by_pre"].at[edge].get(mode="fill", fill_value=out.shape[0])
+        return out.at[target].add(value, mode="drop")
+
+    def _slots(self, p: Projection, e, weight, sent, key: jax.Array | None, active: jax.Array,
+               out: jax.Array) -> jax.Array:
+        """The `active` neurons' out-edges, laid end to end and walked in blocks of slots."""
         degree = e["count"][active]
         ends = jnp.cumsum(degree)
         total = ends[-1]
-        self.overflowed[p.key] = jnp.sum(sent != 0) > p.capacity
 
         def block(i, out):
             slot = i * EVENT_BLOCK + jnp.arange(EVENT_BLOCK)
-            owner = jnp.minimum(jnp.searchsorted(ends, slot, side="right"), p.capacity - 1)
+            owner = jnp.minimum(jnp.searchsorted(ends, slot, side="right"), len(active) - 1)
             edge = e["start"][active[owner]] + slot - (ends[owner] - degree[owner])
             valid = slot < total
             edge = jnp.where(valid, edge, 0)
@@ -1185,7 +1258,6 @@ class _Stepper:
                  drive_t: Mapping[str, jax.Array]) -> tuple[NetworkState, dict[str, jax.Array]]:
         t, pops = state["t"], state["populations"]
         plastic, short_term = dict(state["plastic"]), dict(state["short_term"])
-        self.overflowed: dict[str, jax.Array] = {}
         projections = self.network.projections
         weights = {p.key: plastic[p.key]["weight"] if p.plasticity is not None else self.weights[p.key]
                    for p in projections}
@@ -1246,7 +1318,5 @@ class _Stepper:
         self.plasticity(t, plastic, outputs, buffers, modulators)
         states = {n: v["point_neuron"] for n, v in new_pops.items()}
         records = {name: m.record(outputs, states, self.dt, modulators) for name, m in self.monitors.items()}
-        overflow = {k: v + self.overflowed.get(k, jnp.zeros((), bool)).astype(jnp.int32)
-                    for k, v in state["overflow"].items()}
-        return {"populations": new_pops, "plastic": plastic, "short_term": short_term, "overflow": overflow,
+        return {"populations": new_pops, "plastic": plastic, "short_term": short_term,
                 "modulators": modulators, "t": t + 1}, records

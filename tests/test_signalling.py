@@ -158,7 +158,7 @@ def released(format: str, p: float, quantal: float, *, short_term: TsodyksMarkra
     all to all with weight 1, through stochastic release: `[steps - 1, receivers]`."""
     network = Network((forced(senders), Population("r", receivers, LICell(0.0), {"in": Receptor(Delta())})),
                       (Projection("s", "r", AllToAll(), weight=1.0, delay=1.0, receptor="in", format=format,
-                                  capacity=senders, release=StochasticRelease(p, quantal),
+                                  per_pass=senders, release=StochasticRelease(p, quantal),
                                   short_term=short_term),),
                       (ArrivalInput("s", "x", "x"),), dt=1.0)
     records, _ = network.apply(network.init(jax.random.key(0)), {"x": np.ones((steps, senders))},

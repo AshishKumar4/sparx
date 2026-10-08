@@ -78,20 +78,39 @@ The first version (commit b11bb08, timed with the benchmark's two calls written 
 
 The readout's leak still needs one filtered trace per synapse, `B x N x (in + N)` numbers, since the learning signal of each step weights the traces of every earlier step. Training SHD for five epochs (`examples/train_shd_eprop.py --rule eprop`) went from 39 min to 3 min 30 s, against 30 s for BPTT. On 8 October 2026 the same runs took 4 min 16 s to 4 min 53 s and 34 to 38 s on this machine, where the previous commit's e-prop run, whose evaluation was not compiled, took 4 min 54 s.
 
+## Against NEST and Brian2
+
+`python benchmarks/bench_networks.py` times sparx, and `python tools/bench_reference_simulators.py` (in the reference environment of HANDOFF.md) times NEST 3.10 and Brian2 2.10, on the same networks at `dt = 0.1` ms: Brunel's (2000) network at the paper's size in its asynchronous irregular regime, and Brette et al.'s (2007) CUBA and COBA. The machine is a 4-core Intel Xeon at 2.8 GHz with 15 GB, otherwise idle; NEST runs 4 threads, Brian2's C++ standalone 4 OpenMP threads, and sparx JAX 0.11.2 on CPU in float32. Measured on 8 October 2026. Wall time per simulated second, after building and compiling:
+
+| Network | Neurons, synapses | Excitatory rate | sparx | NEST | Brian2 standalone | Brian2 Cython |
+| --- | --- | --- | --- | --- | --- | --- |
+| Brunel | 12,500, 15.6M | 37.3 to 37.6 Hz | 9.6 s | 7.5 s | 11.8 s | 16.1 s |
+| CUBA | 4,000, 320,000 | 5.4 to 5.6 Hz | 0.71 s | 0.42 s | 0.33 s | 0.59 s |
+| COBA | 4,000, 320,000 | 18 to 20 Hz | 1.01 s | 3.85 s | 0.54 s | 0.98 s |
+
+Each simulator's rate is within the spread of the others', so they run the same networks. NEST integrates `iaf_cond_exp` with adaptive Runge-Kutta per neuron, which is more accurate and costs it the COBA row; sparx and Brian2 hold the conductance over the step. Building Brunel's network and drawing its synapses took sparx 12.5 s and compiling a chunk 2.7 s, against NEST's 2.8 s to build, and Brian2's 10.2 s (standalone, its C++ compilation included) and 26.7 s (Cython).
+
+Until 8 October 2026 a projection under `format="auto"` was a dense matrix or an edge list, and every step paid for every synapse: Brunel took 457 s per simulated second, CUBA 15.5 s and COBA 15.3 s. The changes that brought them to the table's times, each measured on these three networks:
+
+- Event delivery for every spiking projection with one delay and fixed weights. With its then fixed capacity of 4,096 spiking neurons a step, Brunel took 39.9 s, CUBA 6.3 s and COBA 8.7 s, most of a step in a binary search sized for that capacity.
+- Padded rows of out-edges when the out-degrees are near even or the rows few, read without a search, and steps sized for their spikes: CUBA 1.8 s.
+- `jax.lax.top_k` in place of `jnp.nonzero` to find the spiking neurons: 18 us against 80 us for 16 of 10,000 neurons.
+- The noise drawn from a Threefry-4x32 key. JAX's default Threefry-2x32 compiles to a loop on CPU: Brunel took 12.4 s with it.
+- Passes of 16 spiking neurons, as many as a step needs, in place of tiers of fixed size, so a run of many trials under `jax.vmap` pays for its busiest trial's spikes and not for every tier, and no spike is dropped.
+
 ## Networks and connectomes
 
-`sparx.graph` on the same 4-core CPU, float32, `dt = 0.1` ms, wall time per simulated second after compilation:
+`sparx.graph` on the same 4-core CPU, float32, `dt = 0.1` ms, wall time per simulated second after compilation, measured before event delivery changed on 8 October 2026 (the connectome tables are not in that day's container, so these rows were not measured again):
 
 | Network | Neurons | Connections | Delivery | Time per simulated s | Peak memory |
 | --- | --- | --- | --- | --- | --- |
-| Brunel (2000), order 500, asynchronous regime | 2,500 | 625,000 | dense | 24 s | — |
 | Shiu et al. (2024) on FlyWire v630, 21 sugar neurons at 100 Hz (about 9,600 spikes/s) | 127,400 | 14.7M | events | 27 to 31 s | 1.6 GB |
 | The same model on the male CNS v0.9, both giant fibres at 200 Hz (about 860,000 spikes/s) | 165,899 | 25.6M | events | 56 s | 1.8 GB |
 
 Measured choices behind these:
 
 - Edge delivery gathers and sums over every edge each step (`jax.ops.segment_sum`): 2.2 ms for 500,000 edges. A dense projection of the same density multiplies a spike vector by a matrix in 0.87 ms, so a projection with one delay and fixed weights is stored dense when it has at most 2^25 entries and a density of at least 2%.
-- Event delivery visits only the out-edges of neurons that spiked, in blocks of 4,096, as many blocks as the step needs. Its first version laid every step's edges into a fixed 2^20 slots: 63 ms a step on FlyWire, against 7 ms for blocks. Finding the spiking neurons (`jnp.nonzero` over 127,400) costs 1.4 ms of that; a cumulative sum with a binary search measured 0.9 ms and a blocked variant no better.
+- Event delivery visits only the out-edges of neurons that spiked. A connectome's out-degrees are uneven, so its spiking neurons' edges are laid end to end in blocks of 4,096, as many blocks as a pass needs. Its first version laid every step's edges into a fixed 2^20 slots: 63 ms a step on FlyWire, against 7 ms for blocks. Finding the spiking neurons (`jnp.nonzero` over 127,400) cost 1.4 ms of that; `jax.lax.top_k` finds 16 of them in 0.24 ms.
 - Poisson inputs with a static mean invert a precomputed CDF: `jax.random.poisson` loops per draw and took 1.8 ms a step for 2,500 neurons, 40% of a Brunel step.
 
 No GPU or TPU numbers yet; Phase 7 measures them.
