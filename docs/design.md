@@ -1,23 +1,23 @@
 # Sparx design
 
-Status: proposal, 2026-10-04. This document describes the framework sparx is meant to become and how it gets there. Sections marked "today" describe code that exists; everything else is design. Claims about other projects that have not yet been checked against their code are marked "to verify".
+How sparx is built, as of 8 October 2026: what each part is for, the contracts between the parts, and why they are shaped as they are. [HANDOFF.md](../HANDOFF.md) lists the open work, [fidelity.md](fidelity.md) what each model is checked against, [performance.md](performance.md) the measurements behind the defaults, and [units.md](units.md) the units.
 
 ## 1. What sparx is for
 
-Sparx is dew's spiking and biophysical modality. It serves two workloads with one representation:
+Sparx is dew's spiking and biophysical modality. It serves two kinds of work with one representation:
 
-1. **Spiking networks as machine learning.** Deep spiking networks trained on event and static data, spiking backbones inside any dew objective (classification, sequence modeling, JEPA, diffusion, RL), and deployment to streaming inference and neuromorphic hardware.
-2. **Brains as networks.** Building, simulating and fitting biological circuits: randomly connected cortical models, region models, and whole connectomes such as FlyWire (Dorkenwald et al. 2024) and MaleCNS v1.0 (Janelia FlyEM and Google Research, 2026; about 166,700 neurons and 125 million synapses across brain, optic lobes and ventral nerve cord), with neuron and synapse models as close to the biology as the question needs.
+1. **Spiking networks as machine learning.** Spiking networks trained on event and static data by surrogate gradients, online rules or local learning rules, served as streams and exchanged with other libraries.
+2. **Brains as networks.** Building, simulating and fitting biological circuits, from Brunel's balanced network to whole connectomes such as FlyWire, with neuron and synapse models as close to the biology as the question needs.
 
-The same neuron, synapse and connectivity objects serve both. A deep network is a graph whose projections happen to be dense and stacked; a connectome is a graph whose projections are sparse, recurrent and delayed. Training, distribution, checkpoints, tracking and serving come from dew.
+One neuron protocol serves both. A trainable layer runs a neuron model over time; a simulated population runs the same protocol on one clock with others. Training, distribution, checkpoints, run records and serving come from dew.
 
-Non-goals: a second trainer, a second checkpoint format, a runtime unit system, morphologically detailed compartmental modeling at NEURON's level of detail (multi-compartment point models are in scope; full cable reconstructions from SWC files are not, at first).
+Sparx does not add a second trainer, checkpoint format or runtime unit system, and it does not model dendrites in morphological detail.
 
 ## 2. Principles
 
-Sparx inherits dew's six rules unchanged (`dew/docs/design/api.md`):
+Sparx keeps dew's six rules (`dew/docs/design/api.md`):
 
-1. A record names a class or function by its import path; sparx's classes are recorded the same way as dew's, with nothing registered, and sparx keeps short names only where its own code reads them (`sparx.registry`).
+1. A record names a class or function by its import path; nothing is registered, and sparx keeps short names only where its own code reads them (`sparx.registry`).
 2. Values that cross `jit` are `flax.struct.dataclass`es; configuration is a frozen dataclass; interchangeable implementations are a `Protocol`.
 3. Randomness is a `key` argument.
 4. Effects live in capabilities handed to the trainer or simulator (`Checkpoints`, `Tracker`).
@@ -26,231 +26,192 @@ Sparx inherits dew's six rules unchanged (`dew/docs/design/api.md`):
 
 It adds six of its own:
 
-7. **dew is the platform.** Sparx adds dynamics, structure and objectives. It never adds a trainer, a mesh, a checkpoint format, a data loader framework, a launcher or a server; where dew lacks an extension point sparx needs, the change goes into dew (section 9.2).
-8. **The science decides, references are evidence.** Each model is checked against ground truth where one exists (an analytic solution, or a float64 integration at a much finer step), then against its reference implementation. Where a reference departs from the science, sparx follows the science and records the departure in a test and in the fidelity ledger (section 11). Optimized implementations must agree with the plain one to stated tolerance.
-9. **Time is explicit.** Every dynamical object knows its step `dt` and its time constants in physical units. The deep-learning convention (`dt = 1`, time constants in steps) is the same code with `dt = 1`.
-10. **Structure is a graph.** Populations and projections are first-class. Layer stacks are the dense special case and keep a direct fast path.
-11. **Parameters, structure and state are separate collections.** What trains, what is fixed wiring, and what evolves in time live in different Flax collections, so the optimizer, the sharding layout and the checkpoint each see exactly their part.
-12. **Fast paths are implementations of a protocol, chosen by measurement.** A sparse kernel, a fused time loop or a parallel scan is admitted when it is faster on the hardware it targets and matches the reference path; [performance.md](performance.md) records what was measured.
+7. **dew is the platform.** Sparx adds dynamics, structure, learning rules and objectives. It never adds a trainer, a mesh, a checkpoint format, a data loader framework, a launcher or a server of its own design; where dew lacks an extension point, the change goes to dew (section 9.2).
+8. **The science decides, references are evidence.** Each model is checked against ground truth where one exists (an analytic result, or a float64 integration at a finer step), then against its reference implementation. Where a reference departs from the science, sparx follows the science and records the departure in a test and in [fidelity.md](fidelity.md). An optimized path must agree with the plain one to a stated tolerance.
+9. **Time is explicit.** Every dynamical object takes its step `dt`, and its time constants are in the unit of `dt`. The deep-learning convention, time constants in steps, is the same code at `dt = 1` ([units.md](units.md)).
+10. **Structure is a graph.** Populations and projections are first-class; a stack of layers is the dense special case and keeps its own path.
+11. **Parameters, structure and state are separate collections.** What trains, what is fixed wiring and what evolves in time live in different Flax collections, so the optimizer, the sharding layout and the checkpoint each see their part.
+12. **A fast path is chosen by measurement.** A delivery format, a kernel or a parallel scan is the default only when it is faster on the hardware it targets and matches the plain path; [performance.md](performance.md) records what was measured.
 
 ## 3. Architecture
 
 ```
-dew (platform)    Trainer . MeshSpec/Layout . Checkpoints . Dataset/Grain . Tracker . Profiler . records . run classes/CLI/launch . pipeline . Server
-                    ^ objectives, datasets, models, tasks and run classes recorded by import path
-sparx.objectives  objectives (classification, sequence, activity fitting, online learning), with metrics, tasks, dataset specs, recipes
-sparx.learn       exact event gradients (EventProp) . online rules (e-prop, OTTT) . REINFORCE . predictive coding (PC, PC-ALM) . conversion
-sparx.graph       Population . Projection . Connectivity . Network (a Flax module) . builders (random, spatial, connectome)
-                  simulate() . monitors . step order . delay buffers . connectivity kernels . sharding rules
-sparx.nn          layers over time-major tensors: the dense fast path
-sparx.dynamics    neuron models . synapse models . plasticity models . integrators . spike detection
+dew (platform)    Trainer . Objective . MeshSpec/Layout . Checkpoints . Dataset . records . RunConfig/CLI . pipeline
+                    ^ objectives, models, encoders, networks and tasks, recorded by import path
+sparx.objectives  dew objectives: classification, activity fitting, e-prop, predictive coding, rewards
+sparx.learn       exact spike times (EventProp) . e-prop, OTTT . REINFORCE . predictive coding, PC-ALM
+                  . reward diffusion (RNeuralNet) . ANN-to-SNN conversion
+sparx.graph       Population . Projection . Connectivity . Network (a Flax module) . monitors . simulate
+                  . canonical networks . connectomes
+sparx.nn          time-major Flax layers over the models below; sparx.models builds architectures from them
+sparx.dynamics    neuron models . synapses . plasticity . wirings, recurrence and fast weights . run
 sparx.surrogate   the spike and its surrogate gradients
 ```
 
-Each layer depends only on the ones below it. `sparx.dynamics` has no Flax dependency and can be used from plain JAX; everything above it is Flax and dew.
+Around them: `sparx.encode` turns a batch field into spikes over time, `sparx.losses`, `sparx.rates` and `sparx.spiketrains` read outputs and spike trains, `sparx.tasks` and `sparx.serve` serve trained networks, `sparx.nir` exchanges them through NIR, `sparx.datasets` reads SHD and MNIST, and `sparx.config` is the run class a recipe trains.
+
+Each layer depends only on the ones below it. `sparx.dynamics` builds its models as `flax.struct` dataclasses and uses no Flax module, so its models run from plain JAX; the package's `__init__` loads `sparx.nn` with it.
 
 ## 4. Dynamics
 
 ### 4.1 The model contract
 
-A dynamical model is a struct dataclass of its parameters (leaves, so they can be learned, swept with `vmap`, and sharded) and its choices (static fields). It declares:
+A model is a `flax.struct` dataclass of its parameters, which are leaves that can be learned, swept with `vmap` and sharded, and of its choices, which are static fields. It meets one protocol:
 
 ```python
 class NeuronModel(Protocol[State]):
+    graded: bool                                  # a value every step, or spikes
     def init_state(self, shape, dtype) -> State: ...
     def step(self, state: State, inputs: SynapticInput, dt: float) -> tuple[State, Output]: ...
+    def is_refractory(self, state: State, dt: float) -> jax.Array: ...
+    def after_threshold(self, state: State, jump: jax.Array, fired: jax.Array) -> State: ...
 
 @struct.dataclass
 class SynapticInput:
-    current: jax.Array                 # pA, summed current-based input
-    conductance: Mapping[str, jax.Array]   # nS per receptor ("ampa", "nmda", "gaba_a", ...)
+    current: jax.Array            # pA, held over the step
+    currents: tuple[Term, ...]    # current waveforms over the step, integrated exactly by linear models
+    conductance: Mapping[str, jax.Array]   # nS per receptor, against the model's reversal potentials
+    jump: jax.Array               # added to the voltage at the end of the step, before the threshold test
+    gap: Gap | None               # gap-junction coupling to other neurons' voltages
+    noise: jax.Array | None       # a uniform draw per neuron, for escape noise
 ```
 
-Neuron models read conductances together with their own reversal potentials, so conductance-based input is computed against the neuron's voltage at the step, not approximated as a current. A deep-learning layer passes only `current`.
-
-Today the output is `Output(value, offset)`, spikes of 0 or 1 for a spiking model and a real value each step for one whose static `graded` is True (a non-spiking neuron's transmitter release, a rate unit's activity), so the network delivers spikes as events and graded values through edge or dense delivery.
-
-Today's cells (`LIFCell`, `ALIFCell`, ...) become these models with `dt` explicit. Their numerics are already the exact exponential solution of the leak for `dt = 1`, so existing behavior is preserved.
+`sparx.run(model, inputs, state, dt=...)` scans a model over time; an array input is a jump. `is_refractory` and `after_threshold` let a network apply input that lands after the threshold test (a stimulus in Shiu et al.'s model) the way each model's own step would. `Output(value, offset)` holds spikes, or a real value for a `graded` model (a graded neuron's release, a rate unit's activity), and the offset is where in the step a spike crossed threshold. A dimensionless model refuses a current or a conductance, and a network refuses, when it is built, any input a model cannot take.
 
 ### 4.2 Integration
 
-Each model names how it is integrated, and the choice is part of its tested contract:
+Each model states how it is integrated, and its tests pin the choice:
 
-| Method | Used for | Why |
-| --- | --- | --- |
-| Exact (matrix exponential) | linear subthreshold dynamics: LIF, current-based exponential and alpha synapses | No integration error; the reference simulators NEST (Rotter and Diesmann 1999) and Brian2 (exact for linear equations) do this. Euler at `dt = 0.1 ms` is not exact, and several ML libraries use it. |
-| Exponential Euler | conductance-based LIF, AdEx | Stable for stiff leak terms |
-| Rush-Larsen | Hodgkin-Huxley gating variables | Exact for each gate given the voltage, stable at larger `dt` than Euler |
-| RK4 | small nonlinear models where accuracy matters more than cost | Ground-truth runs |
-| Float64 at a fine step | test oracles only | The ground truth every method is compared with |
+| Model | Integration |
+| --- | --- |
+| `LeakyIntegrateAndFire`, `GradedPotential` | the exact solution of the linear membrane over the step, with current waveforms integrated exactly and conductances held, as NEST's `iaf_psc_exp` |
+| conductances under `PointNeuron` | held at their exact mean over the step (`hold="mean"`, second order), or at their start-of-step value (`hold="start"`, Brian2's `exponential_euler`) |
+| synapse kinetics (`Exponential`, `Alpha`, `BiExponential`, `Graded`) | exact |
+| `AdEx` | RK4 in substeps of at most 0.01 ms, with the spike found and reset within its substep |
+| `Izhikevich` | `scheme="published"`: two half-steps of `v`, then `u`, as the 2003 code; `"euler"` as NEST; `"semi_implicit"` as the 2004 code |
+| `HodgkinHuxley` | `scheme="strang"`: Rush-Larsen half-steps of the gates around an exact voltage step, in substeps of 0.01 ms; `"rk4"` and `"exponential_euler"` |
+| dimensionless cells (`sparx.dynamics.ml`) | `v = decay ** dt * v + x`, the exact decay of the leak |
 
-Spike detection is a threshold crossing within the step. The exact crossing time is recovered by linear interpolation (Hansel et al. 1998; Morrison et al. 2007) and carried with the spike when a downstream consumer needs it (event-based gradients, STDP timing, precise delays). A model with refractoriness holds its state for `t_ref` from that time.
+A spiking model reports where in the step its membrane crossed threshold, by linear interpolation of the voltage (Hansel et al. 1998): `LeakyIntegrateAndFire`, `Izhikevich` and `AdEx` do, `HodgkinHuxley` stamps the end of the step. The network keeps spikes on the step grid; no delay or plasticity rule reads the offset yet. A refractory neuron holds its reset for `round(t_ref / dt)` steps after the step it fired in, as NEST counts.
 
 ### 4.3 Catalogue
 
-Each entry has a reference: equations from the paper, and an implementation to compare with.
+| Kind | Models |
+| --- | --- |
+| Dimensionless cells | `LIFCell`, `ALIFCell` (Bellec et al. 2020), `LICell`, `RateCell` (FLYNN's leaky unit), `PulseCell` (RNeuralNet's), `BernoulliCell` (escape noise), `Serial` (a synaptic current, then a membrane) |
+| Physical neurons | `LeakyIntegrateAndFire`, `AdEx` (Brette and Gerstner 2005), `Izhikevich` (2003, and the twenty patterns of 2004), `HodgkinHuxley`, `GradedPotential` (Prinz et al. 2004) |
+| Synapses | `Delta`, `Exponential`, `Alpha`, `BiExponential`, `Graded`, each a current or a conductance by its `Receptor`; `MgBlock` (Jahr and Stevens 1990); `StochasticRelease` |
+| Plasticity | `PairSTDP`, `TripletSTDP` (Pfister and Gerstner 2006), `DopamineSTDP` (Izhikevich 2007), `TsodyksMarkram` |
+| Recurrence | `RecurrentCell` over a `Dense` or `Sparse` wiring, a `Sparse` one with a delay per edge, with optional `FastWeights` and a `HebbianRule`: `DecayingHebb`, `OjaHebb`, `ModulatedHebb`, `RetroactiveHebb` |
 
-| Family | Models | Reference implementation |
-| --- | --- | --- |
-| Integrate-and-fire | IF, LIF (current and conductance based), ALIF / GLIF adaptations, QIF, EIF, AdEx (Brette and Gerstner 2005) | NEST, Brian2; SpikingJelly and snnTorch for the ML variants |
-| Two-variable | Izhikevich 2003 (the 20 firing patterns of Izhikevich 2004 as a test set), FitzHugh-Nagumo, Morris-Lecar | Izhikevich's published code; Brian2 examples |
-| Conductance-based | Hodgkin-Huxley (squid axon), Wang-Buzsaki, Traub-Miles | Brian2, NEURON for single compartments |
-| Resonant | resonate-and-fire, balanced resonate-and-fire (Higuchi et al. 2024) | the authors' code |
-| Parallel (ML) | PSN family (Fang et al. 2023) | SpikingJelly (parity tested today) |
-| Multi-compartment | two- and few-compartment models (soma plus dendrite, Pinsky-Rinzel) | Brian2 |
-
-Synapse models are separate from neuron models (today `SynapticCell` merges them; it splits):
-
-| Kind | Models | Where its state lives |
-| --- | --- | --- |
-| Linear | delta, exponential, alpha, bi-exponential, per receptor | Aggregated on the postsynaptic neuron, one state per receptor: linear synapses sum, so `N` states replace `E`. This is what makes connectome scale affordable. |
-| Nonlinear in the postsynaptic voltage | NMDA with magnesium block (Jahr and Stevens 1990) | Aggregated conductance, nonlinearity applied at the neuron |
-| Presynaptic dynamics | short-term plasticity (Tsodyks and Markram 1997) | Per presynaptic neuron and projection |
-| Plastic | pair and triplet STDP (Pfister and Gerstner 2006), three-factor rules with eligibility traces, homeostatic scaling | Per edge (weights) plus per-neuron traces |
-| Gap junctions | electrical coupling | Per edge, symmetric |
+Linear synapses sum, so each receptor of a population holds one state per neuron, not one per synapse: `N` states in place of `E`, which is what makes a connectome affordable. Plastic projections keep per-edge weights and traces; short-term plasticity keeps one state per presynaptic neuron.
 
 ### 4.4 Units
 
-Units are a documented convention, not a runtime system: time in ms, voltage in mV, current in pA, conductance in nS, capacitance in pF. Model fields carry the unit in their docstring and in a `units` table that a builder checks when it reads values from a dataset (a connectome table, a parameter file). A runtime unit system such as Brian2's does not trace through `jit`, and its checks belong at construction, where the builder already validates.
+Units are a convention, not a runtime system: ms, mV, pA, nS and pF in the physical models, steps in the dimensionless ones. [units.md](units.md) lists them, the two units of rates, and where the halves meet. A runtime unit system such as Brian2's does not trace through `jit`.
 
 ## 5. Structure
 
 ### 5.1 The graph
 
 ```python
-@dataclass(frozen=True)
-class Population:
-    name: str
-    size: int
-    model: NeuronModel          # one model per population; heterogeneity lives in its parameter leaves
-
-@dataclass(frozen=True)
-class Projection:
-    pre: str
-    post: str
-    connectivity: Connectivity  # which pairs connect
-    weight: WeightSpec          # initial values, sign, trainable or fixed
-    delay: DelaySpec            # per edge, in ms, quantized to dt; learnable per edge when asked
-    receptor: str = "current"   # or "ampa", "gaba_a", ...
-    synapse: SynapseModel = Exponential(tau=5.0)
-    plasticity: Plasticity | None = None
-
-class Network(nn.Module):       # a Flax module, so dew trains, shards and checkpoints it
-    populations: Sequence[Population]
-    projections: Sequence[Projection]
-    inputs: Mapping[str, str]   # external input name -> population
-    outputs: Sequence[str]      # populations whose spikes or voltages are returned
+Population(name, size, neuron, receptors={}, hold="mean", initial={}, reset_synapses=False,
+           freeze_synapses=False)
+Projection(pre, post, connectivity, weight=1.0, delay=1.0, *, receptor, plasticity=None,
+           short_term=None, release=None, trainable=False, name=None, format="auto", per_pass=16)
+Network(populations, projections=(), inputs=(), dt=0.1, dtype=float32, junctions=(), modulators=())
 ```
 
-A `Network`'s variables are split into collections:
+A projection's receptor sets the unit of its weight; its delay is in ms and a whole number of steps; weights and delays may be per edge. Inputs are `PoissonInput` (Hz), `CurrentInput` (pA, from a drive) and `ArrivalInput` (weights arriving each step); `GapJunction` couples two populations' membranes; a `Modulator` turns a population's spikes into a concentration that plasticity reads. A `Network` is a Flax module whose variables split by role:
 
 | Collection | Holds | Seen by |
 | --- | --- | --- |
-| `params` | trainable weights, delays, time constants | the optimizer |
-| `connectome` | fixed structure: edge indices, signs, receptor types, fixed weights | the layout and checkpoints, never the optimizer |
-| `state` | membranes, synaptic states, delay buffers, plasticity traces, plastic weights | carried across calls (today's streaming contract) |
-| `spike_rates`, `monitors` | sown observations | trackers and losses |
+| `params` | the weights of trainable projections | the optimizer |
+| `connectome` | each projection's edges and delays in its delivery format, and its weights unless trainable | the layout and checkpoints, never the optimizer |
+| `state` | per population, neuron and synapse states and a ring buffer of recent outputs; plastic weights and traces; short-term release; modulators; the step count | carried from call to call |
 
-Plastic weights that change during a simulation by a local rule are state, not params: they evolve with the dynamics. A run can still train their initial values or the rule's coefficients by gradient.
+Weights that a local rule changes during a run are state, not parameters. `Network.connections(variables)` reads every projection back as edges, weights and delays.
 
 ### 5.2 Connectivity
 
-```python
-class Connectivity(Protocol):
-    def edges(self, key, pre_size, post_size) -> EdgeList: ...   # used once, at init
-```
-
-Generators: all-to-all, fixed in-degree, fixed probability (Erdős-Rényi), distance-dependent on population positions, and `FromTable`, which reads edge lists. Connectome builders (`sparx.graph.connectome`) read neuron and connection tables (FlyWire Codex exports, neuPrint for MaleCNS) and map neurotransmitter predictions to signs and receptors. Shiu et al. (2024) used acetylcholine as excitatory, GABA and glutamate as inhibitory, and the modulators as excitatory; that mapping is the default and a field, since the glutamate assignment is known to be receptor dependent in the fly.
-
-At init, edges are compiled into an execution format (section 6.2). Dense and convolutional projections keep their own fast path, and the existing `sparx.nn` layers are those paths with a layer interface.
+`Connectivity.edges(rng, pre, post, same)` draws a projection's edges once, when the network is initialized: `AllToAll`, `OneToOne`, `FixedProbability`, `FixedInDegree`, `FixedOutDegree` (NEST's rules, with or without autapses and multapses) and `FromEdges`, a table. `sparx.graph.connectome.Connectome` reads Shiu et al.'s FlyWire tables (`from_shiu`) and the male CNS v0.9 release (`from_malecns`), where each neuron's transmitter gives its synapses' sign (`SIGNS`: acetylcholine, dopamine, serotonin and octopamine excite; GABA, glutamate and histamine inhibit).
 
 ### 5.3 Canonical networks
 
-Shipped as builders and as validation targets:
-
-- Brunel (2000) balanced excitatory-inhibitory network, with its asynchronous-irregular, synchronous-regular and oscillatory regimes.
-- The COBA and CUBA networks of Vogels and Abbott (2005), the benchmarks of Brette et al. (2007) on which simulators are compared.
-- The Shiu et al. (2024) whole-brain LIF model on FlyWire, and the same construction on MaleCNS v1.0.
+Builders, also validation targets, with short names a record can use (`sparx.registry.networks`): `brunel` (Brunel 2000, model A, in any of his regimes), `cuba` and `coba` (Vogels and Abbott 2005, Brette et al.'s 2007 benchmarks) and `shiu2024` (Shiu et al.'s whole-brain LIF on a connectome). `FLYNN` (Wang and Chen 2026) is the trainable connectome, a `sparx.nn` layer over a `RecurrentCell` on the connectome's `Sparse` wiring.
 
 ## 6. Execution
 
 ### 6.1 One step
 
-Every network advances in the same order, the order NEST uses, which the single-neuron and network tests pin against NEST and Brian2 (`tests/test_simulators.py`, `tests/test_graph.py`). A step covers `(t, t + dt]`:
+Every network advances in NEST's order, which the single-neuron and network tests pin against NEST and Brian2. A step covers `(t, t + dt]`:
 
 1. Delta synapses deliver the spikes due at the end of the step as voltage jumps.
-2. Each population advances its membranes on its synapses' output (current waveforms integrated exactly, conductances held) and detects spikes.
-3. The new spikes enter each population's ring buffer.
-4. Every other synapse receives the spikes due at the end of the step, which shape the membrane from the next step on.
-5. Plasticity updates traces and weights.
+2. Each population advances its membranes on its synapses' output and its gap junctions, and emits its output (spikes, or graded values).
+3. The outputs enter each population's ring buffer, and each modulator takes up the spikes of its source.
+4. Every other synapse receives what is due at the end of the step, which shapes the membrane from the next step on.
+5. Plasticity updates traces and weights, reading the modulators.
 6. Monitors record.
 
-A spike sent in step `m` over `D` steps is due at the end of step `m + D`: NEST's and Brian2's timing for a delay of `D dt` (they stamp spikes at the end and the start of their step, but deliver them alike). Kinetic synapses take `D = 0` (Brian2's default); delta synapses need `D >= 1`, since a jump due in its own step would feed back into that step's threshold test.
+A spike sent in step `m` over a delay of `D` steps is due at the end of step `m + D`. Kinetic synapses take `D = 0`; delta synapses need `D >= 1`, since a jump due in its own step would feed back into that step's threshold test.
 
-### 6.2 Connectivity kernels
+### 6.2 Delivery
 
-Projections compile to one of these execution formats, chosen per projection by size and density, all producing the same input to fp32 tolerance:
+A projection is stored and delivered in one of three formats, all giving the same input up to the order of summation:
 
-| Format | Cost per step | Fits |
+| Format | Cost per step | Taken by `"auto"` |
 | --- | --- | --- |
-| Dense matmul | `pre x post` | layers, small dense projections, accelerators' matrix units |
-| Convolution | per kernel | spatially structured layers |
-| Edge list with `segment_sum` by postsynaptic index | `E` | sparse recurrent graphs, connectomes |
-| Events, in passes of a few spiking neurons | `active x fan-out` | spiking populations with one delay and fixed weights, the default; a step makes as many passes as it has spikes, so shapes stay static and no spike is dropped |
+| `"events"` | the spiking neurons' out-edges | whenever it can: a spiking population, one delay, fixed weights |
+| `"dense"` | `pre x post` | otherwise, with at most `DENSE_LIMIT` entries and a density of at least 2% |
+| `"edges"` | every edge, summed per target with `segment_sum` | otherwise |
 
-Delays use a ring buffer of the last `D` steps of spikes per population, stored as bits. Each edge reads its presynaptic neuron at its own delay. Per-edge delays cost one gather per edge per step; projections with one delay per projection read one slice.
+Event delivery takes a step's spiking neurons in passes of `per_pass`, found by `jax.lax.top_k`, as many passes as the step has spikes. Near-even or small out-degrees keep each neuron's out-edges as one padded row; uneven ones (a connectome's) are laid end to end in blocks and found by binary search. A `while_loop` of passes keeps shapes static, drops no spike, and under `vmap` costs the busiest trial's spikes. [performance.md](performance.md) has the measurements behind each choice.
+
+Each population keeps a ring buffer of its last outputs, in the network's dtype, as long as its longest outgoing delay; delays are int32 steps, and a projection with one delay reads one row of the ring.
 
 ### 6.3 Scale
 
-MaleCNS at full size has about 166,700 neurons and 125 million synapses, which collapse into fewer unique neuron pairs with a synapse count each (Shiu et al. use the count as the weight). An edge needs a presynaptic index (int32), a weight (float32 or bfloat16) and a delay (uint8): about 9 bytes, so the full synapse list is about 1.1 GB and the pair list smaller. One accelerator holds it. Larger graphs and many simultaneous trials shard:
-
-- Neurons are partitioned over a mesh axis; each edge lives with its postsynaptic neuron's shard.
-- Each step, shards exchange their new spikes as a bitmask (166,700 neurons is 21 KB), then compute their own inputs locally.
-- Independent trials (stimuli, parameter sweeps) run over the data axis.
-
-Sparx declares logical axis names (`neurons`, `edges`, `trials`) and adds their rules to dew's `Layout`, so dew's `MeshSpec` places a simulation the same way it places a model.
+`simulate(mesh=MeshSpec(...))` places a run on dew's mesh by logical axes, `trials` on the data axis and `neurons` on the fsdp or data axis: a leaf whose last dimension is a population's size is split over neurons, and the compiler partitions the step's gathers and the exchange of spikes. Per-edge plastic weights stay whole. The male CNS, 166,000 neurons and 25.6M synapse pairs, simulates on one CPU in 1.8 GB. A hand-written exchange of spike bitmasks between devices, which would cut that traffic, waits for measurements on multi-device hardware.
 
 ### 6.4 `simulate`
 
-Simulation without gradient training is a function, not a new runner, so it adds no noun beside dew's `Trainer`:
-
 ```python
-result = sparx.simulate(
-    network, variables, inputs,        # inputs: external drive, [T, trials, ...] or a function of time
-    duration=1000.0, dt=0.1, key=key,
-    monitors=[Spikes("mn9"), Rate("all", window=50.0), Voltage("gustatory", every=10)],
-    mesh=MeshSpec(fsdp=8), checkpoints=Checkpoints("runs/fly"),   # dew capabilities
-    chunk=1000.0,                      # ms per compiled chunk; state and monitors stream to the host between chunks
-)
+simulate(network, variables, *, duration, key=None, drive=None, monitors=None, chunk=100.0,
+         trials=None, mesh=None, layout=LAYOUT, checkpoints=None) -> Simulation
 ```
 
-It compiles one chunk of the time loop, carries state between chunks, streams monitors to the host so memory stays bounded for long runs, and writes dew checkpoints of the state so a long run resumes. It shares the step function with training.
+Simulation is a function, not a runner beside dew's `Trainer`. It compiles one chunk of steps, carries the state between chunks, and brings each chunk's records to the host, so a long run holds one chunk of records in memory. `trials` runs independent trials under `vmap`, each with its own noise. With `checkpoints` (dew's) it saves the state after every chunk, and a run started again on the directory continues from the last one as if it had not stopped. Monitors are a mapping of names to `SpikeRaster`, `SpikeCounts`, `SpikeTimes`, `PopulationRate`, `OutputTrace`, `ModulatorTrace` and `StateMonitor`.
 
 ## 7. Learning
 
+Every learning rule works on the same models, and each is checked against what defines it ([fidelity.md](fidelity.md)).
+
 | Regime | How | Lives in |
 | --- | --- | --- |
-| Surrogate-gradient BPTT | `custom_jvp` spikes (today), with dew's remat policies over time chunks for memory | `sparx.surrogate` |
-| Exact event-based gradients | EventProp (Wunderlich and Pehle 2021): adjoint dynamics over spike times; needs the in-step spike times of 4.2 | `sparx.learn.events` |
-| Forward and online learning | forward-mode gradients through the `custom_jvp`; e-prop (Bellec et al. 2020) and OTTT (Xiao et al. 2022) as eligibility-trace updates every step, memory independent of `T` | `sparx.learn.online`, with a dew objective that updates every chunk |
-| Local plasticity | STDP, triplet STDP and reward-modulated STDP (Izhikevich 2007, NEST's `stdp_dopamine_synapse`) as state updates during simulation | `sparx.dynamics.plasticity` |
-| Reward-driven learning | REINFORCE (Williams 1992) for escape-noise neurons: an eligibility per synapse, `d log P(spikes) / dw`, weighed by the reward | `sparx.learn.reinforce` |
-| Reward diffusion | RNeuralNet-Research (2018): a reward spread backward from a feeder neuron by a softmax of absolute activity, on its graded network with a delay per connection; the original's first-visit spread and the all-paths repair, kept as a baseline for rules with an objective | `sparx.learn.diffusion` |
-| Fast weights | differentiable plasticity and Backpropamine (Miconi et al. 2018, 2019): Hebbian traces each sequence writes on a recurrent cell's dense or sparse wiring, their plasticity learned by BPTT | `sparx.dynamics.RecurrentCell` with `FastWeights`, `sparx.nn.Recurrent(rule=...)` |
-| Local energy minimization | predictive coding and PC-ALM (Seely and Gould 2026): hidden activity relaxed on a layered energy, each weight's update read from its own layer's error | `sparx.learn.predictive`, with a dew objective that hands the update to the trainer |
-| Trainable connectomes | FLYNN (Wang and Chen 2026): a rate unit per neuron, recurrent through the connectome's synapses (a `Sparse` wiring), every weight, bias and class leak trained by BPTT, fast weights optional | `sparx.graph.connectome.FLYNN` |
-| Fitting to recordings | gradient descent on network parameters against recorded spikes, rates or voltages, with spike-train distances (van Rossum 2001, Victor-Purpura 1996) and PSTH losses | `sparx.objectives.ActivityFitObjective` |
-| Conversion | trained ANN weights mapped to an IF network with threshold balancing | `sparx.learn.convert` |
+| Surrogate-gradient BPTT | the spike is a `jax.custom_jvp` Heaviside step whose derivative is a surrogate's | `sparx.surrogate` |
+| Exact spike-time gradients | EventProp's gradient (Wunderlich and Pehle 2021) for LIF networks with current synapses, by implicit differentiation of exact spike times | `sparx.learn.events` |
+| Online rules | e-prop (Bellec et al. 2020) and OTTT (Xiao et al. 2022), traces carried forward, memory independent of the sequence's length; e-prop's eligibility structure read from the step's jaxpr | `sparx.learn.online`, `EPropObjective` |
+| Local plasticity | pair, triplet and reward-modulated STDP (Izhikevich 2007, NEST's `stdp_dopamine_synapse`) and Tsodyks-Markram, updated during simulation | `sparx.dynamics.plasticity` |
+| Fast weights | differentiable plasticity and Backpropamine (Miconi et al. 2018, 2019): Hebbian traces each sequence writes on a dense or sparse wiring, their plasticity learned by BPTT | `sparx.dynamics.FastWeights`, `sparx.nn.Recurrent(rule=...)` |
+| Reward-driven learning | REINFORCE (Williams 1992) for escape-noise neurons; reward diffusion (RNeuralNet-Research 2018), its AGREL-style variants (Roelfsema and van Ooyen 2005) and REINFORCE through the same network | `sparx.learn.reinforce`, `sparx.learn.diffusion`, `RNeuralNetObjective` |
+| Local energy minimization | predictive coding and PC-ALM (Seely and Gould 2026): activity relaxed on a layered energy, each weight's update read from its own layer's error | `sparx.learn.predictive`, `PredictiveCodingObjective` |
+| Trainable connectomes | FLYNN (Wang and Chen 2026): a rate unit per neuron, recurrent through the connectome's synapses, every weight, bias and class leak trained by BPTT | `sparx.graph.connectome.FLYNN` |
+| Fitting to recordings | gradient descent against recorded spikes or rates, by van Rossum distance or smoothed PSTHs | `ActivityFitObjective` |
+| Conversion | a trained ReLU network's weights on IF neurons, thresholds balanced at a percentile of activations (Rueckauer et al. 2017) | `sparx.learn.convert` |
 
-The recurrent gradient explosion measured on SHD (the `Recurrent` docstring) is a property of surrogate BPTT through recurrence. EventProp gives exact gradients and the online rules avoid backpropagation through time, so they are the principled alternatives to tuning the surrogate.
+A rule whose update is not a loss's gradient hands it to dew's trainer as one (`Objective.with_gradients`), so every rule uses the trainer's one gradient path, with its accumulation, sharding, logging and checkpoints.
+
+Surrogate BPTT through recurrence can explode: training a recurrent network on SHD with `ATan` grew the gradient norm past 1e8 within 300 steps, where `FastSigmoid(100)` kept it below 10. EventProp's exact gradients and the online rules avoid backpropagation through time.
 
 ## 8. Models
 
-Models are Flax modules that a run's record names by import path:
+Models are Flax modules that a run's record names by import path.
 
-- `sparx.nn` layer stacks: MLP and convolutional SNNs, SEW-ResNet (today), spiking self-attention (Spikformer, Zhou et al. 2023), recurrent and delayed networks for temporal data (today).
-- `Network` graphs: canonical circuits and connectomes, configured by record (`{"connectome": "malecns-1.0", "model": "shiu2024", ...}`) so a run rebuilds them.
-- Spiking backbones for dew's objectives. A dew objective expects a model interface, for example a decoder from tokens to logits `[B, S, V]`. An adapter embeds inputs as currents over an inner time axis, runs the spiking network time-major, and reads the output back into the interface's layout. `LMObjective`, `JepaObjective` and the RL objectives then train spiking models unchanged.
+- `sparx.nn` layers over time-major arrays `[T, B, ...]`: `LIF`, `IF`, `LI`, `Rate`, `Synaptic`, `ALIF`, `Dynamics` (any model of `sparx.dynamics` as a layer), `Recurrent` (with or without fast weights), the parallel spiking neurons `PSN`, `MaskedPSN` and `SlidingPSN` (Fang et al. 2023), `DelayedDense` with learned delays (Hammouamri et al. 2024), `Flatten`, and `BatchMajor`, which runs a stack on dew's batch-major records.
+- `sparx.models`: `SEWResNet` (Fang et al. 2021, as SpikingJelly lays it out) and `SpikingMLP`, a dense network for event data, recurrent or delayed, that both `SpikingClassifierObjective` and `EPropObjective` train.
+- `Network` graphs, configured by record (`{"class": "shiu2024", "fields": {"connectome": {...}}}`), and `RNeuralNet`, the graded network of RNeuralNet-Research.
+
+A neuron layer's `dt` is the step in the unit of its time constants, its state streams through the `state` collection, so a sequence fed in chunks gives the output of one call, and it sows its firing rate into `spike_rates` when that collection is mutable.
 
 ## 9. dew integration
 
@@ -258,101 +219,49 @@ Models are Flax modules that a run's record names by import path:
 
 | dew piece | Use in sparx |
 | --- | --- |
-| `Trainer`, `Objective`, `Step`, `Aux`, `Ratio` | all gradient training; sparx objectives subclass `Objective` (today: `SpikingClassifierObjective`, `ActivityFitObjective`, `EPropObjective`, `PredictiveCodingObjective`) |
-| `MeshSpec`, `Layout`, logical axes | data, fsdp and tensor parallel training of layers; neuron-partitioned simulation |
-| `Checkpoints` (Orbax), preemption handling | training and long simulation runs |
-| `Dataset`, Grain sources and transforms | neuromorphic datasets as dew dataset specs, with event-level augmentation as Grain transforms and resumable, sharded reading |
-| records, `RunConfig` run classes, `dew` CLI, `dew launch` | `sparx.config.SNNRunConfig` and `recipes/snn/train.py`, launched on GPUs and TPU pods the same way as dew's |
-| trackers, `Profiler`, telemetry | firing rates and sparsity as metrics; XProf for kernel work |
-| `dew.pipeline`, `Server` | loading trained spiking models and serving streaming sessions |
-
-Sparx takes dew as a required dependency. Objectives live in `sparx.objectives`, metrics in `sparx.metrics`, tasks in `sparx.tasks`, dataset specs in `sparx.datasets` and the run class in `sparx.config`, each named in a run's record by its import path; a run of sparx loads in a fresh process once the reader trusts the package (`trust=("sparx",)`).
+| `Trainer`, `Objective`, `Step`, `Aux`, `Ratio`, `Objective.with_gradients` | every gradient-trained objective, and every learning rule's update handed to the trainer |
+| records by import path, `to_record`, `trust=` | a run's record names sparx's models, encoders, objectives and networks, and `dew.pipeline(run_dir, trust=("sparx",))` rebuilds them in a fresh process |
+| `RunConfig` run classes, the `dew` CLI | `sparx.config.SNNRunConfig` and `recipes/snn/train.py`; `dew train run.json --trust sparx` continues a run |
+| `MeshSpec`, `Layout` | data and fsdp parallel training; trials and neurons of a simulation spread over devices |
+| `Checkpoints` | training runs, and a long simulation's state after each chunk |
+| `Dataset`, `VALID_ROWS`, `Objective.row_mean` | in-memory records, and validation passes that count every record once |
+| `TokenScores`, metrics, `pipeline`, `SavedTask` | evaluation, and `sparx.tasks.SpikingClassification` as the task a run loads as |
 
 ### 9.2 Changes dew needs
 
-These are small, general extension points, each useful to dew beyond sparx:
-
-1. **Registry plugins.** dew's registry finds members by scanning dew's own sources, so a `run.json` naming a sparx model cannot be rebuilt in a process that has not imported sparx. Add discovery through a `dew.plugins` entry-point group: a package names a module that imports everything it registers, and a lookup dew's own index misses imports it. (Done, then replaced: dew's records now name every class by import path, so nothing registers, and a reader trusts the packages a record may import.)
-2. **Open artifact types.** `Artifact` was a closed union. Spiking evaluation needs activity artifacts (rasters, rates, traces) that metrics read. (Done: an `Artifact` is any dataclass, which a metric reads by type.)
-3. **Open inference tasks and stateful serving.** dew's `Server` keeps per-slot KV caches for token generation. A spiking session keeps per-slot neuron state and advances by input chunks. Generalize the slot to "state the task declares", with KV caches as one implementation, so sparx's streaming task reuses admission, batching and mesh placement.
-4. **Layout rules from plugins.** Let a plugin contribute logical-axis rules (`neurons`, `edges`, `trials`) to `DEFAULT_RULES`, or confirm that passing `Layout(rules=...)` covers it (to verify).
-
-### 9.3 Distributed training
-
-- Data parallel over batch rows is the default; time-major activations keep the batch on axis 1, and sparx layers constrain it to dew's batch axes.
-- Weights of wide layers and large projections declare logical axes, so `MeshSpec(fsdp=..., tensor=...)` splits them as it does dew's transformers.
-- Time cannot be split across devices for recurrent dynamics, since each step needs the last. The PSN family and linear layers can split time, and sequence parallelism applies to them.
-- Memory for long sequences comes from rematerializing the time loop in chunks (a checkpointed scan), configured like dew's remat policies.
-
-### 9.4 Serving and deployment
-
-- `objective.pipeline(state)` returns a sparx task: classification over a whole input, or a streaming session that advances by chunks and keeps neuron state between calls (the `state` collection, which already makes chunked runs exact).
-- The served form runs on dew's generalized `Server` (9.2.3), one slot per session.
-- Neuromorphic hardware and other libraries: export and import through NIR, the Neuromorphic Intermediate Representation (Pedersen et al. 2024), which snnTorch, Norse, SpikingJelly, Lava, SpiNNaker and others read and write (to verify per target). NIR's primitives map onto populations, projections and the LIF and CUBA models.
+dew's `main` has every change sparx's earlier stopgaps waited for: records by import path, run classes, schedules and parameter groups, mapping checkpoints, whole validation passes, nested records, the gradient hook, and dew's prose checker with SLOP010. HANDOFF.md lists what is still open in dew for sparx: stateful serving (dew#30), which would make `sparx.serve.StreamServer` dew's server; two exports sparx imports from outside `__all__`; a validation reader on its own; a gradient hook that leaves the rule out of the loss's value; and `Supervised`'s metrics in the validation pass. Changes to dew go through its own pull requests, which the owner merges.
 
 ## 10. Data
 
-Neuromorphic datasets become dew dataset specs over Grain: SHD and SSC (today, in memory: SHD), N-MNIST, DVS Gesture, CIFAR10-DVS, plus recorded neural activity for fitting. Events are stored sparse and binned by a transform, so the bin size is a training choice rather than a preprocessing decision. Augmentations act on events (time jitter, channel shift, event drop), as Grain random transforms keyed per record.
+`sparx.datasets.SHD` is a dew `DatasetSpec`: `shd()` bins the recordings into dense spike counts on a grid of steps, or keeps every event, and both splits are held in memory and streamed by dew's `Dataset`. `mnist()` reads MNIST and Fashion-MNIST as arrays. `holdout` splits off a validation set, and `write_synthetic_shd` writes files in SHD's layout for smoke runs that download nothing. Event datasets beyond SHD, and event augmentations as dew transforms, are not built.
 
 ## 11. Fidelity program
 
-### 11.1 Tiers
+Every model, encoder, loss, learning rule and network carries tests at the highest tier available:
 
-Every model, encoder, loss and network carries tests at the highest tier available:
+1. **Ground truth.** An analytic result (a LIF's f-I curve, a subthreshold response) or a float64 integration at a finer step; `tests/reference.py` writes each dimensionless cell as a float64 NumPy loop from its docstring's equations.
+2. **Reference implementation.** The defining simulator or the authors' code, run by a fixture tool under `tools/` at a recorded version or commit, with committed fixtures: NEST, Brian2, snnTorch, SpikingJelly, OTTT's and SNN-delays' PyTorch, PC-ALM's JAX, Miconi et al.'s PyTorch, FLYNN's PyTorch cell, snntoolbox, NIR, Izhikevich's MATLAB, RNeuralNet-Research's C++.
+3. **Published behavior.** Values or results a paper reports: Izhikevich's twenty firing patterns, Brunel's regimes, Shiu et al.'s responses to taste stimulation.
 
-1. **Ground truth.** An analytic result (LIF's f-I curve; subthreshold response to a step) or a float64 integration at a step ten times finer.
-2. **Reference implementation.** The defining library or the authors' code, run by a fixture tool under `tools/`, with committed fixtures (today: SpikingJelly and snnTorch).
-3. **Published behavior.** Values or qualitative results a paper reports: the Izhikevich firing patterns, Brunel's regime diagram, Shiu et al.'s predicted responses to taste stimulation.
+Each tolerance sits beside the difference observed when it was set, and each new check ships with a mutation that breaks it. [fidelity.md](fidelity.md) lists every model's references, the check, the observed error and every known difference, with the choice sparx made. Chaotic networks are compared in statistics (rate, irregularity, synchrony) over seeds, since they cannot match spike for spike.
 
-### 11.2 The ledger
+## 12. What is not built
 
-`docs/fidelity.md` lists, for each model, its references, every known difference between a reference and the science or another reference, the choice sparx made, and the test that pins it. Differences already found or suspected:
+Directions the design leaves room for, which no code holds yet:
 
-| Item | Reference behavior | Sparx choice | State |
-| --- | --- | --- | --- |
-| LIF integration | several ML libraries step the leak with Euler, `v += dt / tau * (-v + x)` | exact exponential decay, as NEST and Brian2 do | today, to document |
-| `Synaptic` reset timing | snnTorch may apply the reset with the previous step's spike | reset on the step that fires | to verify against snnTorch |
-| ALIF input scaling and reset | Bellec et al.'s code scales input by `1 - alpha` and resets against the baseline threshold | to be decided against the paper's equations and their code | to verify |
-| Izhikevich integration | the 2003 code takes two half-steps of 0.5 ms for `v` and one step for `u`, and clips the spike peak at 30 mV | reproduce the published code as one model, and offer an RK4-integrated variant labeled as such | to verify |
-| Delays | many ML libraries have none | per-edge delays in every projection | design |
-| Spike timing | clock-driven simulators place spikes on the grid | in-step crossing times when a consumer needs them | design |
+- Logical axes on `sparx.nn` layers and in the network's step, so `MeshSpec(tensor=...)` splits wide layers; GPU and TPU measurements, and kernels where they pay (event delivery, bit-packed spikes).
+- More neuron families (exponential and quadratic integrate-and-fire, two-variable and conductance-based models beyond these, resonate-and-fire, few-compartment models), homeostatic plasticity, and distance-dependent connectivity.
+- Delays and plasticity that read a spike's offset within the step, for timing finer than `dt`.
+- Spiking backbones behind dew's other objectives (language models, JEPA, reinforcement learning), which need an adapter from tokens to currents over an inner time axis.
+- Rematerializing the time loop in chunks, to train long sequences in less memory.
+- Neuromorphic datasets beyond SHD, as dataset specs with event augmentations.
 
-### 11.3 Network validation
+[HANDOFF.md](../HANDOFF.md) orders the open work.
 
-Sparx's networks are compared with Brian2 or NEST on the Brette et al. (2007) benchmarks and on the Brunel network: population rates, coefficient-of-variation and correlation statistics agree within stated bounds, since chaotic networks cannot match spike for spike. The whole-brain model is compared with the Shiu et al. code on their published stimulations.
+## 13. Decisions taken
 
-## 12. What changes in today's code
-
-| Today | Becomes |
-| --- | --- |
-| `sparx.objectives`: `SpikingClassifierObjective`, `ActivityFitObjective`, `EPropObjective`, with `sparx.metrics.Accuracy` and `sparx.tasks.SpikingClassification` | sequence and online-learning objectives beside them |
-| `sparx.datasets.SHD`, both splits held in memory | a Grain dataset spec |
-| `sparx.nn` layers and `sparx.graph.Network` without logical axes | layers with logical axes for dew's `Layout` |
-| `docs/performance.md` CPU numbers | extended with accelerator numbers before any accelerator-specific path ships |
-
-## 13. Phases
-
-Each phase ends with its acceptance tests passing, on the hardware they name.
-
-| Phase | Work | Accepted when |
-| --- | --- | --- |
-| 0. Platform | dew records that load in a fresh process and layout rules from plugins (dew PRs); sparx takes dew as a required dependency; SHD as a Grain dataset spec; `recipes/snn/train.py` | a sparx run written by the recipe is rebuilt by `dew.pipeline(run_dir, trust=("sparx",))` in a fresh process, and trains on a simulated 8-device mesh with parity to one device |
-| 1. Fidelity of what exists | `docs/fidelity.md`; fixtures for snnTorch `Synaptic` and `Leaky`, Bellec's ALIF, Izhikevich's code, DCLS-Delays, SpikingJelly's SEW-ResNet weights | every row of the ledger has a test; differences fixed or named |
-| 2. Dynamics | `sparx.dynamics` with `dt`, units and integrators; synapses split from neurons; AdEx, HH, conductance-based LIF, STP, STDP | ground-truth tests per model; Izhikevich 2004 pattern set; Brian2 parity on single neurons |
-| 3. Graph and simulation | `Population`, `Projection`, `Network`, connectivity kernels, delay buffers, `simulate`, monitors | Brunel regimes and the COBA and CUBA benchmarks agree with Brian2; layer stacks give the same result through `Network` and `sparx.nn` |
-| 4. Connectome | FlyWire and MaleCNS builders; Shiu et al. model | their published predictions reproduced, compared with their code; memory and time per simulated second measured on one GPU |
-| 5. Learning | EventProp, e-prop, OTTT, activity fitting | gradients against finite differences of the exact dynamics where defined; published task results reproduced |
-| 6. Scale and serving | neuron-partitioned simulation over a mesh; dew `Server` generalization; streaming task; NIR export | multi-device simulation equals one device; a served session equals a direct streaming call; NIR round trip with one other library |
-| 7. Accelerator performance | GPU and TPU measurements; Pallas time-loop kernels where measurement justifies | numbers in `docs/performance.md`, each path equal to the reference path |
-
-Phases 0 and 1 come first because every later phase builds on dew's extension points and on knowing which existing models are right.
-
-Status (October 2026): phases 0 to 6 are implemented and their acceptance tests pass on CPU, with these differences from the plan. Phase 2's Izhikevich (2004) twenty-pattern set is checked against his own code run in Octave. Phase 3's Brunel regimes are compared with NEST rather than Brian2. Phase 4's time per simulated second is measured on CPU only, and the male CNS has no published run of the model: its weight is calibrated to FlyWire's synapse counts and checked against the sugar to MN9 behaviour. Phase 5's EventProp gradient is computed by implicit differentiation of exact spike times, not by the adjoint pass (the same gradient, more memory). Phase 6's stateful serving lives in `sparx.serve` until dew's `Server` generalizes (dew#30). Phase 7 needs GPU and TPU hardware this work has not had.
-
-## 14. Decisions to confirm
-
-1. Sparx takes dew as a required dependency, with Python 3.12 and dew's JAX pin. (Recommended.)
-2. Spiking objectives, dataset specs and tasks live in sparx and dew records them by import path, rather than living in dew. (Recommended: dew stays modality-neutral at its core, as with its own objectives per modality.)
-3. The four dew changes in 9.2 go into dew as their own PRs.
-4. Units are a convention checked at construction, not a runtime unit system.
-5. The first connectome target is MaleCNS v1.0 or FlyWire. FlyWire has the Shiu et al. model to validate against; MaleCNS is newer and larger. (Recommended: FlyWire first for validation, MaleCNS second with the same builder.)
+1. Sparx takes dew as a required dependency, with Python 3.12 and dew's JAX pin.
+2. Spiking objectives, dataset specs and tasks live in sparx, and dew records them by import path; dew's core stays modality-neutral.
+3. Changes sparx needs from dew go to dew as its own pull requests.
+4. Units are a documented convention ([units.md](units.md)), not a runtime unit system.
+5. FlyWire came first, to validate against Shiu et al.'s published runs; the male CNS uses the same builder, its weight calibrated to FlyWire's synapse counts (`matched_w_syn`).

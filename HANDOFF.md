@@ -4,7 +4,7 @@ The state of sparx and its dew work as of 8 October 2026: what exists, what is o
 
 ## State
 
-- The suite passes: 595 tests, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
+- The suite passes: 616 tests, among them every example run in its `--smoke` mode, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
 - sparx pins dew at `6329435` on dew's `main` (`pyproject.toml`).
 - Every commit is authored by Ashish Kumar Singh <ashishkmr472@gmail.com>.
 
@@ -78,7 +78,7 @@ Open in dew, for sparx:
 1. **Learning rules from the owner's research notes** (bio-inspired continual learning), each checked against a reference. Done: REINFORCE with Bernoulli neurons (enumerated trajectories), reward-modulated STDP (NEST), fast weights (Miconi et al.'s four networks), PC-ALM (Sakana AI's JAX reference), the FLYNN trainable connectome (their PyTorch cell), and RNeuralNet with its reward diffusion (its own C++, at the commit the notes cite; the notes are the owner's document, not a paper) and the AGREL variants of it. Open:
    - FLYNN on the whole FlyWire connectome: `sparx.graph.connectome.FLYNN` takes `Connectome.from_shiu`'s tables and their cell classes, sensory and descending neurons, but no full-brain training has been run, and their navigation task (MuJoCo) is not ported.
 2. **`research/continual/`**, built only on sparx and dew's public API.
-   - Start with the small modular core (16 x 256 units), selective fast plasticity (`sparx.nn.Recurrent` with a neuromodulated trace; on a connectome's sparse wiring as well), a BPTT reference and a switch-and-door adaptation task, as the notes recommend.
+   - Start with the small modular core (16 x 256 units), selective fast plasticity (`sparx.nn.Recurrent` with a neuromodulated trace; on a connectome's sparse wiring as well), a BPTT reference and a switch-and-door adaptation task, as the notes recommend. The notes' core sends along delayed connections, some of them plastic; `RecurrentCell` now runs fast weights on a `Sparse` wiring whose delays differ, pairing each connection's delivered value with the new output.
    - Anything awkward to express there is a gap to fix in sparx or dew.
 3. **Remaining DX review items** (the review's numbering). Items 7 and 11 are done: `docs/units.md` lists the two conventions of time and units and the two units of rates, and `EPropObjective` trains a `SpikingMLP`, so an e-prop run loads back as that model. Open:
    - the rest of the documentation plan: tutorials from training to export, a cortical circuit with a Brian2/NEST lookup table, connectomes, mixing the halves, and generated API pages. Done: a short README with a banner, six diagrams and three clips, and `docs/guide.md`, which holds the reference material the README used to; `tests/test_readme.py` runs the code blocks of both.
@@ -86,7 +86,7 @@ Open in dew, for sparx:
    - the connectome rows of `docs/performance.md` predate the event delivery of 8 October 2026 and need measuring again with the FlyWire tables;
    - drawing Brunel's 15.6M synapses takes 12.5 s against NEST's 2.8 s;
    - a step of CUBA costs twice Brian2's; most of it is the fixed work of finding spikes and running four projections' loops.
-5. **A `docs/design.md` rewrite** to describe the code as it is. Sections 5 and 6 still sketch an older monitor and receptor API, section 4.1 lists no `jump` in `SynapticInput`, section 4.4 promises a `units` table no code has (`docs/units.md` is the convention), and section 4.2 gives LIF and AdEx the wrong integration schemes.
+5. **`docs/design.md`** describes the code as it is (rewritten 8 October 2026), with what is not built in its section 12. Keep it true: a change to a contract, a format or a collection updates it in the same commit.
 6. **GPU and TPU measurements** (design phase 7), then kernels where profiling shows they pay: event delivery and bit-packed spikes. A plastic layer's step reads and writes several `[B, F, F]` arrays and backpropagating keeps one trace per step, so its CPU time is memory traffic (1.6 s per episode of 106 steps at F = 1001 on 4 cores); a remat of the step would trade compute for that memory.
 7. **Smaller deferred items:**
    - stochastic release should deplete Tsodyks-Markram resources by actual releases;

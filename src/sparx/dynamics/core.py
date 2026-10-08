@@ -16,7 +16,7 @@ unit. `graded` is fixed for a model, so whatever delivers its output
 the neurons that fired, and a dense one, which reads every value, before
 any step is traced. Two
 families meet this contract. The physical models (`sparx.dynamics.neurons`)
-are in units, checked where values are read in (design.md 4.4):
+are in units (docs/units.md lists them, with the rates of each half):
 
     time         ms        voltage      mV
     current      pA        conductance  nS
