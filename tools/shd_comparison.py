@@ -67,7 +67,7 @@ def _every_epoch(epochs: list[int], count: int, where: str) -> None:
 
 
 def _best(values: list[float]) -> float:
-    """The largest of `values` that is a number, nan when none is."""
+    """The largest of `values` that is a number, nan when none is (or there are none)."""
     finite = [value for value in values if value == value]
     return max(finite) if finite else float("nan")
 
@@ -117,7 +117,7 @@ def sparx(args: argparse.Namespace) -> None:
     held = [epochs[step]["val/accuracy"] for step in steps if "val/accuracy" in epochs[step]]
     result = {"code": "sparx", "protocol": "holdout" if args.validation else "all", "seed": args.seed,
               "test": test, "holdout": held, "last": test[-1], "best": _best(test),
-              "at_best_holdout": test[held.index(_best(held))] if held else None,
+              "at_best_holdout": test[held.index(_best(held))] if _best(held) == _best(held) else None,
               "wall_seconds_per_epoch": seconds / len(test),
               "conditions": _conditions(("sparxml", "dewml", "jax", "jaxlib", "flax", "optax"),
                                         {"sparx": ROOT})}
