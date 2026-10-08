@@ -133,6 +133,12 @@ Open in dew, for sparx:
 
 ## Working on it
 
+- **Not in the repository.** The owner's research notes, "Complete Conversation: Bio-Inspired Continual Learning" (a .docx they uploaded to the session), which the RNeuralNet work, `research/continual` and work item 1 follow. They are the owner's document and were never committed; ask the owner for them. What was built from them: the RNeuralNet rebuild and its cue-order task, reward diffusion with the all-paths repair, the AGREL variants, the modular core with selective fast weights, and the switch-and-door sessions.
+- **Merging.** The owner chose to have finished, tested batches pushed straight onto `main` (`git push origin <branch>:main`) besides the working branch, with no pull request. dew is the exception: its changes go through pull requests the owner merges.
+- **Measurements without a script in the repository.** `docs/tutorials/fit-a-circuit.md` quotes two runs made with scratch scripts. To measure them again:
+  - gradient growth through recurrence: populations `in` (50), `e` (400) and `i` (100) of `LeakyIntegrateAndFire(tau_m=20, c_m=250, e_l=-65, v_th=-50, v_reset=-65, t_ref=2, detach_reset=True)` with `ampa` `Exponential(5)` and `gaba_a` `Exponential(10)`, `e` and `i` starting uniform in -65 to -50 mV; `in` to `e` trainable and `in` to `i` fixed, `FixedProbability(0.2)`, 300 pA, 1 ms; `e` and `i` onto both with `FixedInDegree(40)` at 100 pA and `FixedInDegree(10)` at -400 pA, 1 ms; currents `normal(450, 200)` pA into `in` and 250 pA into `e` and `i`; the gradient of the last step's mean `e` membrane with respect to the trainable weights, over 5 to 80 ms, with `ATan()` and `FastSigmoid(100.0)`, seed 0;
+  - the voltage fit with firing outputs: the tutorial's circuit with `weights + 100.0`, its outputs' membranes fit from zero weights by the same L-BFGS for 100 iterations.
+
 - **Environment.** A container starts without these; recreate them:
   - `/home/user/.venv` is sparx's, with dew installed editable from `/home/user/dew` (`--no-deps -e` after sparx, since dew's git pin would otherwise conflict). `constraints.txt` pins jax to an archive of AshishKumar4/jax at `19a48d1d`; where the network proxy refuses GitHub archives (403), clone that commit and point a local constraint at the checkout (`jax @ file:///path/to/jax`).
   - `/home/user/.venv-ref` holds the simulators: NEST 3.10 and Brian2 2.10, plus torch 2.14.1+cpu (`--index-url https://download.pytorch.org/whl/cpu`; PyPI's wheel pulls CUDA). It regenerates `nest.npz` bit for bit.
