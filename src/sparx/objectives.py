@@ -515,9 +515,9 @@ class EPropObjective(Objective[Ratio]):
             outputs = self.model.apply({"params": params}, inputs)
             # `mutable` is unset, so apply returns the outputs alone, not a pair.
             assert not isinstance(outputs, tuple)
-            logits, labels = jnp.mean(outputs, axis=0), batch[self.labels]
-            losses = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
-            return losses, jnp.argmax(logits, -1) == labels
+            labels = batch[self.labels]
+            losses = readout_losses("mean", outputs, labels)
+            return losses, jnp.argmax(readout_logits("mean", outputs), -1) == labels
 
         return jax.jit(scores)
 
@@ -734,7 +734,7 @@ class RNeuralNetObjective(Objective[Ratio]):
 
             update = -jnp.sum(rows[:, None] * jax.vmap(change)(last, signal, roots), axis=0)
         stats = self.row_mean(-reward, batch)
-        metrics = {"reward": self.row_mean(reward, batch).mean()[0]}
+        metrics = {"reward": -stats.mean()[0]}
         return _with_rule(self, stats, {"weight": update}, variables["params"]), Aux(metrics=metrics)
 
     @functools.cached_property

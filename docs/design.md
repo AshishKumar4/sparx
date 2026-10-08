@@ -1,6 +1,6 @@
 # Sparx design
 
-How sparx is built, as of 8 October 2026: what each part is for, the contracts between the parts, and why they are shaped as they are. [HANDOFF.md](../HANDOFF.md) lists the open work, [fidelity.md](fidelity.md) what each model is checked against, [performance.md](performance.md) the measurements behind the defaults, and [units.md](units.md) the units.
+How sparx is built: what each part is for, the contracts between the parts, and why they are shaped as they are. [status.md](status.md) lists what is supported and what is open, [fidelity.md](fidelity.md) what each model is checked against, [performance.md](performance.md) the measurements behind the defaults, and [units.md](units.md) the units.
 
 ## 1. What sparx is for
 
@@ -165,7 +165,7 @@ A projection is stored and delivered in one of three formats, all giving the sam
 | `"dense"` | `pre x post` | otherwise, with at most `DENSE_LIMIT` entries and a density of at least 2% |
 | `"edges"` | every edge, summed per target with `segment_sum` | otherwise |
 
-Event delivery takes a step's spiking neurons in passes of `per_pass`, found by `jax.lax.top_k`, as many passes as the step has spikes. Near-even or small out-degrees keep each neuron's out-edges as one padded row; uneven ones (a connectome's) are laid end to end in blocks and found by binary search. A `while_loop` of passes keeps shapes static, drops no spike, and under `vmap` costs the busiest trial's spikes. [performance.md](performance.md) has the measurements behind each choice.
+Event delivery (`sparx.graph.delivery`) takes a step's spiking neurons in passes of `per_pass`, found by `jax.lax.top_k`, as many passes as the step has spikes. Near-even or small out-degrees keep each neuron's out-edges as one padded row; uneven ones (a connectome's) are laid end to end in blocks and found by binary search. A `while_loop` of passes keeps shapes static, drops no spike, and under `vmap` costs the busiest trial's spikes. A `while_loop` has no reverse mode, so without stochastic release the delivery is differentiated as its edge list, a `custom_jvp` whose tangent visits every edge as `format="edges"` would. [performance.md](performance.md) has the measurements behind each choice.
 
 Each population keeps a ring buffer of its last outputs, in the network's dtype, as long as its longest outgoing delay; delays are int32 steps, and a projection with one delay reads one row of the ring. An event projection whose edges have their own delays reads only the step's row and sends ahead, as NEST does: each receptor it feeds keeps its arrivals for the next `longest delay + 1` steps (`NetworkState.pending`). A step empties the row read last, sends, and only then reads, a delta receptor's row for the next step at the end of this one (`NetworkState.ready`): a row read before the buffer is written makes XLA copy the whole buffer every step.
 
@@ -222,14 +222,14 @@ A neuron layer's `dt` is the step in the unit of its time constants, its state s
 | `Trainer`, `Objective`, `Step`, `Aux`, `Ratio`, `Objective.with_gradients` | every gradient-trained objective, and every learning rule's update handed to the trainer |
 | records by import path, `to_record`, `trust=` | a run's record names sparx's models, encoders, objectives and networks, and `dew.pipeline(run_dir, trust=("sparx",))` rebuilds them in a fresh process |
 | `RunConfig` run classes, the `dew` CLI | `sparx.config.SNNRunConfig` and `recipes/snn/train.py`; `dew train run.json --trust sparx` continues a run |
-| `MeshSpec`, `Layout` | data and fsdp parallel training; trials and neurons of a simulation spread over devices |
+| `MeshSpec`, `Layout`, `logical_axes` | data and fsdp parallel training, with `SpikingMLP` and `SEWResNet` declaring their parameters' logical axes in dew's names; trials and neurons of a simulation spread over devices |
 | `Checkpoints` | training runs, and a long simulation's state after each chunk |
 | `Dataset`, `VALID_ROWS`, `Objective.row_mean` | in-memory records, and validation passes that count every record once |
 | `TokenScores`, metrics, `pipeline`, `SavedTask` | evaluation, and `sparx.tasks.SpikingClassification` as the task a run loads as |
 
 ### 9.2 Changes dew needs
 
-dew's `main` has every change sparx's earlier stopgaps waited for: records by import path, run classes, schedules and parameter groups, mapping checkpoints, whole validation passes, nested records, the gradient hook, and dew's prose checker with SLOP010. HANDOFF.md lists what is still open in dew for sparx: stateful serving (dew#30), which would make `sparx.serve.StreamServer` dew's server; two exports sparx imports from outside `__all__`; a validation reader on its own; a gradient hook that leaves the rule out of the loss's value; and `Supervised`'s metrics in the validation pass. Changes to dew go through its own pull requests, which the owner merges.
+dew's `main` has every change sparx's earlier stopgaps waited for: records by import path, run classes, schedules and parameter groups, mapping checkpoints, whole validation passes, nested records, the gradient hook, and dew's prose checker with SLOP010. [status.md](status.md#dew) lists what is still open in dew for sparx. Stateful serving in dew (dew#30) was declined, so `sparx.serve.StreamServer` stays sparx's. Changes to dew go through its own pull requests, which the owner merges.
 
 ## 10. Data
 
@@ -249,14 +249,14 @@ Each tolerance sits beside the difference observed when it was set, and each new
 
 Directions the design leaves room for, which no code holds yet:
 
-- Logical axes on `sparx.nn` layers and in the network's step, so `MeshSpec(tensor=...)` splits wide layers; GPU and TPU measurements, and kernels where they pay (event delivery, bit-packed spikes).
+- Logical axes for `sparx.nn` layers used outside `SpikingMLP` and `SEWResNet`, and in the network's step, measured under `MeshSpec(tensor=...)`; GPU and TPU measurements, and kernels where they pay (event delivery, bit-packed spikes).
 - More neuron families (exponential and quadratic integrate-and-fire, two-variable and conductance-based models beyond these, resonate-and-fire, few-compartment models), homeostatic plasticity, and distance-dependent connectivity.
 - Delays and plasticity that read a spike's offset within the step, for timing finer than `dt`.
 - Spiking backbones behind dew's other objectives (language models, JEPA, reinforcement learning), which need an adapter from tokens to currents over an inner time axis.
 - Rematerializing the time loop in chunks, to train long sequences in less memory.
 - Neuromorphic datasets beyond SHD, as dataset specs with event augmentations.
 
-[HANDOFF.md](../HANDOFF.md) orders the open work.
+[status.md](status.md) orders the open work.
 
 ## 13. Decisions taken
 

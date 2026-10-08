@@ -5,7 +5,7 @@
 
 sparx trains spiking neural networks and simulates circuits of biological neurons, in JAX. Its spiking layers are Flax modules, so they train with optax or [dew](https://github.com/AshishKumar4/dew) and work with `jit`, `grad`, `vmap` and sharding. The same neuron models also run in millivolts and milliseconds, wired into circuits and whole connectomes, and there they match NEST and Brian2.
 
-[Guide](docs/guide.md) · [Train, serve and export](docs/tutorials/train-and-deploy.md) · [From NEST and Brian2](docs/tutorials/nest-and-brian2.md) · [Fit a circuit](docs/tutorials/fit-a-circuit.md) · [Units](docs/units.md) · [Fidelity ledger](docs/fidelity.md) · [Design](docs/design.md) · [Performance](docs/performance.md)
+[Guide](docs/guide.md) · [Train, serve and export](docs/tutorials/train-and-deploy.md) · [From NEST and Brian2](docs/tutorials/nest-and-brian2.md) · [Fit a circuit](docs/tutorials/fit-a-circuit.md) · [Units](docs/units.md) · [Status](docs/status.md) · [Fidelity ledger](docs/fidelity.md) · [Design](docs/design.md) · [Performance](docs/performance.md)
 
 ## Install
 
@@ -121,7 +121,7 @@ spikes = result.records["spikes"]             # [2000, 1000]: one row of boolean
 
 Brunel's balanced network at the paper's size, 10,000 excitatory and 2,500 inhibitory LIF neurons, in its asynchronous irregular regime at 37 Hz.
 
-The physical models match NEST 3.10 and Brian2 2.10 spike for spike where the dynamics are deterministic, and in rate, irregularity and synchrony where they are chaotic. Potjans and Diesmann's cortical microcircuit, built as its reference implementation builds it, fires spike for spike with NEST on the same network ([from NEST and Brian2](docs/tutorials/nest-and-brian2.md)). On a 4-core CPU, sparx simulates a second of Brunel's network in 9.6 s, NEST in 7.5 s and Brian2 in 11.8 s ([performance](docs/performance.md#against-nest-and-brian2)). Populations can hold graded neurons and connect through stochastic release, gap junctions and neuromodulators. Projections can carry STDP, triplet STDP, dopamine-modulated STDP and short-term plasticity ([guide](docs/guide.md#simulating-circuits)).
+The physical models match NEST 3.10 and Brian2 2.10 spike for spike where the dynamics are deterministic, for the integration scheme, dtype and step each check states ([status](docs/status.md#capabilities-and-limits)), and in rate, irregularity and synchrony where they are chaotic. Potjans and Diesmann's cortical microcircuit, built as its reference implementation builds it, fires spike for spike with NEST on the same network ([from NEST and Brian2](docs/tutorials/nest-and-brian2.md)). On a 4-core CPU, sparx simulates a second of Brunel's network in 9.6 s, NEST in 7.5 s and Brian2 in 11.8 s ([performance](docs/performance.md#against-nest-and-brian2)). Populations can hold graded neurons and connect through stochastic release, gap junctions and neuromodulators. Projections can carry STDP, triplet STDP, dopamine-modulated STDP and short-term plasticity ([guide](docs/guide.md#simulating-circuits)).
 
 ## Connectomes
 
@@ -155,7 +155,7 @@ The `Trainer` from [dew](https://github.com/AshishKumar4/dew) runs sparx's objec
 | Fashion-MNIST, Seely and Gould's headline cell | ReLU residual MLP, depth 32 | PC-ALM 75.1%, PC 62.2%, backpropagation 77.8% |
 | Pattern completion, Miconi et al.'s task | plastic recurrent network | 0.3% of bits wrong; 50.1% without fast weights |
 
-These are short, untuned runs on a 4-core CPU. The [guide](docs/guide.md#results-in-detail) gives the commands, times and comparisons. No GPU or TPU numbers exist yet.
+These are short, untuned runs on a 4-core CPU. The [guide](docs/guide.md#results-in-detail) gives the commands, times and comparisons. No GPU or TPU numbers exist yet, and the full-length, multi-seed SHD comparison is still open ([status](docs/status.md)).
 
 ## Correctness
 

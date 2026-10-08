@@ -28,8 +28,9 @@ it does between them, and only a step that starts a session pays for a
 second pass.
 
 This is dew's slot-scheduling `Server` for text (a resident KV cache
-refilled from a queue) applied to neuron state; dew's own server is
-specific to token generation (AshishKumar4/dew#30).
+refilled from a queue) applied to neuron state. dew's own server overlaps
+dispatch with token draws, which synchronous frames do not need, and making
+it generic was declined (AshishKumar4/dew#30).
 """
 
 from __future__ import annotations

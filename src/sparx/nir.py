@@ -100,12 +100,12 @@ def _continuous(kept: float, dt: float, discretization: Discretization) -> tuple
     return tau, tau / dt
 
 
-def _discrete(tau: float, r: float, dt: float, discretization: Discretization) -> tuple[float, float]:
-    """`(decay, input scale)` of a continuous LIF's `discretization` at `dt`."""
+def _discrete(tau: float, dt: float, discretization: Discretization) -> tuple[float, float]:
+    """`(decay, input scale)` of a continuous LIF's `discretization` at `dt`, for an input scale `r` of 1."""
     if discretization == "exact":
         kept = decay(tau, dt)
-        return kept, r * (1 - kept)
-    return 1 - dt / tau, r * dt / tau
+        return kept, 1 - kept
+    return 1 - dt / tau, dt / tau
 
 
 def _to_nir_shape(shape: Sequence[int]) -> tuple[int, ...]:
@@ -395,12 +395,13 @@ def _import_flatten(node: nir.Flatten) -> Flatten:
     return Flatten(ndim=ndim)
 
 
-def _per_channel(values: np.ndarray, what: str) -> np.ndarray:
-    """A per-neuron NIR array as one value per output channel (feature), which a weight layer absorbs."""
+def _per_channel(values: np.ndarray) -> np.ndarray:
+    """A neuron node's per-neuron `r` as one value per output channel (feature), which a weight layer
+    absorbs."""
     values = _to_sparx_layout(np.asarray(values, float))
     rows = values.reshape(-1, values.shape[-1]) if values.ndim else values.reshape(1, 1)
     if not np.all(rows == rows[0]):
-        raise NotImplementedError(f"a LIF node imports with one {what} per channel")
+        raise NotImplementedError("a LIF node imports with one r per channel")
     return rows[0]
 
 
@@ -422,7 +423,7 @@ def _import_if(node: nir.IF, previous: dict[str, np.ndarray] | None, dt: float) 
         raise NotImplementedError("only IF nodes with v_reset = 0 import")
     if np.unique(node.v_threshold).size != 1:
         raise NotImplementedError("an IF node imports with one threshold")
-    _fold_input_scale(previous, _per_channel(np.asarray(node.r), "r") * dt, np.zeros(()), "IF")
+    _fold_input_scale(previous, _per_channel(np.asarray(node.r)) * dt, np.zeros(()), "IF")
     return IF(threshold=float(np.ravel(node.v_threshold)[0]), reset="zero")
 
 
@@ -437,8 +438,8 @@ def _import_lif(node: nir.LIF, w_rec: nir.NIRNode | None, previous: dict[str, np
         raise NotImplementedError("only LIF nodes with v_leak = v_reset = 0 import")
     if np.unique(tau).size != 1 or np.unique(node.v_threshold).size != 1:
         raise NotImplementedError("a LIF node imports with one tau and one threshold")
-    kept, scale = _discrete(float(tau.ravel()[0]), 1.0, dt, discretization)
-    scales = _per_channel(np.asarray(node.r), "r") * scale
+    kept, scale = _discrete(float(tau.ravel()[0]), dt, discretization)
+    scales = _per_channel(np.asarray(node.r)) * scale
     bias = np.asarray(w_rec.bias) if isinstance(w_rec, nir.Affine) else np.zeros(())
     _fold_input_scale(previous, scales, bias, "LIF")
     lif = LIF(tau=-1 / math.log(kept), threshold=float(np.ravel(node.v_threshold)[0]), reset="zero")
@@ -458,8 +459,8 @@ def _import_li(node: nir.LI, previous: dict[str, np.ndarray] | None, dt: float,
         raise NotImplementedError("only LI nodes with v_leak = 0 import")
     if np.unique(tau).size != 1:
         raise NotImplementedError("an LI node imports with one tau")
-    kept, scale = _discrete(float(tau.ravel()[0]), 1.0, dt, discretization)
-    _fold_input_scale(previous, _per_channel(np.asarray(node.r), "r") * scale, np.zeros(()), "LI")
+    kept, scale = _discrete(float(tau.ravel()[0]), dt, discretization)
+    _fold_input_scale(previous, _per_channel(np.asarray(node.r)) * scale, np.zeros(()), "LI")
     return LI(tau=-1 / math.log(kept))
 
 
