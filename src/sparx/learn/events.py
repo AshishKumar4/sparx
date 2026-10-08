@@ -46,16 +46,14 @@ class EventLIF:
     """The membrane and synaptic time constants `tau_m` and `tau_syn` (ms), and the threshold `v_th` (mV
     above rest).
 
-    `crossings` bounds the spikes one neuron fires between two consecutive
-    input spikes, `iterations` the bisection steps that find each. The
-    closed form of the membrane divides by `tau_syn - tau_m`, so the two
-    must differ.
+    `iterations` is the bisection steps that find each crossing. The closed
+    form of the membrane divides by `tau_syn - tau_m`, so the two must
+    differ.
     """
 
     tau_m: float = 20.0
     tau_syn: float = 5.0
     v_th: float = 1.0
-    crossings: int = 2
     iterations: int = 60
 
     def __post_init__(self):
@@ -111,51 +109,52 @@ def spike_times(inputs: jax.Array, weights: jax.Array, neuron: EventLIF, horizon
 
     `inputs` `[B, M, K]` holds each input's spike times (ms, `inf` where
     absent), `weights` `[M, N]` (pA). Returns the spike times `[B, N, capacity]`
-    up to `horizon` ms, `inf` where absent, and the count of spikes beyond
-    capacity `[B]`. Differentiable in the weights and the input times.
+    up to `horizon` ms, `inf` where absent, and the number of neurons that
+    fire more than `capacity` times `[B]`, whose first `capacity` spikes are
+    still exact. Differentiable in the weights and the input times.
+
+    Each neuron walks its own way through the inputs: a move takes it to its
+    next crossing, or, when the membrane stays below threshold until the next
+    input, to that input. A neuron makes one move per input before the
+    horizon, one per spike and one to the horizon, so `M K + capacity + 1`
+    moves finish every neuron within capacity and reach the spike past it of
+    every other.
     """
 
     def one(times):
         flat = times.reshape(-1)
         source = jnp.repeat(jnp.arange(times.shape[0]), times.shape[1])
         order = jnp.argsort(flat)
-        event_time, event_source = flat[order], source[order]
+        # The last event is the horizon itself, which delivers nothing.
+        event_time = jnp.append(jnp.minimum(flat[order], horizon), horizon)
+        event_source = jnp.append(source[order], 0)
+        arrives = jnp.append(flat[order] < horizon, False)
+        last = flat.shape[0]
         size = weights.shape[1]
+        neurons = jnp.arange(size)
         zeros = jnp.zeros(size, weights.dtype)
 
-        def advance(state, end):
-            """Run each neuron from `state` (at time `t`) to `end`, recording crossings."""
-            t, v, i, out, count, lost = state
-            for _ in range(neuron.crossings):
-                at = _crossing(neuron, v, i, end - t)
-                fires = jnp.isfinite(at)
-                slot = jax.nn.one_hot(jnp.minimum(count, capacity - 1), capacity, dtype=bool)
-                record = fires[:, None] & slot & (count < capacity)[:, None]
-                out = jnp.where(record, (t + jnp.where(fires, at, 0.0))[:, None], out)
-                lost = lost + jnp.sum(fires & (count >= capacity)).astype(lost.dtype)
-                count = count + fires.astype(count.dtype)
-                # A neuron that fired restarts from the reset at its spike.
-                i = jnp.where(fires, i * jnp.exp(-jnp.where(fires, at, 0.0) / neuron.tau_syn), i)
-                v = jnp.where(fires, 0.0, v)
-                t = jnp.where(fires, t + jnp.where(fires, at, 0.0), t)
-            v_end, _ = _trajectory(neuron, v, i, end - t)
-            i_end = i * jnp.exp(-(end - t) / neuron.tau_syn)
-            return jnp.full_like(v, end), v_end, i_end, out, count, lost
+        def move(state, _):
+            t, v, i, upcoming, out, count = state
+            end = event_time[upcoming]
+            at = _crossing(neuron, v, i, end - t)
+            fires = jnp.isfinite(at)
+            elapsed = jnp.where(fires, at, end - t)
+            slot = jax.nn.one_hot(jnp.minimum(count, capacity - 1), capacity, dtype=bool)
+            out = jnp.where(fires[:, None] & slot & (count < capacity)[:, None], (t + elapsed)[:, None], out)
+            v_end, _ = _trajectory(neuron, v, i, elapsed)
+            i = i * jnp.exp(-elapsed / neuron.tau_syn)
+            # A neuron that fired restarts from the reset at its spike; one that reached its input takes it.
+            delivered = ~fires & arrives[upcoming]
+            i = i + jnp.where(delivered, weights[event_source[upcoming], neurons], 0.0)
+            v = jnp.where(fires, 0.0, v_end)
+            upcoming = jnp.where(fires, upcoming, jnp.minimum(upcoming + 1, last))
+            return (t + elapsed, v, i, upcoming, out, count + fires.astype(count.dtype)), None
 
-        def step(state, event):
-            when, source = event
-            end = jnp.minimum(when, horizon)
-            state = advance(state, end)
-            t, v, i, out, count, lost = state
-            arrives = when < horizon
-            i = i + jnp.where(arrives, weights[source], 0.0)
-            return (t, v, i, out, count, lost), None
-
-        state = (zeros, zeros, zeros, jnp.full((size, capacity), jnp.inf, weights.dtype),
-                 jnp.zeros(size, jnp.int32), jnp.zeros((), jnp.int32))
-        state, _ = jax.lax.scan(step, state, (event_time, event_source))
-        state = advance(state, jnp.asarray(horizon, weights.dtype))
-        return state[3], state[5]
+        state = (zeros, zeros, zeros, jnp.zeros(size, jnp.int32),
+                 jnp.full((size, capacity), jnp.inf, weights.dtype), jnp.zeros(size, jnp.int32))
+        (_, _, _, _, out, count), _ = jax.lax.scan(move, state, length=last + capacity + 1)
+        return out, jnp.sum(count > capacity).astype(jnp.int32)
 
     return jax.vmap(one)(inputs)
 

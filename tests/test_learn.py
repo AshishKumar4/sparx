@@ -483,32 +483,67 @@ def test_event_gradients_are_the_exact_derivatives_of_spike_times():
             np.testing.assert_allclose(grad_in[index], numeric, rtol=1e-6, atol=1e-8)  # observed 8.3e-10
 
 
-def test_event_simulation_is_the_lif_integrated_on_a_fine_grid():
-    # The same neurons in sparx.dynamics (exact integration, exponential
-    # current synapses) at 1 us fire at the same times, to the grid.
+def _on_a_fine_grid(neuron, inputs, weights, horizon, dt):
+    """The spike times `[N]` lists of `neuron` driven by one example's `inputs` `[M, K]`, in
+    sparx.dynamics (exact integration, exponential current synapses) on a grid of `dt`."""
     from sparx.dynamics import Arrivals, Exponential, LeakyIntegrateAndFire, PointNeuron, Receptor, run
 
+    arrivals = np.zeros((round(horizon / dt), weights.shape[1]))
+    for source, when in np.argwhere(np.isfinite(np.asarray(inputs))):
+        step = round(float(inputs[source, when]) / dt) - 1  # lands at the end of this step
+        arrivals[step] += np.asarray(weights[source])
+    lif = LeakyIntegrateAndFire(tau_m=neuron.tau_m, c_m=neuron.tau_m, e_l=0.0, v_th=neuron.v_th,
+                                v_reset=0.0, t_ref=0.0)
+    cell = PointNeuron(lif, {"syn": Receptor(Exponential(neuron.tau_syn))})
+    fired, _ = run(cell, Arrivals(0.0, {"syn": jnp.asarray(arrivals)}), dt=dt)
+    return [(np.flatnonzero(np.asarray(fired.value[:, n])) + 1) * dt for n in range(weights.shape[1])]
+
+
+def _recorded(exact):
+    times = np.sort(np.asarray(exact))
+    return times[np.isfinite(times)]
+
+
+def test_event_simulation_is_the_lif_integrated_on_a_fine_grid():
+    # The same neurons at 1 us fire at the same times, to the grid.
     neuron = EventLIF()
     dt, horizon = 0.001, 60.0
     with jax.enable_x64(new_val=True):
         inputs, weights = _event_problem(seed=3, batch=1)
-        exact, _ = spike_times(inputs, weights, neuron, horizon, capacity=6)
-        steps = round(horizon / dt)
-        arrivals = np.zeros((steps, weights.shape[1]))
-        for source, when in np.argwhere(np.isfinite(np.asarray(inputs[0]))):
-            step = round(float(inputs[0, source, when]) / dt) - 1  # lands at the end of this step
-            arrivals[step] += np.asarray(weights[source])
-        lif = LeakyIntegrateAndFire(tau_m=neuron.tau_m, c_m=neuron.tau_m, e_l=0.0, v_th=neuron.v_th,
-                                    v_reset=0.0, t_ref=0.0)
-        cell = PointNeuron(lif, {"syn": Receptor(Exponential(neuron.tau_syn))})
-        fired, _ = run(cell, Arrivals(0.0, {"syn": jnp.asarray(arrivals)}), dt=dt)
-    for n in range(weights.shape[1]):
-        grid = (np.flatnonzero(np.asarray(fired.value[:, n])) + 1) * dt
-        want = np.sort(np.asarray(exact[0, n]))
-        want = want[np.isfinite(want)]
-        assert len(grid) == len(want)
-        np.testing.assert_allclose(grid, want, atol=3 * dt)  # observed 1.2e-3
-    assert np.isfinite(np.asarray(exact)).sum() >= 3
+        exact, lost = spike_times(inputs, weights, neuron, horizon, capacity=6)
+        grid = _on_a_fine_grid(neuron, inputs[0], weights, horizon, dt)
+    for n, times in enumerate(grid):
+        want = _recorded(exact[0, n])
+        assert len(times) == len(want)
+        np.testing.assert_allclose(times, want, atol=3 * dt)  # observed 1.2e-3
+    assert np.isfinite(np.asarray(exact)).sum() >= 3 and int(lost[0]) == 0
+
+
+def test_a_strong_pulse_fires_every_spike_until_capacity_runs_out():
+    # One input spike drives a burst between two inputs: every spike of it is found, and a neuron that
+    # would fire past capacity keeps its first spikes and is counted.
+    neuron = EventLIF()
+    dt, horizon = 0.001, 40.0
+    with jax.enable_x64(new_val=True):
+        inputs = jnp.asarray([[[1.0]], [[1.0]]])
+        weights = jnp.asarray([[80.0, 8.0]])
+        exact, lost = spike_times(inputs[:1], weights, neuron, horizon, capacity=40)
+        grid = _on_a_fine_grid(neuron, inputs[0], weights, horizon, dt)
+        burst = _recorded(exact[0, 0])
+        assert len(grid[0]) == len(burst) > 10 and len(grid[1]) == len(_recorded(exact[0, 1]))
+        assert int(lost[0]) == 0 and abs(grid[0][0] - burst[0]) <= 3 * dt
+        # The grid resets each spike up to a step late, a lag the waning current stretches, so the later
+        # spikes are checked as crossings of the membrane in closed form from the reset before each.
+        since = np.concatenate([[1.0], burst[:-1]])
+        current = 80.0 * np.exp(-(since - 1.0) / neuron.tau_syn)
+        charge = current * neuron.tau_syn / (neuron.tau_syn - neuron.tau_m)
+        s = burst - since
+        membrane = charge * (np.exp(-s / neuron.tau_syn) - np.exp(-s / neuron.tau_m))
+        np.testing.assert_allclose(membrane, neuron.v_th, rtol=1e-12)
+        capacity = len(burst) - 1
+        cut, lost = spike_times(inputs, weights, neuron, horizon, capacity=capacity)
+    np.testing.assert_array_equal(cut[:, 0], np.broadcast_to(burst[:capacity], (2, capacity)))
+    np.testing.assert_array_equal(lost, [1, 1])
 
 
 def test_a_two_layer_event_network_learns_spike_latencies():

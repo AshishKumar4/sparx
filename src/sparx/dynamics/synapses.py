@@ -280,11 +280,13 @@ class Receptor:
 
 
 class Arrivals(NamedTuple):
-    """One step's input to a `PointNeuron`: a held current (pA), and the weighted spikes arriving
-    at the end of the step on each receptor, by name."""
+    """One step's input to a `PointNeuron`: a held current (pA), the weighted spikes arriving at the end
+    of the step on each receptor, by name, and the noise a stochastic model fires by
+    (`SynapticInput.noise`)."""
 
     current: jax.Array | float = 0.0
     spikes: Mapping[str, jax.Array] = {}
+    noise: jax.Array | None = None
 
 
 class PointNeuronState[State](NamedTuple):
@@ -348,9 +350,10 @@ class PointNeuron[State]:
         return [name for name, r in self.receptors.items() if r.synapse.lands == where]
 
     def advance(self, state: PointNeuronState[State], current: jax.Array | float, jump: jax.Array | float,
-                dt: float, gap: Gap | None = None) -> tuple[PointNeuronState[State], Output]:
+                dt: float, gap: Gap | None = None,
+                noise: jax.Array | None = None) -> tuple[PointNeuronState[State], Output]:
         """Move the membrane over a step on the synapses' output and `gap`, with `jump` (mV) landing at its
-        end."""
+        end and `noise` for a stochastic model."""
         currents: list[Term] = []
         conductance: dict[str, jax.Array] = {}
         for name in self.landing("synapse"):
@@ -361,7 +364,7 @@ class PointNeuron[State]:
             else:
                 held = (term.amplitude if self.hold == "start" else term.mean(dt) for term in terms)
                 conductance[name] = sum(held, jnp.zeros(()))
-        received = SynapticInput(current, tuple(currents), conductance, jump, gap)
+        received = SynapticInput(current, tuple(currents), conductance, jump, gap, noise)
         cell, out = self.neuron.step(state.neuron, received, dt)
         return PointNeuronState(cell, state.synapses), out
 
@@ -410,5 +413,5 @@ class PointNeuron[State]:
     def step(self, state: PointNeuronState[State], inputs: Arrivals,
              dt: float) -> tuple[PointNeuronState[State], Output]:
         frozen = self.frozen(state, dt)
-        state, out = self.advance(state, inputs.current, self.delta(inputs.spikes), dt)
+        state, out = self.advance(state, inputs.current, self.delta(inputs.spikes), dt, noise=inputs.noise)
         return self.receive(state, inputs.spikes, dt, out.value, frozen), out

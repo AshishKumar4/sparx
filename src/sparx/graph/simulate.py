@@ -85,19 +85,20 @@ def simulate(network: Network, variables: Variables, *, duration: float,
 
     `monitors` are recorded under their names in `Simulation.records`.
     `drive` maps a `CurrentInput`'s name to its values over the whole run,
-    `[steps, ...]` (`[trials, steps, ...]` with `trials`); `key` seeds
-    Poisson inputs. `duration` and `chunk` must be whole numbers of steps
-    (`sparx.graph.network.whole_steps`). The last chunk may be shorter,
-    which compiles it once more.
+    `[steps, ...]` (`[trials, steps, ...]` with `trials`), or to a constant;
+    `key` seeds Poisson inputs. `duration` and `chunk` must be whole numbers
+    of steps (`sparx.graph.network.whole_steps`). The last chunk may be
+    shorter, which compiles it once more.
 
     `trials` runs that many independent trials from the same variables, each
     with its own noise (`fold_in(key, trial)`): records and state gain a
-    leading trial axis. `mesh` builds a device mesh as dew's `Trainer` does
-    and spreads the run over it, the trials and the neurons, whose state
-    each device keeps for its share of every population (the step's
-    exchange of spikes the compiler partitions), as `layout`'s rules place
-    the axes `trials` and `neurons` (`RULES`). Either gives one device's
-    results.
+    leading trial axis. Variables whose state already has one, those a run
+    of as many trials returned, continue each trial. `mesh` builds a device
+    mesh as dew's `Trainer` does and spreads the run over it, the trials and
+    the neurons, whose state each device keeps for its share of every
+    population (the step's exchange of spikes the compiler partitions), as
+    `layout`'s rules place the axes `trials` and `neurons` (`RULES`). Either
+    gives one device's results.
 
     `checkpoints` writes the state after every chunk, and a run whose
     directory holds a checkpoint starts from it: its records begin there
@@ -112,9 +113,9 @@ def simulate(network: Network, variables: Variables, *, duration: float,
     key = jax.random.key(0) if key is None else key
     monitors = dict(monitors or {})
     time_axis = 0 if trials is None else 1
-    drive = _checked(drive, steps, time_axis)
+    drive = _checked(drive, steps, trials)
     fixed = {name: value for name, value in variables.items() if name != "state"}
-    state = variables["state"]
+    state = _per_trial(variables["state"], trials)
 
     def run(fixed: Variables, state: Variables, drive: Mapping[str, jax.Array], key: jax.Array,
             length: int) -> tuple[dict[str, jax.Array], Variables]:
@@ -124,7 +125,6 @@ def simulate(network: Network, variables: Variables, *, duration: float,
 
     if trials is not None:
         keys = jax.vmap(lambda i: jax.random.fold_in(key, i))(jnp.arange(trials))
-        state = jax.tree.map(lambda leaf: jnp.broadcast_to(leaf, (trials, *jnp.shape(leaf))), state)
         run = jax.vmap(run, in_axes=(None, 0, 0, 0, None))
     else:
         keys = key
@@ -152,12 +152,32 @@ def simulate(network: Network, variables: Variables, *, duration: float,
                       done * network.dt)
 
 
-def _checked(drive: Drive | None, steps: int, time_axis: int) -> dict[str, np.ndarray]:
-    checked = {name: np.asarray(value) for name, value in (drive or {}).items()}
-    for name, value in checked.items():
-        if value.ndim <= time_axis or value.shape[time_axis] != steps:
+def _per_trial(state: Variables, trials: int | None) -> Variables:
+    """`state` with a leading axis of `trials` when given: broadcast from one network's state, or as it is
+    when a run of as many trials returned it. The step counter, a scalar per trial, tells which."""
+    counter = jnp.shape(state["network"]["t"])
+    if counter == (() if trials is None else (trials,)):
+        return state
+    if counter == () and trials is not None:
+        return jax.tree.map(lambda leaf: jnp.broadcast_to(leaf, (trials, *jnp.shape(leaf))), state)
+    ran = f"{counter[0]} trials" if len(counter) == 1 else f"a step counter of shape {counter}"
+    raise ValueError(f"the state is that of a run with {ran}, and this run has trials={trials}; continue "
+                     f"it with the trials it ran")
+
+
+def _checked(drive: Drive | None, steps: int, trials: int | None) -> dict[str, np.ndarray]:
+    """Each drive with its time axis, after the trial axis when there are trials; a constant is broadcast
+    over both, as `Network` holds it over the steps."""
+    time_axis = 0 if trials is None else 1
+    checked = {}
+    for name, given in (drive or {}).items():
+        value = np.asarray(given)
+        if value.ndim == 0:
+            value = np.broadcast_to(value, (steps,) if trials is None else (trials, steps))
+        elif value.ndim <= time_axis or value.shape[time_axis] != steps:
             raise ValueError(f"drive {name!r} needs a time axis of {steps} steps at {time_axis}, "
                              f"got shape {value.shape}")
+        checked[name] = value
     return checked
 
 

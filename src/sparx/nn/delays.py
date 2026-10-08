@@ -43,13 +43,17 @@ def delay_kernel(delay: jax.Array, max_delay: int, sigma: float | jax.Array) -> 
     kernel and clamps its positions after each update, so a delay at an end
     of the range gets the kernel's full gradient there; `jnp.clip` would
     halve it at the end and zero it past it.
+
+    The normalization is a softmax of the log-density: a width far below a
+    step underflows every lag's density to 0 (at a delay of 0.5 and a width
+    of 0.01 the largest log-density is -1250), where the softmax keeps the
+    nearest lags.
     """
     lags = jnp.arange(max_delay + 1, dtype=jnp.float32).reshape((-1,) + (1,) * delay.ndim)
     center = delay + jax.lax.stop_gradient(jnp.clip(delay, 0, max_delay) - delay)
     if isinstance(sigma, (int, float)) and sigma == 0:
         return (lags == jnp.round(jax.lax.stop_gradient(center))).astype(jnp.float32)
-    density = jnp.exp(-0.5 * ((lags - center) / sigma) ** 2)
-    return density / jnp.sum(density, axis=0, keepdims=True)
+    return jax.nn.softmax(-0.5 * ((lags - center) / sigma) ** 2, axis=0)
 
 
 def _uniform(maximum: float) -> nn.initializers.Initializer:

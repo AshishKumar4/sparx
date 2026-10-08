@@ -66,7 +66,8 @@ A deployed classifier sees a recording as it arrives, a few steps at a time. `St
 ```python
 from sparx.serve import StreamServer
 
-server = StreamServer(classifier.model, classifier.variables, slots=4, frame=10, sample_shape=(30,))
+server = StreamServer(classifier.model, classifier.variables, call=classifier.call, slots=4, frame=10,
+                      sample_shape=(30,))
 session = server.open()
 recording = test["spikes"][0].astype(np.float32)          # [40, 30], time first
 futures = [server.submit(session, recording[t:t + 10]) for t in range(0, 40, 10)]

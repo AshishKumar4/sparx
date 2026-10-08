@@ -7,7 +7,8 @@
     outputs = future.result()                  # [10, ...]
 
 A run that `dew.pipeline` reloads serves as `StreamServer(classifier.model,
-classifier.variables, ...)`; its frames are the encoder's output, time-major.
+classifier.variables, call=classifier.call, ...)`; its frames are the
+encoder's output, time-major.
 
 A spiking model that streams (the `state` collection, the guide's "Streaming")
 carries its neurons' state from one call to the next. A server keeps that
@@ -35,6 +36,7 @@ from __future__ import annotations
 
 import collections
 import functools
+from collections.abc import Mapping
 from concurrent.futures import Future
 
 import flax.linen as nn
@@ -44,6 +46,7 @@ import numpy as np
 from dew.objectives.base import Variables
 
 from sparx.nn import STATE
+from sparx.tasks import bound_call
 
 __all__ = ["StreamServer"]
 
@@ -53,14 +56,24 @@ class StreamServer:
 
     `variables` holds every collection the model reads (`params`, and
     `batch_stats` for a model with batch norm); a `state` collection in it
-    is ignored, since each session starts at rest. Construction runs the
+    is ignored, since each session starts at rest. The model runs as a
+    trained classifier does (`sparx.tasks.bound_call`): with `train=False`
+    when it takes `train`, and the keyword arguments `call` (a loaded
+    classifier's `call`, its schedules' last values). Construction runs the
     model once on abstract inputs, so a model that cannot stream fails here
     with the reason.
+
+    A future cancelled before its frame runs drops that frame, and the
+    session runs its next one. A step that raises sets the exception on the
+    futures of every frame it took, leaves every session's state as it
+    was, and raises it.
     """
 
     def __init__(self, model: nn.Module, variables: Variables, *, slots: int, frame: int,
-                 sample_shape: tuple[int, ...], dtype: jnp.dtype | type = jnp.float32):
+                 sample_shape: tuple[int, ...], dtype: jnp.dtype | type = jnp.float32,
+                 call: Mapping[str, float] | None = None):
         self.model, self.slots, self.frame = model, slots, frame
+        self.method = bound_call(model, train=False, kwargs=call or {})
         self.variables = {name: tree for name, tree in variables.items() if name != STATE}
         self.sample_shape, self.dtype = tuple(sample_shape), dtype
         self.axes = self._check()  # each state leaf's batch axis
@@ -84,8 +97,8 @@ class StreamServer:
         for batch in (self.slots, self.slots + 1):
             frames = jax.ShapeDtypeStruct((self.frame, batch, *self.sample_shape), self.dtype)
             try:
-                shapes.append(jax.eval_shape(functools.partial(self.model.apply, mutable=[STATE]),
-                                             self.variables, frames))
+                shapes.append(jax.eval_shape(functools.partial(self.model.apply, method=self.method,
+                                                               mutable=[STATE]), self.variables, frames))
             except Exception as error:
                 raise ValueError(f"{name} cannot be served: one frame {frames.shape} with the 'state' "
                                  f"collection mutable raised {type(error).__name__}: {error}") from error
@@ -114,7 +127,7 @@ class StreamServer:
         `active` keep their state.
         """
         def apply(variables: Variables) -> tuple[jax.Array, Variables]:
-            return self.model.apply(variables, frames, mutable=[STATE])
+            return self.model.apply(variables, frames, method=self.method, mutable=[STATE])
 
         if state is None:  # no row has run, so every row that runs begins here
             return apply(self.variables)
@@ -156,9 +169,20 @@ class StreamServer:
         self.pending[session].append((frame, future))
         return future
 
+    def _claim(self, session: int) -> tuple[np.ndarray, Future] | None:
+        """`session`'s oldest frame whose future is not cancelled, its future now running; None when every
+        waiting frame was cancelled."""
+        queue = self.pending[session]
+        while queue:
+            frame, future = queue.popleft()
+            if future.set_running_or_notify_cancel():
+                return frame, future
+        return None
+
     def step(self) -> int:
         """Run the oldest waiting frame of every session that has one; returns how many ran."""
-        ready = {session: queue.popleft() for session, queue in self.pending.items() if queue}
+        claimed = {session: self._claim(session) for session in self.pending}
+        ready = {session: taken for session, taken in claimed.items() if taken is not None}
         if not ready:
             return 0
         frames = np.zeros((self.frame, self.slots, *self.sample_shape), self.dtype)
@@ -168,11 +192,17 @@ class StreamServer:
             active[self.sessions[session]] = True
         starting = self.fresh & {self.sessions[session] for session in ready}
         fresh = np.isin(np.arange(self.slots), list(starting))
-        outputs, self.state = self._step(self.state, jnp.asarray(frames), jnp.asarray(active),
-                                         jnp.asarray(fresh), carry=len(starting) < len(ready),
-                                         start=bool(starting))
+        try:
+            outputs, state = self._step(self.state, jnp.asarray(frames), jnp.asarray(active),
+                                        jnp.asarray(fresh), carry=len(starting) < len(ready),
+                                        start=bool(starting))
+            outputs = np.asarray(outputs)
+        except Exception as error:
+            for _, future in ready.values():
+                future.set_exception(error)
+            raise
+        self.state = state
         self.fresh -= starting
-        outputs = np.asarray(outputs)
         for session, (_, future) in ready.items():
             future.set_result(outputs[:, self.sessions[session]])
         return len(ready)

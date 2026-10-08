@@ -191,8 +191,9 @@ class BernoulliCell:
              dt: float) -> tuple[BernoulliState, Output]:
         x = _dimensionless(inputs)
         if inputs.noise is None:
-            raise ValueError("a BernoulliCell fires by its noise: give SynapticInput.noise, uniform on "
-                             "[0, 1)")
+            raise ValueError("a BernoulliCell fires by its noise, one uniform draw on [0, 1) per neuron and "
+                             "step: give SynapticInput.noise, or Arrivals.noise through a PointNeuron; a "
+                             "sparx.nn layer and a sparx.graph Network draw none")
         v = self.decay ** dt * state.v + x
         p = jax.nn.sigmoid(self.beta * (v - self.threshold))
         s = (inputs.noise < p).astype(v.dtype)
@@ -347,9 +348,11 @@ class Serial[First, Second]:
 
     snnTorch's `Synaptic` and the CUBA neurons of Zenke and Vogels (2021).
     Longer chains nest. The output is the second model's, in the dtype it
-    gives it, and the pair is graded when the second model is. In physical
-    units the counterpart is a `PointNeuron` with an `Exponential` synapse,
-    where an arrival shapes the membrane from the next step on.
+    gives it, and the pair is graded when the second model is. The step's
+    noise is the second model's, which fires: `Serial(LICell(...),
+    BernoulliCell(...))` is a current-based neuron with escape noise. In
+    physical units the counterpart is a `PointNeuron` with an `Exponential`
+    synapse, where an arrival shapes the membrane from the next step on.
     """
 
     first: NeuronModel[First]
@@ -364,8 +367,8 @@ class Serial[First, Second]:
 
     def step(self, state: tuple[First, Second], inputs: SynapticInput,
              dt: float) -> tuple[tuple[First, Second], Output]:
-        first, between = self.first.step(state[0], inputs, dt)
-        second, out = self.second.step(state[1], SynapticInput(jump=between.value), dt)
+        first, between = self.first.step(state[0], dataclasses.replace(inputs, noise=None), dt)
+        second, out = self.second.step(state[1], SynapticInput(jump=between.value, noise=inputs.noise), dt)
         return (first, second), out
 
     def is_refractory(self, state: tuple[First, Second], dt: float) -> jax.Array:

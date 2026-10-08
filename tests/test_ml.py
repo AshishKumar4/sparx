@@ -171,6 +171,24 @@ def test_noise_goes_to_a_stochastic_model_and_only_there():
         run(LIFCell(0.8), SynapticInput(jump=xs, noise=jnp.zeros_like(xs)))
 
 
+def test_noise_reaches_a_stochastic_model_through_serial_and_point_neuron():
+    # In series the noise is the firing model's: the current-based escape-noise neuron fires as its
+    # reference does on the synapse's filtered input. Through a PointNeuron it rides on the arrivals.
+    from sparx.dynamics import Arrivals, Delta, PointNeuron, Receptor
+
+    xs = currents(15, scale=0.6)
+    noise = np.asarray(jax.random.uniform(jax.random.key(4), xs.shape))
+    cell = BernoulliCell(0.8, threshold=1.0, beta=3.0)
+    out, _ = run(Serial(LICell(0.7), cell), SynapticInput(jump=jnp.asarray(xs), noise=jnp.asarray(noise)))
+    expected, _, _ = reference.bernoulli(reference.li(xs.astype(np.float64), 0.7), noise, 0.8, 3.0)
+    np.testing.assert_array_equal(out.value, expected)
+    assert 0.1 < expected.mean() < 0.9
+    point = PointNeuron(cell, {"d": Receptor(Delta())})
+    alone, _ = run(cell, SynapticInput(jump=jnp.asarray(xs), noise=jnp.asarray(noise)))
+    through, _ = run(point, Arrivals(spikes={"d": jnp.asarray(xs)}, noise=jnp.asarray(noise)))
+    np.testing.assert_array_equal(through.value, alone.value)
+
+
 def test_alif_matches_the_reference_loop():
     xs = currents(5, scale=1.0)
     spikes, _ = fired(ALIFCell(0.9, 0.97, beta=0.5), jnp.asarray(xs))

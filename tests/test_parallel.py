@@ -51,6 +51,16 @@ def test_sliding_psn_streams_in_chunks(k):
     np.testing.assert_array_equal(jnp.concatenate(outputs), whole)
 
 
+def test_sliding_psn_holds_nothing_quadratic_in_time():
+    # Its k weights slide over k slices of the window: no array of T x T entries, forward or backward.
+    steps, layer = 512, SlidingPSN(k=4)
+    x = inputs(steps)
+    params = layer.init(jax.random.key(0), x)
+    jaxpr = jax.make_jaxpr(jax.grad(lambda p: jnp.sum(layer.apply(p, x))))(params)
+    sizes = [np.prod(v.aval.shape) for eqn in jaxpr.eqns for v in eqn.outvars if hasattr(v.aval, "shape")]
+    assert max(sizes) == (steps + layer.k - 1) * x[0].size  # the window of held and new steps
+
+
 def test_sliding_psn_runs_on_any_length_with_the_same_parameters():
     params = SlidingPSN(k=3).init(jax.random.key(0), inputs(4))
     for steps in (1, 2, 40):

@@ -53,6 +53,20 @@ def test_gaussian_kernels_sum_to_one_and_peak_at_the_delay():
     np.testing.assert_array_equal(jnp.argmax(kernel, 0), [[0, 2], [4, 5]])  # 9 clips to the last lag
 
 
+def test_a_width_far_below_a_step_keeps_the_nearest_lags():
+    # Every lag's density underflows at a width of 0.01; the kernel still splits a half-step delay
+    # between its two lags and reads the rounded lag of any other, as the deployed layer does.
+    np.testing.assert_array_equal(delay_kernel(jnp.asarray(0.5), 4, 0.01), [0.5, 0.5, 0, 0, 0])
+    x = inputs(6)
+    layer = DelayedDense(OUT, K)
+    params = layer.init(jax.random.key(0), x, 1.0)
+    delay = np.round(np.asarray(params["params"]["delay"])) + 0.3
+    params = {"params": {**params["params"], "delay": jnp.asarray(delay)}}
+    narrow, grads = jax.value_and_grad(lambda p: jnp.sum(layer.apply(p, x, 0.01) ** 2))(params)
+    np.testing.assert_allclose(narrow, jnp.sum(layer.apply(params, x, 0) ** 2), rtol=1e-6)  # observed 0
+    assert all(np.all(np.isfinite(g)) for g in jax.tree.leaves(grads))
+
+
 def test_delays_receive_gradients_while_the_gaussian_has_width():
     x = inputs(2)
     layer = DelayedDense(OUT, K)

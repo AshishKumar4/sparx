@@ -65,6 +65,7 @@ from dew.registry import to_record
 from dew.training.optim import ScheduleBase
 
 from sparx.dynamics import NeuronModel
+from sparx.dynamics.core import membrane_dtype
 from sparx.encode import EventsEncoder, SpikeEncoder
 from sparx.learn import (
     EPropParams,
@@ -407,7 +408,10 @@ class EPropObjective(Objective[Ratio]):
     them with its accumulation, sharding and logging. A bias is a synapse
     from an input that is always 1, and e-prop trains it as one. e-prop
     computes no gradient for a time constant, so a model that learns one is
-    refused, as are delays, batch norm, dropout and plasticity rules.
+    refused, as are delays, batch norm, dropout and plasticity rules. It
+    computes as the model does: in the model's `dtype` when it has one,
+    float32 or wider, else in the widest of float32 and the parameters'
+    dtypes, at the model's `precision`.
     `rule="bptt"` differentiates `sparx.learn.bptt_loss` instead. With
     `rule="random"` the feedback weights are drawn once by `init` and kept
     in the `feedback` collection, which no update touches.
@@ -452,19 +456,26 @@ class EPropObjective(Objective[Ratio]):
         return tree
 
     def _network(self, params: Variables, batch: Batch) -> tuple[EPropParams, jax.Array, jax.Array]:
-        """e-prop's parameters, the time-major inputs `[T, B, channels]` and the labels `[B]`. With
-        biases, the input bias is a last row of `w_in` and the inputs gain a last channel of ones."""
-        inputs = jnp.swapaxes(jnp.asarray(batch[self.sample.key], jnp.float32), 0, 1)
+        """e-prop's parameters, the time-major inputs `[T, B, channels]` and the labels `[B]`, in the
+        model's dtype when it has one, as its flax layers cast them. With biases, the input bias is a last
+        row of `w_in` and the inputs gain a last channel of ones."""
+        dtype = self.model.dtype
+        inputs = jnp.asarray(batch[self.sample.key], jnp.float32 if dtype is None else dtype)
+        inputs = jnp.swapaxes(inputs, 0, 1)
         w_in, readout = params["dense_0"]["kernel"], params["readout"]
         b_out = readout["bias"] if self.model.use_bias else jnp.zeros(self.model.classes)
         if self.model.use_bias:
             w_in = jnp.concatenate([w_in, params["dense_0"]["bias"][None]])
             inputs = jnp.concatenate([inputs, jnp.ones((*inputs.shape[:2], 1), inputs.dtype)], axis=-1)
         w_rec = params["recurrent_0"]["recurrent"] * (1 - jnp.eye(self.hidden))
-        return EPropParams(w_in, w_rec, readout["kernel"], b_out), inputs, jnp.asarray(batch[self.labels])
+        network = EPropParams(w_in, w_rec, readout["kernel"], b_out)
+        if dtype is not None:
+            network = EPropParams(*(p.astype(dtype) for p in network))
+        return network, inputs, jnp.asarray(batch[self.labels])
 
-    def _update(self, grads: EPropParams) -> Variables:
-        """e-prop's gradients as a tree of the model's parameters, the recurrent diagonal's 0."""
+    def _update(self, grads: EPropParams, params: Variables) -> Variables:
+        """e-prop's gradients as a tree of the model's parameters `params`, each in its parameter's dtype,
+        the recurrent diagonal's 0."""
         channels = self.sample.shape[1]
         update = {"dense_0": {"kernel": grads.w_in[:channels]},
                   "recurrent_0": {"recurrent": grads.w_rec * (1 - jnp.eye(self.hidden))},
@@ -472,7 +483,7 @@ class EPropObjective(Objective[Ratio]):
         if self.model.use_bias:
             update["dense_0"]["bias"] = grads.w_in[channels]
             update["readout"]["bias"] = grads.b_out
-        return update
+        return jax.tree.map(lambda g, p: g.astype(p.dtype), update, params)
 
     def loss(self, variables: Variables, batch: Batch, step: Step) -> tuple[Ratio, Aux]:
         params, inputs, labels = self._network(variables["params"], batch)
@@ -483,16 +494,19 @@ class EPropObjective(Objective[Ratio]):
         def step_loss(y: jax.Array, label: jax.Array) -> jax.Array:
             return jnp.sum(weights * optax.softmax_cross_entropy_with_integer_labels(y, label)) / steps
 
+        precision = self.model.precision
         if self.rule == "bptt":
-            total = bptt_loss(self.cell, params, inputs, targets, step_loss, tau=self.tau, dt=self.dt)
+            total = bptt_loss(self.cell, params, inputs, targets, step_loss, tau=self.tau, dt=self.dt,
+                              precision=precision)
             return Ratio(total, jnp.sum(weights)), Aux(metrics={})
         feedback = variables["feedback"]["weight"] if self.rule == "random" else None
         # The trainer's gradient reaches the parameters through `with_gradients` alone, so it never
         # linearizes e-prop's scan, whose memory would then grow with the recording.
         total, grads = eprop(self.cell, jax.lax.stop_gradient(params), inputs, targets, step_loss,
-                             tau=self.tau, dt=self.dt, feedback=feedback)
+                             tau=self.tau, dt=self.dt, feedback=feedback, precision=precision)
         stats = Ratio(total, jnp.sum(weights))
-        return _with_rule(self, stats, self._update(grads), variables["params"]), Aux(metrics={})
+        update = self._update(grads, variables["params"])
+        return _with_rule(self, stats, update, variables["params"]), Aux(metrics={})
 
     @functools.cached_property
     def _scores(self) -> Callable[[Variables, Batch], tuple[jax.Array, jax.Array]]:
@@ -526,7 +540,10 @@ class EPropObjective(Objective[Ratio]):
 
 def _check_eprop_network(model: SpikingMLP, channels: int) -> None:
     """Raise unless e-prop trains every parameter of `model`: one recurrent hidden layer, dense
-    synapses, fixed time constants, no batch norm and no dropout."""
+    synapses, fixed time constants, no batch norm and no dropout, computing in float32 or wider."""
+    if model.dtype is not None and membrane_dtype(jnp.dtype(model.dtype)) != jnp.dtype(model.dtype):
+        raise ValueError(f"e-prop's eligibility traces accumulate in float32 or wider, and this SpikingMLP "
+                         f"computes in {jnp.dtype(model.dtype).name}; give it dtype=None or a wider one")
     sample = jax.ShapeDtypeStruct((1, 1, channels), jnp.float32)
     shapes = jax.eval_shape(model.init, jax.random.key(0), sample)
     bias = {"bias"} if model.use_bias else set()

@@ -132,13 +132,14 @@ class SlidingPSN(nn.Module):
     `weight[k - 1]` multiplies the current step; the first steps of a fresh
     sequence see zeros before it. `exponential_init` starts the weights at
     `(..., 1/4, 1/2, 1)`, otherwise kaiming uniform (SpikingJelly's
-    `exp_init`).
+    `exp_init`). The membrane is `k` weighted slices of the window, `O(T k)`,
+    in membrane precision; SpikingJelly builds the `[T, T]` Toeplitz matrix
+    of the weights instead.
     """
 
     k: int
     exponential_init: bool = True
     surrogate: Surrogate = ATan()
-    precision: jax.lax.Precision | None = None
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -147,13 +148,9 @@ class SlidingPSN(nn.Module):
         init = _exponential if self.exponential_init else _kaiming_row
         weight = self.param("weight", init, (self.k,), jnp.float32)
         bias = self.param("bias", nn.initializers.constant(-1.0), (), jnp.float32)
-        steps, held = x.shape[0], self.k - 1
-        window = history_window(self, x, held)
-        # The Toeplitz matrix that slides the weights, over the held steps and
-        # the new ones: row t reads columns t .. t + k - 1 of the window.
-        rows = jnp.arange(steps)[:, None]
-        cols = jnp.arange(steps + held)[None, :]
-        offset = cols - rows
-        toeplitz = jnp.where((offset >= 0) & (offset < self.k), weight[jnp.clip(offset, 0, self.k - 1)], 0)
-        h = _mix(toeplitz, jnp.broadcast_to(bias, (steps,)), window, self.precision)
+        steps, dtype = x.shape[0], membrane_dtype(x.dtype)
+        window = history_window(self, x, self.k - 1).astype(dtype)
+        weight = weight.astype(dtype)
+        # Step t reads the window's steps t .. t + k - 1, the last of them x[t].
+        h = sum((weight[i] * window[i:i + steps] for i in range(self.k)), bias.astype(dtype))
         return _fire(self, h, self.surrogate, x.dtype)

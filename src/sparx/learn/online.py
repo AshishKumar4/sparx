@@ -30,6 +30,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from flax.typing import PrecisionLike
 from jax.extend.core import Jaxpr, Literal, Var
 
 from sparx.dynamics import Dense, LICell, NeuronModel, RecurrentCell, SynapticInput, decay
@@ -83,16 +84,28 @@ def _readout(tau: float) -> LICell:
     return LICell(decay(tau))
 
 
+def _promoted(params: EPropParams, inputs: jax.Array) -> tuple[EPropParams, jax.Array]:
+    """The parameters and inputs in one dtype, the widest of theirs and float32, so every carry of a scan
+    keeps the dtype it starts in: float64 weights promote a float32 input's products."""
+    dtype = membrane_dtype(jnp.result_type(inputs, *params))
+    return EPropParams(*(p.astype(dtype) for p in params)), inputs.astype(dtype)
+
+
 def eprop_forward(cell: NeuronModel, params: EPropParams, inputs: jax.Array, *, tau: float, dt: float = 1.0,
-                  cut_recurrence: bool = False) -> tuple[jax.Array, jax.Array]:
+                  cut_recurrence: bool = False,
+                  precision: PrecisionLike = None) -> tuple[jax.Array, jax.Array]:
     """The network `eprop` trains, over time-major `inputs` `[T, B, in]`: a `RecurrentCell` of `cell`
     and an `LICell` readout of time constant `tau`, both stepped at `dt`.
 
     Returns the readout `[T, B, out]` and the recurrent layer's spikes
-    `[T, B, N]`. With `cut_recurrence` the gradient stops at the fed-back
-    spikes, which makes BPTT's gradient e-prop's.
+    `[T, B, N]`, in the widest dtype of the inputs, the parameters and
+    float32. With `cut_recurrence` the gradient stops at the fed-back
+    spikes, which makes BPTT's gradient e-prop's. `precision` is the
+    matrix products'.
     """
-    layer, readout = RecurrentCell(cell, Dense(params.w_rec), cut_gradient=cut_recurrence), _readout(tau)
+    params, inputs = _promoted(params, inputs)
+    layer = RecurrentCell(cell, Dense(params.w_rec, precision), cut_gradient=cut_recurrence)
+    readout = _readout(tau)
 
     # One scan over both models, with each step's products inside it. Two
     # `run`s, the input and readout products taken over all steps at once,
@@ -100,8 +113,10 @@ def eprop_forward(cell: NeuronModel, params: EPropParams, inputs: jax.Array, *, 
     # `benchmarks/bench_eprop.py`'s shapes on a 4-core CPU.
     def step(carry, u):
         state, y = carry
-        state, spikes = layer.step(state, SynapticInput(jump=u @ params.w_in), dt)
-        y, out = readout.step(y, SynapticInput(jump=spikes.value @ params.w_out + params.b_out), dt)
+        state, spikes = layer.step(state, SynapticInput(jump=jnp.matmul(u, params.w_in, precision=precision)),
+                                   dt)
+        jump = jnp.matmul(spikes.value, params.w_out, precision=precision) + params.b_out
+        y, out = readout.step(y, SynapticInput(jump=jump), dt)
         return (state, y), (out.value, spikes.value)
 
     batch, size = inputs.shape[1], params.w_rec.shape[0]
@@ -111,10 +126,12 @@ def eprop_forward(cell: NeuronModel, params: EPropParams, inputs: jax.Array, *, 
 
 
 def bptt_loss(cell: NeuronModel, params: EPropParams, inputs: jax.Array, targets: jax.Array, loss: Loss, *,
-              tau: float, dt: float = 1.0, cut_recurrence: bool = False) -> jax.Array:
+              tau: float, dt: float = 1.0, cut_recurrence: bool = False,
+              precision: PrecisionLike = None) -> jax.Array:
     """The summed loss of `eprop_forward`'s readout; its gradient is BPTT's, or e-prop's with
     `cut_recurrence`."""
-    outputs, _ = eprop_forward(cell, params, inputs, tau=tau, dt=dt, cut_recurrence=cut_recurrence)
+    outputs, _ = eprop_forward(cell, params, inputs, tau=tau, dt=dt, cut_recurrence=cut_recurrence,
+                               precision=precision)
     return jnp.sum(jax.vmap(loss)(outputs, targets))
 
 
@@ -211,8 +228,8 @@ class _Eligibility(NamedTuple):
 
 
 def _trace_step[State](cell: NeuronModel[State], structure: _Structure, dt: float, params: EPropParams,
-                       state: State, u: jax.Array, z: jax.Array,
-                       eligibility: _Eligibility) -> tuple[State, jax.Array, jax.Array, _Eligibility]:
+                       state: State, u: jax.Array, z: jax.Array, eligibility: _Eligibility,
+                       precision: PrecisionLike) -> tuple[State, jax.Array, jax.Array, _Eligibility]:
     """One step of the recurrent layer and of its synapses' eligibility, on the input `u` `[B, in]` and the
     previous step's spikes `z` `[B, N]`, the presynaptic activity `pre = [u, z]`.
 
@@ -225,7 +242,7 @@ def _trace_step[State](cell: NeuronModel[State], structure: _Structure, dt: floa
     traces `[B, N, P]` and the new eligibility.
     """
     pre = jnp.concatenate([u, z], -1)
-    x = u @ params.w_in + z @ params.w_rec
+    x = jnp.matmul(u, params.w_in, precision=precision) + jnp.matmul(z, params.w_rec, precision=precision)
     leaves, tree = jax.tree.flatten(state)
     d = len(leaves)
 
@@ -269,7 +286,8 @@ def _start(structure: _Structure, batch: int, size: int, fan_in: int, dtype: jnp
 
 
 def eprop(cell: NeuronModel, params: EPropParams, inputs: jax.Array, targets: jax.Array, loss: Loss, *,
-          tau: float, dt: float = 1.0, feedback: jax.Array | None = None) -> tuple[jax.Array, EPropParams]:
+          tau: float, dt: float = 1.0, feedback: jax.Array | None = None,
+          precision: PrecisionLike = None) -> tuple[jax.Array, EPropParams]:
     """e-prop's gradients for `eprop_forward`'s network, computed online.
 
     Each synapse `i -> j` keeps an eligibility vector, the derivative of
@@ -287,12 +305,16 @@ def eprop(cell: NeuronModel, params: EPropParams, inputs: jax.Array, targets: ja
     and one the gradient never reaches (a refractory count) needs nothing.
     Memory is `B x N x P` for the filtered traces, plus as much for each
     remaining state variable, `P = in + N`, whatever the sequence length.
-    Returns the summed loss and the gradients.
+    It runs in the widest dtype of the inputs, the parameters and float32,
+    and `precision` is its matrix products'. Returns the summed loss and the
+    gradients, each in its parameter's dtype.
     """
+    given = params
+    params, inputs = _promoted(params, inputs)
+    dtype = inputs.dtype
     batch, size = inputs.shape[1], params.w_rec.shape[0]
     fan_in = inputs.shape[2] + size
-    feedback = params.w_out if feedback is None else feedback
-    dtype = membrane_dtype(inputs.dtype)
+    feedback = params.w_out if feedback is None else feedback.astype(dtype)
     structure = _structure(cell, dtype, dt)
     readout = _readout(tau)
     kappa = readout.decay ** dt
@@ -300,45 +322,50 @@ def eprop(cell: NeuronModel, params: EPropParams, inputs: jax.Array, targets: ja
     def step(carry, xs):
         state, z, y, eligibility, filtered, z_bar, leak, total, grad_w, grad_out, grad_b = carry
         u, target = xs
-        state, z, trace, eligibility = _trace_step(cell, structure, dt, params, state, u, z, eligibility)
-        y, out = readout.step(y, SynapticInput(jump=z @ params.w_out + params.b_out), dt)
+        state, z, trace, eligibility = _trace_step(cell, structure, dt, params, state, u, z, eligibility,
+                                                   precision)
+        jump = jnp.matmul(z, params.w_out, precision=precision) + params.b_out
+        y, out = readout.step(y, SynapticInput(jump=jump), dt)
         value, dy = jax.value_and_grad(loss)(out.value, target)
         filtered = kappa * filtered + trace
         z_bar = kappa * z_bar + z
         leak = kappa * leak + 1  # the bias accumulates through the readout's leak too
-        signal = dy @ feedback.T  # [B, N]
+        signal = jnp.matmul(dy, feedback.T, precision=precision)  # [B, N]
         # A product and a sum over the batch: XLA on CPU runs the einsum
         # "bn,bnp->pn" as a batched matrix product, three times slower here.
         grad_w = grad_w + (signal[..., None] * filtered).sum(0)
         return (state, z, y, eligibility, filtered, z_bar, leak, total + value, grad_w,
-                grad_out + z_bar.T @ dy, grad_b + leak * dy.sum(0)), None
+                grad_out + jnp.matmul(z_bar.T, dy, precision=precision), grad_b + leak * dy.sum(0)), None
 
-    carry = (cell.init_state((batch, size), inputs.dtype), jnp.zeros((batch, size), inputs.dtype),
-             readout.init_state((batch, params.w_out.shape[1]), inputs.dtype),
+    carry = (cell.init_state((batch, size), dtype), jnp.zeros((batch, size), dtype),
+             readout.init_state((batch, params.w_out.shape[1]), dtype),
              _start(structure, batch, size, fan_in, dtype), jnp.zeros((batch, size, fan_in), dtype),
-             jnp.zeros((batch, size), inputs.dtype), jnp.zeros((), inputs.dtype), jnp.zeros((), inputs.dtype),
+             jnp.zeros((batch, size), dtype), jnp.zeros((), dtype), jnp.zeros((), dtype),
              jnp.zeros((size, fan_in), dtype), jnp.zeros_like(params.w_out), jnp.zeros_like(params.b_out))
     final, _ = jax.lax.scan(step, carry, (inputs, targets))
     total, grad_w, grad_out, grad_b = final[7:]
     n_in = inputs.shape[2]
-    grad_w = grad_w.T.astype(params.w_in.dtype)
-    return total, EPropParams(grad_w[:n_in], grad_w[n_in:], grad_out, grad_b)
+    grad_w = grad_w.T
+    grads = EPropParams(grad_w[:n_in], grad_w[n_in:], grad_out, grad_b)
+    return total, EPropParams(*(g.astype(p.dtype) for g, p in zip(grads, given, strict=True)))
 
 
 def eligibility_traces(cell: NeuronModel, params: EPropParams, inputs: jax.Array, *,
-                       dt: float = 1.0) -> jax.Array:
+                       dt: float = 1.0, precision: PrecisionLike = None) -> jax.Array:
     """Every step's eligibility traces `dz_t/dW` through each neuron's own state, `[T, B, N, in + N]`,
     for analysis; `eprop` uses them as they are made instead of storing them."""
+    params, inputs = _promoted(params, inputs)
+    dtype = inputs.dtype
     batch, size = inputs.shape[1], params.w_rec.shape[0]
-    dtype = membrane_dtype(inputs.dtype)
     structure = _structure(cell, dtype, dt)
 
     def step(carry, u):
         state, z, eligibility = carry
-        state, z, trace, eligibility = _trace_step(cell, structure, dt, params, state, u, z, eligibility)
+        state, z, trace, eligibility = _trace_step(cell, structure, dt, params, state, u, z, eligibility,
+                                                   precision)
         return (state, z, eligibility), trace
 
-    carry = (cell.init_state((batch, size), inputs.dtype), jnp.zeros((batch, size), inputs.dtype),
+    carry = (cell.init_state((batch, size), dtype), jnp.zeros((batch, size), dtype),
              _start(structure, batch, size, inputs.shape[2] + size, dtype))
     return jax.lax.scan(step, carry, inputs)[1]
 

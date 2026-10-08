@@ -489,6 +489,53 @@ def test_a_repeated_row_counts_for_nothing_in_the_eprop_objectives_loss_and_grad
                  got_grads["params"], want_grads["params"])
 
 
+def test_the_eprop_objective_computes_in_a_float64_models_dtype():
+    # Float64 weights promote the float32 recordings' products, as the model's own forward pass does, and
+    # every carry of e-prop's scan stays float64: its gradient is float64 e-prop's to rounding.
+    from sparx.learn import EPropParams, eprop
+
+    with jax.enable_x64(new_val=True):
+        objective = eprop_objective(param_dtype=jnp.float64)
+        variables = objective.init(jax.random.key(0))
+        batch = {key: jnp.asarray(value) for key, value in eprop_batch(1).items()}
+        _, grads = objective_gradients(objective, variables, batch)
+        held = jax.tree.map(lambda p: p.astype(jnp.float64), variables["params"])
+        w_in = jnp.concatenate([held["dense_0"]["kernel"], held["dense_0"]["bias"][None]])
+        params = EPropParams(w_in, held["recurrent_0"]["recurrent"] * (1 - jnp.eye(6)),
+                             held["readout"]["kernel"], held["readout"]["bias"])
+        spikes = jnp.swapaxes(batch["spikes"].astype(jnp.float64), 0, 1)
+        inputs = jnp.concatenate([spikes, jnp.ones((12, 8, 1))], axis=-1)
+        targets = jnp.broadcast_to(batch["label"], (12, 8))
+
+        def step_loss(y, label):
+            return jnp.sum(optax.softmax_cross_entropy_with_integer_labels(y, label)) / 12
+
+        _, expected = eprop(objective.cell, params, inputs, targets, step_loss, tau=4.0)
+    assert variables["params"]["dense_0"]["kernel"].dtype == jnp.float64
+    jax.tree.map(lambda g, p: np.testing.assert_equal(g.dtype, p.dtype), grads["params"], variables["params"])
+    # Observed 0; float32 rounding would leave 4e-8.
+    np.testing.assert_allclose(grads["params"]["dense_0"]["kernel"], np.asarray(expected.w_in[:5]) / 8,
+                               rtol=1e-12)
+    np.testing.assert_allclose(grads["params"]["readout"]["kernel"], np.asarray(expected.w_out) / 8,
+                               rtol=1e-12)
+
+
+@pytest.mark.parametrize("rule", ["random", "bptt"])
+def test_every_eprop_rule_trains_a_float64_model(rule):
+    with jax.enable_x64(new_val=True):
+        objective = eprop_objective(rule, param_dtype=jnp.float64)
+        variables = objective.init(jax.random.key(0))
+        batch = {key: jnp.asarray(value) for key, value in eprop_batch(1).items()}
+        value, grads = objective_gradients(objective, variables, batch)
+    assert np.isfinite(float(value))
+    jax.tree.map(lambda g, p: np.testing.assert_equal(g.dtype, p.dtype), grads["params"], variables["params"])
+
+
+def test_the_eprop_objective_refuses_a_model_narrower_than_float32():
+    with pytest.raises(ValueError, match="float32 or wider"):
+        eprop_objective(dtype=jnp.bfloat16)
+
+
 def test_an_eprop_run_loads_back_as_its_spiking_mlp(tmp_path):
     objective = eprop_objective()
     run = tmp_path / "run"

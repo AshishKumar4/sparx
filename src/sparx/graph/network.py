@@ -747,26 +747,27 @@ def _check_conductances(population: Population) -> None:
 
 
 def _check_inputs(population: Population, rest: PointNeuronState, current: bool, dt: float) -> None:
-    """Refuse a population whose neuron model will not take what its kinetic receptors and current input
-    deliver.
+    """Refuse a population whose neuron model will not step on what the network gives it: what its
+    kinetic receptors and current input deliver, and no noise.
 
     Whether a model takes currents is the model's own answer, so one step
     is traced on abstract values as the network will step it. A
     dimensionless model then refuses a kinetic synapse before a run starts,
-    with the population named.
+    with the population named, and a stochastic model (`BernoulliCell`) the
+    noise a network does not draw.
     """
     kinetic = [name for name, r in population.receptors.items() if r.synapse.lands == "synapse"]
-    if not kinetic and not current:
-        return
     held = jnp.zeros((population.size,), jnp.float32) if current else 0.0
+    model, where = type(population.neuron).__name__, f"population {population.name!r}"
     try:
         jax.eval_shape(lambda state: population.point_neuron.advance(state, held, jnp.zeros(()), dt), rest)
     except ValueError as error:
+        if not kinetic and not current:
+            raise ValueError(f"{where}: {model} cannot step in a Network: {error}") from error
         sources = [f"receptor {name!r} ({type(population.receptors[name].synapse).__name__})"
                    for name in kinetic] + (["a CurrentInput"] if current else [])
-        raise ValueError(f"population {population.name!r}: {type(population.neuron).__name__} cannot read "
-                         f"{' or '.join(sources)}: {error}. Its input has to arrive as voltage jumps, "
-                         f"through Delta receptors") from error
+        raise ValueError(f"{where}: {model} cannot read {' or '.join(sources)}: {error}. Its input has to "
+                         f"arrive as voltage jumps, through Delta receptors") from error
 
 
 def _check_initial(population: Population, rest: PointNeuronState) -> None:

@@ -80,7 +80,7 @@ def test_masked_psn_matches_spikingjelly(masking):
 
 @pytest.mark.parametrize("init", ["exp", "kaiming"])
 def test_sliding_psn_matches_spikingjelly(init):
-    _psn_parity(f"sliding_psn_{init}", SlidingPSN(k=3, precision=jax.lax.Precision.HIGHEST))
+    _psn_parity(f"sliding_psn_{init}", SlidingPSN(k=3))
 
 
 def test_psn_initialization_follows_spikingjelly():

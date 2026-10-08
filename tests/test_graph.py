@@ -12,6 +12,7 @@ from dew.checkpoints import Checkpoints
 
 from sparx.dynamics import (
     ALIFCell,
+    BernoulliCell,
     Delta,
     Exponential,
     LeakyIntegrateAndFire,
@@ -255,6 +256,45 @@ def test_a_run_continued_from_its_variables_is_the_unbroken_run():
     second = simulate(network, first.variables, duration=30.0, key=jax.random.key(1), monitors=monitors)
     np.testing.assert_array_equal(np.concatenate([first.records["a"], second.records["a"]]),
                                   whole.records["a"])
+
+
+def test_trials_continued_from_their_variables_are_the_unbroken_trials():
+    # The returned state leads with the trial axis; a continuation takes each trial on, its Poisson
+    # draws keyed by its own step counter.
+    network, variables = small_network()
+    monitors = {"a": SpikeRaster("a")}
+    whole = simulate(network, variables, duration=50.0, key=jax.random.key(1), monitors=monitors, trials=2)
+    first = simulate(network, variables, duration=20.0, key=jax.random.key(1), monitors=monitors, trials=2)
+    second = simulate(network, first.variables, duration=30.0, key=jax.random.key(1), monitors=monitors,
+                      trials=2)
+    np.testing.assert_array_equal(np.concatenate([first.records["a"], second.records["a"]], axis=1),
+                                  whole.records["a"])
+    jax.tree.map(np.testing.assert_array_equal, second.variables["state"], whole.variables["state"])
+    assert whole.records["a"].shape[0] == 2 and not np.array_equal(*whole.records["a"])
+    with pytest.raises(ValueError, match="run with 2 trials, and this run has trials=3"):
+        simulate(network, first.variables, duration=5.0, trials=3)
+    with pytest.raises(ValueError, match="run with 2 trials, and this run has trials=None"):
+        simulate(network, first.variables, duration=5.0)
+
+
+@pytest.mark.parametrize("trials", [None, 2])
+def test_a_constant_drive_is_held_over_every_step(trials):
+    network = Network((Population("a", 3, LeakyIntegrateAndFire(), {"ex": Receptor(Exponential(5.0))}),),
+                      inputs=(CurrentInput("a", "i"),), dt=DT)
+    variables = network.init(jax.random.key(0))
+    steps = round(30.0 / DT)
+    held = np.full((steps,) if trials is None else (trials, steps), 400.0)
+    monitors = {"a": SpikeRaster("a")}
+    runs = [simulate(network, variables, duration=30.0, drive={"i": drive}, monitors=monitors, chunk=7.0,
+                     trials=trials).records["a"] for drive in (400.0, held)]
+    np.testing.assert_array_equal(*runs)
+    assert runs[0].sum() > 3
+
+
+def test_a_stochastic_population_is_refused_when_built():
+    population = Population("a", 3, BernoulliCell(0.8), {"d": Receptor(Delta())})
+    with pytest.raises(ValueError, match=r"population 'a': BernoulliCell cannot step in a Network.*draw"):
+        Network((population,), dt=1.0)
 
 
 def test_a_run_resumed_from_its_checkpoint_is_the_unbroken_run(tmp_path):
