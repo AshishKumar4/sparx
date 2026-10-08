@@ -37,8 +37,8 @@ jobs:
         pip install -e ".[datasets,test]" -c constraints.txt
     - name: Lint
       run: |
-        uvx ruff@0.14.3 check src tests tools benchmarks examples recipes
-        python tools/lint_slop.py --package sparx src/sparx tests tools recipes examples benchmarks
+        uvx ruff@0.14.3 check src tests tools benchmarks examples recipes research
+        python tools/lint_slop.py --package sparx src/sparx tests tools recipes examples benchmarks research
     - name: The prose checker is dew's
       # tools/lint_slop.py is dew's file as it is at the commit pyproject.toml pins.
       run: |

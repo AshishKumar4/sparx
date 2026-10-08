@@ -4,7 +4,7 @@ The state of sparx and its dew work as of 8 October 2026: what exists, what is o
 
 ## State
 
-- The suite passes: 616 tests, among them every example run in its `--smoke` mode, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
+- The suite passes: 622 tests, among them every example run in its `--smoke` mode, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
 - sparx pins dew at `6329435` on dew's `main` (`pyproject.toml`).
 - Every commit is authored by Ashish Kumar Singh <ashishkmr472@gmail.com>.
 
@@ -41,6 +41,7 @@ The state of sparx and its dew work as of 8 October 2026: what exists, what is o
 - **PC-ALM:** Seely and Gould's JAX reference and sparx agree in settled activity, multipliers and weight updates within 5e-14 in float64. On their headline Fashion-MNIST cell (width and depth 32, one epoch, through dew's trainer) sparx scores 75.1, 76.1 and 76.5% by PC-ALM, 62.2, 65.5 and 65.6% by PC and 77.8, 76.9 and 76.7% by BP at seeds 0 to 2; their code on the same machine scores 77.73, 76.49 and 76.34%, 68.17, 64.49 and 66.54%, and 78.65, 76.85 and 77.31%. The ranking is theirs, and sparx averages 0.5 to 2 points lower in all three, backpropagation included.
 - **FLYNN:** Wang and Chen's PyTorch cell and sparx's agree in activity and gradients within 1e-15 in float64. Their code scales the weights by a power iteration whose estimate depends on its random start when the dominant eigenvalues are a complex pair, as a signed connectome's often are (on the parity test's connectome: 1.8 to 46 by start, against an exact 48.1); sparx scales by the exact radius.
 - **RNeuralNet:** its C++ (d4b7803), compiled unchanged and driven single-threaded, and `sparx.learn.RNeuralNet` agree within 7.2e-7 in outputs over 80 ticks and in local rewards and weights after three rewards. On the notes' delayed cue-order task (256 neurons, seeds 0 to 4) a linear readout of the network's state is 100% right, REINFORCE through the network teaches its output neurons on 4 of 5 seeds, and reward diffusion leaves their choice as drawn on all 5 (the guide's results). Of AGREL's changes (`RNeuralNetObjective(rule=...)`), a signed reward prediction error spread from the chosen output by the original's shares (`gated`) learns the task on no seed and its reverse on one; sent back through the weights and slopes over time (`agrel`) it learns on the same 4 seeds as REINFORCE.
+- **Continual learning (`research/continual`):** on the switch-and-door sessions with four doors, the notes' modular core with fast weights on a few inputs per unit learns within a session almost as a learner that remembers every pair does (98.1% on the eighth trial, against 98.8%), where the same core without fast weights reaches 67.5% and a dense recurrent network with 2.8 times the parameters 73.2%. One seed, one task.
 - **No GPU or TPU numbers exist yet.**
 
 ## dew: the bedrock
@@ -77,9 +78,10 @@ Open in dew, for sparx:
 
 1. **Learning rules from the owner's research notes** (bio-inspired continual learning), each checked against a reference. Done: REINFORCE with Bernoulli neurons (enumerated trajectories), reward-modulated STDP (NEST), fast weights (Miconi et al.'s four networks), PC-ALM (Sakana AI's JAX reference), the FLYNN trainable connectome (their PyTorch cell), and RNeuralNet with its reward diffusion (its own C++, at the commit the notes cite; the notes are the owner's document, not a paper) and the AGREL variants of it. Open:
    - FLYNN on the whole FlyWire connectome: `sparx.graph.connectome.FLYNN` takes `Connectome.from_shiu`'s tables and their cell classes, sensory and descending neurons, but no full-brain training has been run, and their navigation task (MuJoCo) is not ported.
-2. **`research/continual/`**, built only on sparx and dew's public API.
-   - Start with the small modular core (16 x 256 units), selective fast plasticity (`sparx.nn.Recurrent` with a neuromodulated trace; on a connectome's sparse wiring as well), a BPTT reference and a switch-and-door adaptation task, as the notes recommend. The notes' core sends along delayed connections, some of them plastic; `RecurrentCell` now runs fast weights on a `Sparse` wiring whose delays differ, pairing each connection's delivered value with the new output.
-   - Anything awkward to express there is a gap to fix in sparx or dew.
+2. **`research/continual/`**, built only on sparx and dew's public API ([its README](research/continual/README.md)). Done: the notes' modular core (`core.ModularCore`: modules of leaky tanh units, delays of 1 to 8 steps between modules, time constants by module, fast weights on 16 inputs per unit through `FastWeights(connections=...)`), the switch-and-door sessions with the exact curve of a learner that remembers every pair (`task.SwitchDoor.ideal`), and REINFORCE through whole sessions on dew's `Trainer`, comparing the core with fast weights, without, and a dense recurrent network. On four doors after 100,000 sessions (seed 0), the plastic core follows the ideal curve to 98.1% on the last trial, against 67.5% without fast weights and 73.2% for the dense network. Open:
+   - the notes' size, 16 modules of 256 units; more seeds; a task that changes without announcement; replay and consolidation;
+   - a faster recurrence over a small `Sparse` wiring: the cores' training steps take 17 and 35 times the dense network's;
+   - anything awkward to express there is a gap to fix in sparx or dew.
 3. **Remaining DX review items** (the review's numbering). Items 7 and 11 are done: `docs/units.md` lists the two conventions of time and units and the two units of rates, and `EPropObjective` trains a `SpikingMLP`, so an e-prop run loads back as that model. Open:
    - the rest of the documentation plan: tutorials from training to export, a cortical circuit with a Brian2/NEST lookup table, connectomes, mixing the halves, and generated API pages. Done: a short README with a banner, six diagrams and three clips, and `docs/guide.md`, which holds the reference material the README used to; `tests/test_readme.py` runs the code blocks of both.
 4. **Speed.** `benchmarks/bench_networks.py` and `tools/bench_reference_simulators.py` compare sparx with NEST and Brian2 (`docs/performance.md`): per simulated second, Brunel's 12,500 neurons take sparx 9.6 s, NEST 7.5 s and Brian2 11.8 s; CUBA 0.71, 0.42 and 0.33 s; COBA 1.01, 3.85 and 0.54 s. Open:
@@ -116,8 +118,8 @@ Open in dew, for sparx:
 - **Gate before committing:**
 
   ```
-  uvx ruff@0.14.3 check src tests tools benchmarks examples recipes
-  python tools/lint_slop.py --package sparx src/sparx tests tools recipes examples benchmarks
+  uvx ruff@0.14.3 check src tests tools benchmarks examples recipes research
+  python tools/lint_slop.py --package sparx src/sparx tests tools recipes examples benchmarks research
   uvx pyright@1.1.406 src/sparx
   JAX_PLATFORMS=cpu pytest tests -q
   ```
