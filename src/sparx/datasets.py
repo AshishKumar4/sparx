@@ -31,6 +31,7 @@ from typing import Literal
 import numpy as np
 from dew.data import Dataset, DatasetSpec
 from dew.data.dataset import Tokenize
+from dew.files import replacing
 from numpy.typing import ArrayLike
 
 __all__ = ["MNIST_URLS", "SHD", "SHD_URL", "Binning", "bin_events", "holdout", "mnist", "shd",
@@ -104,20 +105,23 @@ def _event_frames(times: np.ndarray, duration: float) -> np.ndarray:
     return np.searchsorted(np.asarray(starts), np.arange(t.size), side="right") - 1
 
 
+def _fetched(url: str, path: Path) -> Path:
+    """`path`, downloaded from `url` the first time and published whole (`dew.files.replacing`), so an
+    interrupted download leaves nothing a later call would read."""
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with replacing(path) as partial:
+            urllib.request.urlretrieve(url, str(partial))
+    return path
+
+
 def _download(split: str, cache: Path) -> Path:
     """The decompressed `{split}.h5` in `cache`, fetched and decompressed once."""
     path = cache / f"{split}.h5"
-    if path.exists():
-        return path
-    cache.mkdir(parents=True, exist_ok=True)
-    archive = cache / f"{split}.h5.gz"
-    if not archive.exists():
-        partial = archive.with_suffix(".gz.partial")
-        urllib.request.urlretrieve(SHD_URL.format(split=split), partial)
-        partial.rename(archive)
-    with gzip.open(archive) as source, open(path.with_suffix(".h5.partial"), "wb") as target:
-        shutil.copyfileobj(source, target)
-    path.with_suffix(".h5.partial").rename(path)
+    if not path.exists():
+        archive = _fetched(SHD_URL.format(split=split), cache / f"{split}.h5.gz")
+        with gzip.open(archive) as source, replacing(path) as partial, open(partial, "wb") as target:
+            shutil.copyfileobj(source, target)
     return path
 
 
@@ -134,13 +138,7 @@ def mnist(split: Literal["train", "test"], *, fashion: bool = False,
     prefix = "train" if split == "train" else "t10k"
     arrays = []
     for name, header in ((f"{prefix}-images-idx3-ubyte", 16), (f"{prefix}-labels-idx1-ubyte", 8)):
-        path = root / f"{name}.gz"
-        if not path.exists():
-            root.mkdir(parents=True, exist_ok=True)
-            partial = path.with_suffix(".gz.partial")
-            url = MNIST_URLS["fashion" if fashion else "mnist"].format(name=name)
-            urllib.request.urlretrieve(url, partial)
-            partial.rename(path)
+        path = _fetched(MNIST_URLS["fashion" if fashion else "mnist"].format(name=name), root / f"{name}.gz")
         with gzip.open(path) as file:
             arrays.append(np.frombuffer(file.read(), np.uint8, offset=header))
     images, labels = arrays

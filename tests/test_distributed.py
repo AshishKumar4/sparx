@@ -35,10 +35,9 @@ trainer = Trainer(objective, optax.adam(1e-2), key=jax.random.key(0), mesh=MeshS
 state = trainer.fit(data, steps=6, log_every=6)
 paths = jax.tree_util.tree_leaves_with_path(state.variables["params"])
 leaves = {jax.tree_util.keystr(path): np.asarray(leaf).tolist() for path, leaf in paths}
-# The mesh axes each parameter is split over.
-specs = {jax.tree_util.keystr(path): [axis for entry in leaf.sharding.spec if entry is not None
-                                      for axis in ((entry,) if isinstance(entry, str) else entry)]
-         for path, leaf in paths}
+# Each parameter's mesh axes, by dimension.
+specs = {jax.tree_util.keystr(path): [entry if entry is None or isinstance(entry, str) else list(entry)
+                                      for entry in leaf.sharding.spec] for path, leaf in paths}
 print(json.dumps({"devices": jax.device_count(), "params": leaves, "specs": specs}))
 '''
 
@@ -57,9 +56,12 @@ def test_eight_devices_train_the_parameters_one_device_trains():
     eight = _train(8, 2)  # data 4 x fsdp 2: batch rows split four ways, parameters two ways
     assert (one["devices"], eight["devices"]) == (1, 8)
     assert set(one["params"]) == set(eight["params"])
-    split = {name for name, axes in eight["specs"].items() if "fsdp" in axes}
-    # The dense synapses and the recurrent matrix are split over fsdp.
-    assert {"['dense_0']['kernel']", "['recurrent_0']['recurrent']"} <= split, eight["specs"]
+    # As the model declares them (sparx.models): every synapse and the recurrent matrix split by their
+    # neurons, the readout by its hidden side. Dew's fallback would split the first two on their rows.
+    specs = eight["specs"]
+    assert specs["['dense_0']['kernel']"] == specs["['recurrent_0']['recurrent']"] == [None, "fsdp"], specs
+    assert specs["['readout']['kernel']"][0] == "fsdp"
+    assert specs["['recurrent_0']['neuron']['decay']"] == ["fsdp"]
     for name, value in one["params"].items():
         # The batch mean is summed in a different order across devices, so
         # float32 rounding differs; observed at most 1.8e-7 after six steps.

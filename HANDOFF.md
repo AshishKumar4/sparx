@@ -15,7 +15,7 @@ What the session added, each with its test: trainable projections that apply aft
 ## State
 
 - The suite passes at `412d5cd`: 674 tests, among them every example run in its `--smoke` mode, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
-- sparx pins dew at `6329435` on dew's `main` (`pyproject.toml`).
+- sparx pins dew at `8e184b83` on dew's `main` (`pyproject.toml`).
 - Every commit is authored by Ashish Kumar Singh <ashishkmr472@gmail.com>.
 
 ### What sparx does

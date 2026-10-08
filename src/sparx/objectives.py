@@ -47,6 +47,7 @@ import jax.numpy as jnp
 import optax
 from dew.artifacts import TokenScores
 from dew.inputs import Field, InputSpec
+from dew.nn.precision import at_least_fp32
 from dew.objectives.base import (
     OMITTED,
     VALID_ROWS,
@@ -65,7 +66,6 @@ from dew.registry import to_record
 from dew.training.optim import ScheduleBase
 
 from sparx.dynamics import NeuronModel
-from sparx.dynamics.core import membrane_dtype
 from sparx.encode import EventsEncoder, SpikeEncoder
 from sparx.learn import (
     EPropParams,
@@ -541,7 +541,7 @@ class EPropObjective(Objective[Ratio]):
 def _check_eprop_network(model: SpikingMLP, channels: int) -> None:
     """Raise unless e-prop trains every parameter of `model`: one recurrent hidden layer, dense
     synapses, fixed time constants, no batch norm and no dropout, computing in float32 or wider."""
-    if model.dtype is not None and membrane_dtype(jnp.dtype(model.dtype)) != jnp.dtype(model.dtype):
+    if model.dtype is not None and at_least_fp32(jnp.dtype(model.dtype)) != jnp.dtype(model.dtype):
         raise ValueError(f"e-prop's eligibility traces accumulate in float32 or wider, and this SpikingMLP "
                          f"computes in {jnp.dtype(model.dtype).name}; give it dtype=None or a wider one")
     sample = jax.ShapeDtypeStruct((1, 1, channels), jnp.float32)
@@ -605,15 +605,14 @@ class PredictiveCodingObjective(Objective[Ratio]):
 
     def loss(self, variables: Variables, batch: Batch, step: Step) -> tuple[Ratio, Aux]:
         x, labels, target, output = self._scored(variables, batch)
-        weights = _row_weights(batch, x.shape[0])
-        stats = Ratio(jnp.sum(weights * squared_error(output, target)), jnp.sum(weights))
+        stats = self.row_mean(squared_error(output, target), batch)
         correct = (jnp.argmax(output, axis=-1) == labels).astype(jnp.float32)
-        metrics = {"accuracy": jnp.sum(weights * correct) / jnp.sum(weights)}
+        metrics = {"accuracy": self.accuracy(correct, batch).mean()[0]}
         if self.rule is None:
             return stats, Aux(metrics=metrics)
         held = variables["params"]
         blocks, params = sequential_blocks(self.stack, jax.lax.stop_gradient(held))
-        grads = self.rule.gradient(blocks, params, x, target, rows=weights)
+        grads = self.rule.gradient(blocks, params, x, target, rows=_row_weights(batch, x.shape[0]))
         # The update mirrors the parameters: a layer without any, an activation, has none to update.
         update = {f"layers_{k}": grad for k, grad in enumerate(grads) if f"layers_{k}" in held}
         return _with_rule(self, stats, update, held), Aux(metrics=metrics)
@@ -734,8 +733,8 @@ class RNeuralNetObjective(Objective[Ratio]):
                                         eta=1.0).change
 
             update = -jnp.sum(rows[:, None] * jax.vmap(change)(last, signal, roots), axis=0)
-        stats = Ratio(-jnp.sum(rows * reward), jnp.sum(rows))
-        metrics = {"reward": jnp.sum(rows * reward) / jnp.sum(rows)}
+        stats = self.row_mean(-reward, batch)
+        metrics = {"reward": self.row_mean(reward, batch).mean()[0]}
         return _with_rule(self, stats, {"weight": update}, variables["params"]), Aux(metrics=metrics)
 
     @functools.cached_property

@@ -86,12 +86,12 @@ from pathlib import Path
 from typing import Literal
 
 import jax
-import numpy as np
 import optax
 import tyro
 from dew import Best, Checkpoints, Field, LocalTracker, Trainer
 from dew.config import OptimConfig
 from dew.data import Dataset, Loading
+from dew.training import Evaluation
 from dew.training.optim import Cosine, Exponential, Linear, OneCycle, ParamGroup
 
 import sparx
@@ -189,10 +189,9 @@ def alif(config: Config) -> None:
     evaluations = config.steps // 2 if config.smoke else 500
     state = trainer.fit(data, steps=config.steps, log_every=min(100, config.steps), eval_every=evaluations,
                         metrics=[Accuracy()], validation={"test": data.val})
-    classifier = objective.pipeline(state)
-    predictions = np.concatenate([np.asarray(classifier(test["spikes"][i:i + 256]))
-                                  for i in range(0, len(test["label"]), 256)])
-    print(f"test accuracy {np.mean(predictions == test['label']):.4f} over {len(predictions)} recordings "
+    final = Evaluation.run(objective, state.variables, data.val, key=config.seed, metrics=[Accuracy()],
+                           step=config.steps, split="test")
+    print(f"test accuracy {final.scores['test/accuracy']:.4f} over {final.records} recordings "
           f"after {config.steps} steps on {jax.devices()[0].device_kind}")
 
 

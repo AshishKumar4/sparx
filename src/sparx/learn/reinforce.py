@@ -34,9 +34,9 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from dew.nn.precision import at_least_fp32
 
 from sparx.dynamics import BernoulliCell, SynapticInput
-from sparx.dynamics.core import membrane_dtype
 
 __all__ = ["ReinforceParams", "policy_gradient", "reinforce"]
 
@@ -61,7 +61,7 @@ def reinforce(cell: BernoulliCell, params: ReinforceParams, inputs: jax.Array, n
     """
     steps, batch, _ = inputs.shape
     size = params.w_rec.shape[0]
-    dtype = membrane_dtype(inputs.dtype)
+    dtype = at_least_fp32(inputs.dtype)
     if noise.shape != (steps, batch, size):
         raise ValueError(f"the noise is one draw per neuron per step, {(steps, batch, size)}, not "
                          f"{noise.shape}")

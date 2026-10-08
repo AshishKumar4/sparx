@@ -28,8 +28,8 @@ from __future__ import annotations
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+from dew.nn.precision import at_least_fp32
 
-from sparx.dynamics.core import membrane_dtype
 from sparx.nn.neurons import STATE, history_window, record_rates
 from sparx.surrogate import ATan, Surrogate, spike
 
@@ -50,7 +50,7 @@ def band_mask(steps: int, k: int) -> jax.Array:
 
 def _mix(weight: jax.Array, bias: jax.Array, x: jax.Array, precision: jax.lax.Precision | None) -> jax.Array:
     """`weight @ x + bias` over the time axis of `x`, `[T, ...]`, in membrane precision."""
-    dtype = membrane_dtype(x.dtype)
+    dtype = at_least_fp32(x.dtype)
     h = jnp.tensordot(weight.astype(dtype), x.astype(dtype), axes=(1, 0), precision=precision)
     return h + bias.reshape(bias.shape + (1,) * (x.ndim - 1)).astype(dtype)
 
@@ -148,7 +148,7 @@ class SlidingPSN(nn.Module):
         init = _exponential if self.exponential_init else _kaiming_row
         weight = self.param("weight", init, (self.k,), jnp.float32)
         bias = self.param("bias", nn.initializers.constant(-1.0), (), jnp.float32)
-        steps, dtype = x.shape[0], membrane_dtype(x.dtype)
+        steps, dtype = x.shape[0], at_least_fp32(x.dtype)
         window = history_window(self, x, self.k - 1).astype(dtype)
         weight = weight.astype(dtype)
         # Step t reads the window's steps t .. t + k - 1, the last of them x[t].

@@ -16,6 +16,7 @@ from typing import Literal, NamedTuple
 
 import jax
 import jax.numpy as jnp
+from dew.nn.precision import at_least_fp32
 from flax import struct
 
 from sparx.dynamics.core import (
@@ -25,7 +26,6 @@ from sparx.dynamics.core import (
     exact_linear,
     fire,
     jump_after_threshold,
-    membrane_dtype,
     response,
     rk4,
     substeps,
@@ -157,7 +157,7 @@ class LeakyIntegrateAndFire:
     graded = False
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> LeakyIntegrateAndFireState:
-        dtype = membrane_dtype(dtype)
+        dtype = at_least_fp32(dtype)
         return LeakyIntegrateAndFireState(jnp.full(shape, self.e_l, dtype), jnp.zeros(shape, dtype))
 
     def step(self, state: LeakyIntegrateAndFireState, inputs: SynapticInput,
@@ -230,7 +230,7 @@ class GradedPotential:
         return jax.nn.sigmoid((v - self.v_half) / self.slope)
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> GradedPotentialState:
-        return GradedPotentialState(jnp.full(shape, self.e_l, membrane_dtype(dtype)))
+        return GradedPotentialState(jnp.full(shape, self.e_l, at_least_fp32(dtype)))
 
     def step(self, state: GradedPotentialState, inputs: SynapticInput,
              dt: float) -> tuple[GradedPotentialState, Output]:
@@ -299,7 +299,7 @@ class AdEx:
     graded = False
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> AdExState:
-        dtype = membrane_dtype(dtype)
+        dtype = at_least_fp32(dtype)
         zeros = jnp.zeros(shape, dtype)
         return AdExState(jnp.full(shape, self.e_l, dtype), zeros, zeros)
 
@@ -407,7 +407,7 @@ class Izhikevich:
     graded = False
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> IzhikevichState:
-        dtype = membrane_dtype(dtype)
+        dtype = at_least_fp32(dtype)
         v = jnp.full(shape, self.v_init, dtype)
         return IzhikevichState(v, self.b * v)
 
@@ -582,7 +582,7 @@ class HodgkinHuxley:
         return m, h, n
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> HodgkinHuxleyState:
-        dtype = membrane_dtype(dtype)
+        dtype = at_least_fp32(dtype)
         v = jnp.full(shape, self.v_init, dtype)
         m, h, n = (alpha / (alpha + beta) for alpha, beta in self.rates(v))
         return HodgkinHuxleyState(v, m, h, n, jnp.zeros(shape, dtype))

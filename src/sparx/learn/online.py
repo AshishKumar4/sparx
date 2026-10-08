@@ -30,11 +30,11 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from dew.nn.precision import at_least_fp32
 from flax.typing import PrecisionLike
 from jax.extend.core import Jaxpr, Literal, Var
 
 from sparx.dynamics import Dense, LICell, NeuronModel, RecurrentCell, SynapticInput, decay
-from sparx.dynamics.core import membrane_dtype
 
 __all__ = ["EPropParams", "OTTTLayer", "accumulate", "bptt_loss", "eligibility_traces", "eprop",
            "eprop_forward", "ottt", "ottt_dense"]
@@ -87,7 +87,7 @@ def _readout(tau: float) -> LICell:
 def _promoted(params: EPropParams, inputs: jax.Array) -> tuple[EPropParams, jax.Array]:
     """The parameters and inputs in one dtype, the widest of theirs and float32, so every carry of a scan
     keeps the dtype it starts in: float64 weights promote a float32 input's products."""
-    dtype = membrane_dtype(jnp.result_type(inputs, *params))
+    dtype = at_least_fp32(jnp.result_type(inputs, *params))
     return EPropParams(*(p.astype(dtype) for p in params)), inputs.astype(dtype)
 
 

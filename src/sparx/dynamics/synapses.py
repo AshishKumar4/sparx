@@ -27,9 +27,10 @@ from typing import Literal, NamedTuple, Protocol
 
 import jax
 import jax.numpy as jnp
+from dew.nn.precision import at_least_fp32
 from flax import struct
 
-from sparx.dynamics.core import Gap, NeuronModel, Output, SynapticInput, Term, membrane_dtype
+from sparx.dynamics.core import Gap, NeuronModel, Output, SynapticInput, Term
 
 __all__ = [
     "Alpha",
@@ -107,7 +108,7 @@ class Exponential:
         return "synapse"
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> jax.Array:
-        return jnp.zeros(shape, membrane_dtype(dtype))
+        return jnp.zeros(shape, at_least_fp32(dtype))
 
     def output(self, state: jax.Array) -> tuple[Term, ...]:
         return (Term(state, jnp.zeros_like(state), self.tau),)
@@ -136,7 +137,7 @@ class Alpha:
         return "synapse"
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> AlphaState:
-        zeros = jnp.zeros(shape, membrane_dtype(dtype))
+        zeros = jnp.zeros(shape, at_least_fp32(dtype))
         return AlphaState(zeros, zeros)
 
     def output(self, state: AlphaState) -> tuple[Term, ...]:
@@ -180,7 +181,7 @@ class BiExponential:
         return 1 / (math.exp(-peak / decay) - math.exp(-peak / rise))
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> BiExponentialState:
-        zeros = jnp.zeros(shape, membrane_dtype(dtype))
+        zeros = jnp.zeros(shape, at_least_fp32(dtype))
         return BiExponentialState(zeros, zeros)
 
     def output(self, state: BiExponentialState) -> tuple[Term, ...]:
@@ -223,7 +224,7 @@ class Graded:
         return "synapse"
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> GradedState:
-        zeros = jnp.zeros(shape, membrane_dtype(dtype))
+        zeros = jnp.zeros(shape, at_least_fp32(dtype))
         return GradedState(zeros, zeros)
 
     def output(self, state: GradedState) -> tuple[Term, ...]:

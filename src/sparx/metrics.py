@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 from dew.artifacts import Artifact, TokenScores
-from dew.objectives.base import Batch, Shown
+from dew.objectives.base import Batch, Shown, mean_of_totals, merge_totals
 
 __all__ = ["Accuracy"]
 
@@ -32,12 +32,9 @@ class Accuracy:
         weights = np.asarray(scores.weights[:, 0], np.float64)
         return float(np.sum(np.asarray(scores.correct[:, 0]) * weights)), float(np.sum(weights))
 
-    def merge(self, accumulated: tuple[float, float],
-              contribution: tuple[float, float]) -> tuple[float, float]:
-        return accumulated[0] + contribution[0], accumulated[1] + contribution[1]
+    merge = staticmethod(merge_totals)
 
     def finalize(self, accumulated: tuple[float, float]) -> float:
-        total, count = accumulated
-        if count <= 0:
+        if accumulated[1] <= 0:
             raise ValueError("accuracy: no counted example in the validation pass")
-        return total / count
+        return mean_of_totals(accumulated)

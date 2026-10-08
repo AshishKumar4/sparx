@@ -74,20 +74,11 @@ __all__ = [
     "exact_linear",
     "fire",
     "jump_after_threshold",
-    "membrane_dtype",
     "response",
     "rk4",
     "run",
     "substeps",
 ]
-
-
-def membrane_dtype(dtype: jnp.dtype) -> jnp.dtype:
-    """The dtype state integrates in for inputs of `dtype`: float32 or wider.
-
-    A bf16 membrane loses the small inputs it integrates over long sequences.
-    """
-    return jnp.promote_types(dtype, jnp.float32)
 
 
 def decay(tau: float, dt: float = 1.0) -> float:

@@ -16,7 +16,7 @@ dependencies = [
     # Dew is the platform sparx trains, distributes, checkpoints and serves
     # through (docs/design.md). It is not on PyPI, so the dependency names its
     # repository at a commit of its main branch.
-    "dewml @ git+https://github.com/AshishKumar4/dew@6329435e18ec71feaf72a1713442fbf9a393185f",
+    "dewml @ git+https://github.com/AshishKumar4/dew@8e184b83b98b393a6af45974c20f4eff5b5274cb",
     "jax",
     "flax",
     "optax",

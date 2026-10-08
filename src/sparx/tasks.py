@@ -19,7 +19,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from dew.objectives.base import Variables, thaw
-from dew.registry import dtype_name, from_record
+from dew.registry import from_record
 from dew.training.optim import ScheduleBase
 
 from sparx.encode import SpikeEncoder
@@ -92,18 +92,19 @@ class SpikingClassification:
 
         The model is the one its record names, over the selected checkpoint's
         weights (the average when the run kept one, unless `ema` is False),
-        placed on `mesh` under `layout`. `dtype` replaces the recorded compute
-        dtype and `param_dtype` the dtype the weights are read in.
+        placed on `mesh` under `layout`; the record and the weights are read
+        from one pinned step (`dew.inference.tasks.run_record`). `dtype`
+        replaces the recorded compute dtype and `param_dtype` the dtype the
+        weights are read in.
         """
         from dew.checkpoints import Checkpoints
-        from dew.config import ModelConfig
-        from dew.records import record as named_fields
+        from dew.inference.tasks import run_record, saved_model
+        from dew.records import number, record as named_fields
 
-        checkpoints = Checkpoints(directory)
-        record = named_fields(checkpoints.artifact(step), "checkpoint artifact")
-        config = ModelConfig.from_dict(named_fields(record["model"], "model")).with_dtype(dtype_name(dtype))
-        variables = checkpoints.variables(ema=ema, step=step, mesh=mesh, layout=layout,
-                                          param_dtype=param_dtype)
+        record, pinned = run_record(directory, step)
+        config = saved_model(record, dtype)
+        variables = Checkpoints(directory).variables(ema=ema, step=pinned, mesh=mesh, layout=layout,
+                                                     param_dtype=param_dtype)
         encoder = from_record(SpikeEncoder, named_fields(record["encoder"], "encoder"))
         steps = record.get("schedule_steps")
         call: dict[str, float] = {}
@@ -113,9 +114,7 @@ class SpikingClassification:
                 call[name] = float(jnp.asarray(schedule.schedule(steps)(steps)))
         deployed = record.get("deployed") or {}
         for name, value in named_fields(deployed, "deployed").items():
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ValueError(f"the run records a deployed {name}={value!r}, not a number")
-            call[name] = float(value)
+            call[name] = number(value, f"deployed {name}")
         for readout in READOUTS:
             if readout == record["readout"]:
                 return cls(config.build(), thaw(variables), encoder, readout, call)

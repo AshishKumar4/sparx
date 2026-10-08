@@ -159,7 +159,7 @@ def test_a_runs_precision_settings_reach_the_synapses(architecture):
               if architecture == "SpikingMLP" else {"stages": [1, 1, 1, 1], "classes": 3, "width": 4,
                                                     "stem": "small"})
     x = frames(2, (3, 2, 8, 8, 1))
-    first = "delayed_0" if architecture == "SpikingMLP" else "Conv_0"
+    first = "delayed_0" if architecture == "SpikingMLP" else "stem_conv"
     for dtype in ("float32", "bfloat16"):
         settings = {"dtype": dtype, "param_dtype": "bfloat16", "precision": "highest"}
         model = ModelConfig(f"sparx.models:{architecture}", {**fields, **settings}).build()

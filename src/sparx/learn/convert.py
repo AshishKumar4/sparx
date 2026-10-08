@@ -54,10 +54,10 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
+from dew.nn.precision import at_least_fp32
 from flax import struct
 
 from sparx.dynamics import Output, Reset, SynapticInput
-from sparx.dynamics.core import membrane_dtype
 from sparx.nn import IF, STATE, Flattens, Neuron
 
 __all__ = ["SpikingMaxPool", "convert", "fold_batch_norm", "normalize", "run_converted"]
@@ -90,7 +90,7 @@ class _Gate:
     graded = False
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> jax.Array:
-        return jnp.zeros(shape, membrane_dtype(dtype))
+        return jnp.zeros(shape, at_least_fp32(dtype))
 
     def step(self, state: jax.Array, inputs: SynapticInput, dt: float) -> tuple[jax.Array, Output]:
         spikes = jnp.asarray(inputs.jump)

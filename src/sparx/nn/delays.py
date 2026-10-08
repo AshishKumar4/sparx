@@ -24,9 +24,9 @@ from __future__ import annotations
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+from dew.nn.precision import at_least_fp32
 from flax.typing import Dtype, PrecisionLike
 
-from sparx.dynamics.core import membrane_dtype
 from sparx.nn.neurons import history_window
 
 __all__ = ["DelayedDense", "delay_kernel"]
@@ -94,7 +94,7 @@ class DelayedDense(nn.Module):
         inputs = x.shape[-1]
         weight = self.param("kernel", self.kernel_init, (inputs, self.features), self.param_dtype)
         delay = self.param("delay", _uniform(float(self.max_delay)), (inputs, self.features), jnp.float32)
-        dtype = membrane_dtype(x.dtype) if self.dtype is None else self.dtype
+        dtype = at_least_fp32(x.dtype) if self.dtype is None else self.dtype
         weight = weight.astype(jnp.float32)
         kernel = (delay_kernel(delay, self.max_delay, sigma) * weight).astype(dtype)  # [K, in, out]
 

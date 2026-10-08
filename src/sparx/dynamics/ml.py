@@ -27,7 +27,7 @@ A model is a Flax struct dataclass. Its numerical constants (decays,
 thresholds, weights) are pytree leaves, so they can be traced,
 differentiated and sharded; its choices (reset rule, surrogate) are static
 fields. The membrane runs in float32 (float64 when the input is float64)
-whatever the input's dtype (`membrane_dtype`); spikes come back in the
+whatever the input's dtype (`dew.nn.precision.at_least_fp32`); spikes come back in the
 input's dtype, which holds 0 and 1 exactly. Two models here are graded,
 their output a real value each step: the leaky integrator `LICell` and the
 rate unit `RateCell`. `sparx.nn` builds these models from module
@@ -42,19 +42,12 @@ from typing import Literal, NamedTuple, Protocol
 import jax
 import jax.numpy as jnp
 import numpy as np
+from dew.nn.precision import at_least_fp32
 from flax import struct
 from flax.typing import PrecisionLike
 from jax.core import Tracer
 
-from sparx.dynamics.core import (
-    NeuronModel,
-    Output,
-    Reset,
-    SynapticInput,
-    fire,
-    jump_after_threshold,
-    membrane_dtype,
-)
+from sparx.dynamics.core import NeuronModel, Output, Reset, SynapticInput, fire, jump_after_threshold
 from sparx.surrogate import ATan, Surrogate
 
 __all__ = [
@@ -134,7 +127,7 @@ class LIFCell:
     graded = False
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> MembraneState:
-        return MembraneState(jnp.zeros(shape, membrane_dtype(dtype)))
+        return MembraneState(jnp.zeros(shape, at_least_fp32(dtype)))
 
     def step(self, state: MembraneState, inputs: SynapticInput, dt: float) -> tuple[MembraneState, Output]:
         x = _jump(inputs)
@@ -184,7 +177,7 @@ class BernoulliCell:
     graded = False
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> BernoulliState:
-        dtype = membrane_dtype(dtype)
+        dtype = at_least_fp32(dtype)
         return BernoulliState(jnp.zeros(shape, dtype), jnp.zeros(shape, dtype))
 
     def step(self, state: BernoulliState, inputs: SynapticInput,
@@ -227,7 +220,7 @@ class LICell:
     graded = True
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> MembraneState:
-        return MembraneState(jnp.zeros(shape, membrane_dtype(dtype)))
+        return MembraneState(jnp.zeros(shape, at_least_fp32(dtype)))
 
     def step(self, state: MembraneState, inputs: SynapticInput, dt: float) -> tuple[MembraneState, Output]:
         v = self.decay ** dt * state.v + _jump(inputs)
@@ -277,7 +270,7 @@ class RateCell:
     graded = True
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> RateState:
-        return RateState(jnp.zeros(shape, membrane_dtype(dtype)))
+        return RateState(jnp.zeros(shape, at_least_fp32(dtype)))
 
     def step(self, state: RateState, inputs: SynapticInput, dt: float) -> tuple[RateState, Output]:
         alpha = self.decay ** dt
@@ -319,7 +312,7 @@ class PulseCell:
     graded = True
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> MembraneState:
-        return MembraneState(jnp.zeros(shape, membrane_dtype(dtype)))
+        return MembraneState(jnp.zeros(shape, at_least_fp32(dtype)))
 
     def step(self, state: MembraneState, inputs: SynapticInput, dt: float) -> tuple[MembraneState, Output]:
         s = state.v + _jump(inputs)
@@ -423,7 +416,7 @@ class ALIFCell:
     graded = False
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> ALIFState:
-        zeros = jnp.zeros(shape, membrane_dtype(dtype))
+        zeros = jnp.zeros(shape, at_least_fp32(dtype))
         return ALIFState(zeros, zeros, zeros)
 
     def step(self, state: ALIFState, inputs: SynapticInput, dt: float) -> tuple[ALIFState, Output]:
@@ -609,7 +602,7 @@ def _coactivity(wiring: Wiring, pre: jax.Array, post: jax.Array) -> jax.Array:
 
 def _connections(wiring: Wiring, shape: tuple[int, ...], dtype: jnp.dtype) -> jax.Array:
     """Zeros, one per connection of `wiring` for outputs of `shape`, at least float32."""
-    return jnp.zeros(wiring.connections(shape), membrane_dtype(dtype))
+    return jnp.zeros(wiring.connections(shape), at_least_fp32(dtype))
 
 
 def _modulation(post: jax.Array, modulator: jax.Array, bias: jax.Array | float) -> jax.Array:

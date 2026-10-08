@@ -31,8 +31,18 @@ compute in (None infers it from the input and the parameters),
 `param_dtype` the dtype their parameters are stored in, and `precision`
 their matmuls' precision. So a run's `--model.dtype bfloat16` reaches them.
 Neuron membranes and their learned time constants stay float32 whatever
-these are (`sparx.dynamics.core.membrane_dtype`), and spikes come out in
+these are (`dew.nn.precision.at_least_fp32`), and spikes come out in
 the synapses' dtype, which holds 0 and 1 exactly.
+
+They declare their parameters' logical axes to dew's layout
+(`dew.nn.sharding.logical_axes`) in dew's names: a synapse's presynaptic
+side is `embed` and its neurons `mlp`, a convolution names its output
+channels `embed`, and the neurons' own parameters (time constants, batch
+norms) name their width as their synapse does. So dew's default rules split
+a synapse's neurons over `tensor`, or over `fsdp` on a mesh without tensor
+parallelism, and its inputs over `fsdp` when the neurons took `tensor`. The
+recurrent matrix names only its postsynaptic side. Below `Layout.min_shard`
+elements a parameter stays whole whatever it declares.
 """
 
 from __future__ import annotations
@@ -43,6 +53,7 @@ from typing import Literal
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+from dew.nn.sharding import LogicalAxes, logical_axes
 from flax.typing import Dtype, PrecisionLike
 
 from sparx.nn.delays import DelayedDense
@@ -73,6 +84,11 @@ def connect(shortcut: jax.Array, residual: jax.Array, how: Connect) -> jax.Array
     raise ValueError(f"connect must be add, and or iand, not {how!r}")
 
 
+@logical_axes({
+    **{(f"{conv}_conv",): (None, None, None, "embed") for conv in ("first", "second", "downsample")},
+    **{(f"{conv}_bn",): ("embed",) for conv in ("first", "second", "downsample")},
+    **{(neuron,): ("embed",) for neuron in ("sn1", "sn2", "downsample_sn")},
+})
 class SEWBlock(nn.Module):
     """A basic SEW block: two 3x3 conv-BN-neuron layers, joined to the shortcut by `connect`.
 
@@ -106,6 +122,8 @@ class SEWBlock(nn.Module):
         return connect(shortcut, residual, self.connect)
 
 
+@logical_axes({("stem_conv",): (None, None, None, "embed"), ("stem_bn",): ("embed",),
+               ("stem_sn",): ("embed",), ("classifier",): ("embed", None)})
 class SEWResNet(nn.Module):
     """A SEW ResNet over `[T, B, H, W, C]` inputs, returning per-step logits `[T, B, classes]`.
 
@@ -133,11 +151,12 @@ class SEWResNet(nn.Module):
         numerics = {"dtype": self.dtype, "param_dtype": self.param_dtype, "precision": self.precision}
         if self.stem == "imagenet":
             x = nn.Conv(self.width, (7, 7), (2, 2), padding=3, use_bias=False, kernel_init=_conv_init,
-                        **numerics)(x)
+                        **numerics, name="stem_conv")(x)
         else:
-            x = nn.Conv(self.width, (3, 3), padding=1, use_bias=False, kernel_init=_conv_init, **numerics)(x)
+            x = nn.Conv(self.width, (3, 3), padding=1, use_bias=False, kernel_init=_conv_init, **numerics,
+                        name="stem_conv")(x)
         x = nn.BatchNorm(use_running_average=not train, momentum=0.9, dtype=self.dtype,
-                         param_dtype=self.param_dtype)(x)
+                         param_dtype=self.param_dtype, name="stem_bn")(x)
         x = adopt(self.neuron, self, "stem_sn")(x)
         if self.stem == "imagenet":
             # torch's MaxPool2d(3, 2, padding=1) pads with -inf, which never wins the max.
@@ -149,7 +168,7 @@ class SEWResNet(nn.Module):
                 x = SEWBlock(self.width * 2 ** stage, strides, self.connect, self.neuron, **numerics,
                              name=f"stage{stage + 1}_block{block + 1}")(x, train)
         x = jnp.mean(x, axis=(-3, -2))
-        return nn.Dense(self.classes, **numerics)(x)
+        return nn.Dense(self.classes, **numerics, name="classifier")(x)
 
 
 def sew_resnet18(classes: int, **kwargs) -> SEWResNet:
@@ -160,6 +179,19 @@ def sew_resnet18(classes: int, **kwargs) -> SEWResNet:
 def sew_resnet34(classes: int, **kwargs) -> SEWResNet:
     """SEW-ResNet-34: stages of `(3, 4, 6, 3)` basic blocks."""
     return SEWResNet((3, 4, 6, 3), classes, **kwargs)
+
+
+def _mlp_axes(layers: int) -> dict[tuple[str, ...], LogicalAxes]:
+    """The logical axes of the parameters under each module a `SpikingMLP` of `layers` hidden layers
+    builds."""
+    declared: dict[tuple[str, ...], LogicalAxes] = {("readout",): ("mlp", None), ("integrator",): (None,)}
+    for layer in range(layers):
+        declared |= {(f"dense_{layer}",): ("embed", "mlp"), (f"delayed_{layer}",): ("embed", "mlp"),
+                     (f"norm_{layer}",): ("mlp",), (f"neuron_{layer}",): ("mlp",),
+                     (f"recurrent_{layer}", "recurrent"): (None, "mlp"),
+                     (f"recurrent_{layer}", "alpha"): (None, "mlp"),
+                     (f"recurrent_{layer}", "neuron"): ("mlp",), (f"recurrent_{layer}", "rule"): ("mlp",)}
+    return declared
 
 
 class SpikingMLP(nn.Module):
@@ -211,6 +243,12 @@ class SpikingMLP(nn.Module):
     dtype: Dtype | None = None
     param_dtype: Dtype = jnp.float32
     precision: PrecisionLike = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        # The layers are numbered, so their axes are declared once the hidden layers are known, as the
+        # model is built: before a checkpoint is restored onto a mesh, which reads them.
+        logical_axes(_mlp_axes(len(self.hidden)))(SpikingMLP)
 
     def max_delays(self) -> tuple[int, ...]:
         """Each synapse's largest delay, hidden layers then the readout; 0 for a dense synapse."""
