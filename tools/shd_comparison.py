@@ -18,8 +18,10 @@ number is the test accuracy of the epoch the holdout chose, with test never
 used to choose; their code has no such protocol. Each run writes
 `result.json`: every epoch's accuracies, the last epoch's, the best test
 accuracy over epochs (their reported number), the test accuracy at the best
-holdout epoch where there is one, seconds per epoch, and the conditions
-(commits, package versions, GPU). `summarize` gives the mean and standard
+holdout epoch where there is one, wall seconds per epoch (start-up,
+compilation and data loading included) and the conditions (commits,
+package versions, GPU). A run that did not score every epoch raises, naming
+the first epoch missing. `summarize` gives the mean and standard
 deviation over seeds of each code and protocol, in `summary.json`.
 
 Environments, on a CUDA 12 machine:
@@ -49,8 +51,25 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-EPOCH = re.compile(r"=====> Epoch (\d+) : \nLoss Train = [\d.]+  \|  Acc Train = ([\d.]+)%\n"
-                   r"Loss Valid = [\d.]+  \|  Acc Valid = ([\d.]+)%")
+HEADER = re.compile(r"=====> Epoch (\d+) :")
+EPOCH = re.compile(r"=====> Epoch (\d+) : \nLoss Train = \S+  \|  Acc Train = (\S+)%\n"
+                   r"Loss Valid = \S+  \|  Acc Valid = (\S+)%")
+"""Their epoch's two lines (`model.py:291-292`); a number may be `nan` once a loss diverges."""
+
+
+def _every_epoch(epochs: list[int], count: int, where: str) -> None:
+    """Raise unless `epochs` are 0 to `count - 1` in order, naming the first one missing."""
+    for expected in range(count):
+        if expected >= len(epochs) or epochs[expected] != expected:
+            raise RuntimeError(f"{where}: epoch {expected} of {count} was not scored")
+    if len(epochs) != count:
+        raise RuntimeError(f"{where}: {len(epochs)} epochs scored, not {count}")
+
+
+def _best(values: list[float]) -> float:
+    """The largest of `values` that is a number, nan when none is."""
+    finite = [value for value in values if value == value]
+    return max(finite) if finite else float("nan")
 
 
 def _run(command: list[str], out: Path, cwd: Path) -> float:
@@ -90,13 +109,16 @@ def sparx(args: argparse.Namespace) -> None:
     for line in (args.out / "tracking" / "scalars.jsonl").read_text().splitlines():
         row = json.loads(line)
         epochs.setdefault(row["step"], {}).update(row["scalars"])
-    scored = [scalars for _, scalars in sorted(epochs.items()) if "test/accuracy" in scalars]
-    test = [scalars["test/accuracy"] for scalars in scored]
-    held = [scalars["val/accuracy"] for scalars in scored if "val/accuracy" in scalars]
+    steps = sorted(step for step, scalars in epochs.items() if "test/accuracy" in scalars)
+    per_epoch = steps[0] if steps else 1
+    _every_epoch([step // per_epoch - 1 if step % per_epoch == 0 else -1 for step in steps], args.epochs,
+                 str(args.out / "tracking" / "scalars.jsonl"))
+    test = [epochs[step]["test/accuracy"] for step in steps]
+    held = [epochs[step]["val/accuracy"] for step in steps if "val/accuracy" in epochs[step]]
     result = {"code": "sparx", "protocol": "holdout" if args.validation else "all", "seed": args.seed,
-              "test": test, "holdout": held, "last": test[-1], "best": max(test),
-              "at_best_holdout": test[held.index(max(held))] if held else None,
-              "seconds_per_epoch": seconds / len(test),
+              "test": test, "holdout": held, "last": test[-1], "best": _best(test),
+              "at_best_holdout": test[held.index(_best(held))] if held else None,
+              "wall_seconds_per_epoch": seconds / len(test),
               "conditions": _conditions(("sparxml", "dewml", "jax", "jaxlib", "flax", "optax"),
                                         {"sparx": ROOT})}
     (args.out / "result.json").write_text(json.dumps(result, indent=1))
@@ -110,11 +132,15 @@ def official(args: argparse.Namespace) -> None:
         code=str(checkout), sj=str(args.spikingjelly.resolve()), seed=args.seed, epochs=args.epochs,
         data=str(data), main=str(checkout / "main.py"))
     seconds = _run([sys.executable, "-c", patch], args.out, args.out)
-    found = EPOCH.findall((args.out / "stdout.log").read_text())
+    log = args.out / "stdout.log"
+    text = log.read_text()
+    _every_epoch([int(epoch) for epoch in HEADER.findall(text)], args.epochs, str(log))
+    found = EPOCH.findall(text)
+    _every_epoch([int(epoch) for epoch, _, _ in found], args.epochs, f"{log}, read as their two lines")
     test = [float(valid) / 100 for _, _, valid in found]
     result = {"code": "official", "protocol": "all", "seed": args.seed, "test": test, "holdout": [],
-              "train": [float(train) / 100 for _, train, _ in found], "last": test[-1], "best": max(test),
-              "at_best_holdout": None, "seconds_per_epoch": seconds / len(test),
+              "train": [float(train) / 100 for _, train, _ in found], "last": test[-1], "best": _best(test),
+              "at_best_holdout": None, "wall_seconds_per_epoch": seconds / len(test),
               "conditions": _conditions(("torch", "dcls"), {"SNN-delays": checkout,
                                                             "spikingjelly": args.spikingjelly.resolve()})}
     (args.out / "result.json").write_text(json.dumps(result, indent=1))
@@ -126,15 +152,16 @@ def summarize(args: argparse.Namespace) -> None:
     for code, protocol in sorted({(run["code"], run["protocol"]) for run in runs}):
         group = [run for run in runs if (run["code"], run["protocol"]) == (code, protocol)]
         measures = {}
-        for measure in ("last", "best", "at_best_holdout", "seconds_per_epoch"):
+        for measure in ("last", "best", "at_best_holdout", "wall_seconds_per_epoch"):
             values = [run[measure] for run in group if run[measure] is not None]
             if values:
                 measures[measure] = {"mean": statistics.fmean(values),
                                      "std": statistics.stdev(values) if len(values) > 1 else 0.0,
                                      "values": values}
         summary[f"{code}/{protocol}"] = {"seeds": [run["seed"] for run in group], **measures}
-        shown = "  ".join(f"{name} {m['mean'] * 100:.2f} ± {m['std'] * 100:.2f}%"
-                          for name, m in measures.items() if name != "seconds_per_epoch")
+        spread = len(group) > 1
+        shown = "  ".join(f"{name} {m['mean'] * 100:.2f}" + (f" ± {m['std'] * 100:.2f}%" if spread else "%")
+                          for name, m in measures.items() if name != "wall_seconds_per_epoch")
         print(f"{code:8s} {protocol:8s} seeds {len(group)}  {shown}")
     (args.directory / "summary.json").write_text(json.dumps(summary, indent=1))
 
