@@ -21,7 +21,7 @@ What sparx supports, what it does not, and what is open: the one ledger of the p
 
 ## Open work, in order
 
-1. **A reference-quality SHD result.** Hammouamri et al.'s recipe at its full 150 epochs over several seeds, beside their official code on the same hardware, with train, validation and test kept apart, raw curves, configuration, commits and versions recorded. It needs GPU time.
+1. **A reference-quality SHD result.** Hammouamri et al.'s recipe at its full 150 epochs over several seeds, beside their official code on the same hardware, with train, validation and test kept apart, raw curves, configuration, commits and versions recorded. `tools/shd_comparison.py` runs both codes and writes each run's curves and conditions as data; it needs GPU time.
 2. **Speed.** The merged event loop below; the connectome rows of [performance.md](performance.md) predate the event delivery of 8 October 2026; drawing Brunel's 15.6M synapses takes 12.5 s against NEST's 2.8 s; a step of CUBA costs twice Brian2's.
 3. **GPU and TPU measurements**, then kernels where profiling shows they pay: event delivery and bit-packed spikes. A plastic layer's step is memory traffic on CPU (1.6 s per episode of 106 steps at F = 1001 on 4 cores); a remat of the step would trade compute for it.
 4. **Research on evidence** (`research/continual`): the notes' size of 16 modules of 256 units, more seeds, a task that changes without announcement, replay and consolidation; FLYNN on the whole FlyWire connectome with its navigation task.
