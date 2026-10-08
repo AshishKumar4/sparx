@@ -2,7 +2,7 @@
 
     python tools/regenerate.py make_nest_fixtures.py
     python tools/regenerate.py make_ottt_fixtures.py ../ref-ottt
-    python tools/regenerate.py make_snntorch_fixtures.py --update     # keep what it wrote
+    python tools/regenerate.py --update make_snntorch_fixtures.py     # keep what it wrote
 
 The tool runs with its arguments in a temporary copy of `src`, `tools` and
 `tests/fixtures`, in the environment this script runs in (its lock file,
@@ -20,6 +20,14 @@ and a recurrence carries that from step to step (`ROUNDING`). Integer,
 boolean and string arrays match exactly. With `--update`, a fixture that
 changed replaces the committed one and its checksum. Exits with 1 when a
 fixture changed and `--update` is not given.
+
+Some references are not bit-reproducible across machines at all: a network
+TensorFlow trains (snntoolbox's), a Hodgkin-Huxley membrane whose spike
+upswings amplify the last bit (Brian2's), a margin read off a long float32
+computation (SNN-delays'). On another CPU these differ beyond rounding and
+are no less the reference. The References workflow keeps what such a run
+writes (`--update`) and runs the parity tests that read it against it: a
+reference holds when sparx agrees with it within the tests' own tolerances.
 """
 
 from __future__ import annotations

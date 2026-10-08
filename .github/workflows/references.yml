@@ -1,9 +1,12 @@
 # Regenerates every reference fixture in its locked environment
 # (tools/environments, tools/references.py) and compares each with
-# tests/fixtures/SHA256SUMS (tools/regenerate.py). Run by hand, or by pushing
-# a `references/**` branch; a job reports every tool it runs, and fails when
-# one does not reproduce its fixture. Ubuntu 24.04 carries the g++ (13.3.0)
-# and GNU Octave (8.4.0) the fixtures were made with.
+# tests/fixtures/SHA256SUMS (tools/regenerate.py): each line says reproduced,
+# reproduced to rounding, or differs. A fixture that differs (a trained or
+# chaotic reference on another CPU) is kept, and the parity tests that read it
+# run against it in sparx's environment. A job fails when a tool fails or a
+# parity test does. Run by hand, or by pushing a `references/**` branch.
+# Ubuntu 24.04 carries the g++ (13.3.0) and GNU Octave (8.4.0) the fixtures
+# were made with.
 
 name: References
 
@@ -27,6 +30,7 @@ jobs:
       run: |
         python -m pip install uv
         uv venv ../env && VIRTUAL_ENV=../env uv pip sync tools/environments/torch.txt
+        uv venv --python 3.12 ../sparx-env && VIRTUAL_ENV=../sparx-env uv pip install -e ".[test]" -c constraints.txt
     - name: Reference checkouts
       run: |
         clone() { git clone -q "https://github.com/$1" "../$2" && git -C "../$2" checkout -q "$3"; }
@@ -45,7 +49,7 @@ jobs:
     - name: Regenerate
       run: |
         # regenerate PYTHONPATH TOOL [ARGUMENTS]
-        regenerate() { env PYTHONPATH="$1" ../env/bin/python tools/regenerate.py "${@:2}" || failed="$failed $2"; }
+        regenerate() { env PYTHONPATH="$1" ../env/bin/python tools/regenerate.py --update "${@:2}" || failed="$failed $2"; }
         up=$(realpath ..)
         regenerate "" make_snntorch_fixtures.py
         regenerate "" make_nir_fixtures.py
@@ -55,7 +59,13 @@ jobs:
         regenerate "" make_flynn_fixtures.py ../ref-fly-gym
         regenerate "$up/spikingjelly" make_reference_fixtures.py
         regenerate "$up/spikingjelly-2023:$up/SNN-delays:$up/stubs" make_snn_delays_fixtures.py
-        test -z "$failed" || { echo "not reproduced:$failed"; exit 1; }
+        test -z "$failed" || { echo "failed:$failed"; exit 1; }
+    - name: Parity tests against what differs
+      run: |
+        changed=$(git diff --name-only -- tests/fixtures | grep -v SHA256SUMS | xargs -rn1 basename)
+        echo "kept beyond rounding: ${changed:-none}"
+        files=$(for f in $changed; do grep -l "$f" tests/*.py; done | sort -u)
+        test -z "$files" || JAX_PLATFORMS=cpu ../sparx-env/bin/python -m pytest -q $files
 
   brian2:
     runs-on: ubuntu-24.04
@@ -71,6 +81,7 @@ jobs:
         for env in brian2 modelfitting elephant snntoolbox; do
           uv venv "../$env" && VIRTUAL_ENV="../$env" uv pip sync "tools/environments/$env.txt"
         done
+        uv venv --python 3.12 ../sparx-env && VIRTUAL_ENV=../sparx-env uv pip install -e ".[test]" -c constraints.txt
     - name: Reference inputs
       run: |
         clone() { git clone -q "https://github.com/$1" "../$2" && git -C "../$2" checkout -q "$3"; }
@@ -79,7 +90,7 @@ jobs:
         curl -fsSL -o ../figure1.m "https://web.archive.org/web/2015id_/http://www.izhikevich.org/publications/figure1.m"
     - name: Regenerate
       run: |
-        regenerate() { "../$1/bin/python" tools/regenerate.py "${@:2}" || failed="$failed $2"; }
+        regenerate() { "../$1/bin/python" tools/regenerate.py --update "${@:2}" || failed="$failed $2"; }
         regenerate brian2 make_brian2_fixtures.py
         regenerate brian2 make_brian2_benchmarks.py
         regenerate brian2 make_shiu_fixtures.py ../ref-shiu
@@ -88,7 +99,13 @@ jobs:
         regenerate modelfitting make_gamma_fixtures.py
         regenerate elephant make_elephant_fixtures.py
         regenerate snntoolbox make_snntoolbox_fixtures.py
-        test -z "$failed" || { echo "not reproduced:$failed"; exit 1; }
+        test -z "$failed" || { echo "failed:$failed"; exit 1; }
+    - name: Parity tests against what differs
+      run: |
+        changed=$(git diff --name-only -- tests/fixtures | grep -v SHA256SUMS | xargs -rn1 basename)
+        echo "kept beyond rounding: ${changed:-none}"
+        files=$(for f in $changed; do grep -l "$f" tests/*.py; done | sort -u)
+        test -z "$files" || JAX_PLATFORMS=cpu ../sparx-env/bin/python -m pytest -q $files
 
   nest:
     runs-on: ubuntu-24.04
@@ -106,17 +123,23 @@ jobs:
       # The microcircuit's network is drawn by sparx, and PC-ALM's reference is JAX.
       run: |
         python -m pip install uv
-        uv venv --python 3.12 ../sparx-env && VIRTUAL_ENV=../sparx-env uv pip install -e . -c constraints.txt
+        uv venv --python 3.12 ../sparx-env && VIRTUAL_ENV=../sparx-env uv pip install -e ".[test]" -c constraints.txt
         clone() { git clone -q "https://github.com/$1" "../$2" && git -C "../$2" checkout -q "$3"; }
         clone INM-6/microcircuit-PD14-model microcircuit-PD14-model f79f8ac
         clone SakanaAI/pc-alm ref-pc-alm 660747f61a8a7e547c0ecd2c48c8883380a7d1f6
     - name: Regenerate
       run: |
-        regenerate() { python tools/regenerate.py "$@" || failed="$failed $1"; }
+        regenerate() { python tools/regenerate.py --update "$@" || failed="$failed $1"; }
         regenerate make_nest_fixtures.py
         regenerate make_nest_gap_fixtures.py
         regenerate make_brunel_fixtures.py
         ../sparx-env/bin/python tools/make_microcircuit_fixtures.py export ../microcircuit-network.npz
         regenerate make_microcircuit_fixtures.py nest ../microcircuit-PD14-model ../microcircuit-network.npz
-        ../sparx-env/bin/python tools/regenerate.py make_pcalm_fixtures.py ../ref-pc-alm || failed="$failed pcalm"
-        test -z "$failed" || { echo "not reproduced:$failed"; exit 1; }
+        ../sparx-env/bin/python tools/regenerate.py --update make_pcalm_fixtures.py ../ref-pc-alm || failed="$failed pcalm"
+        test -z "$failed" || { echo "failed:$failed"; exit 1; }
+    - name: Parity tests against what differs
+      run: |
+        changed=$(git diff --name-only -- tests/fixtures | grep -v SHA256SUMS | xargs -rn1 basename)
+        echo "kept beyond rounding: ${changed:-none}"
+        files=$(for f in $changed; do grep -l "$f" tests/*.py; done | sort -u)
+        test -z "$files" || JAX_PLATFORMS=cpu ../sparx-env/bin/python -m pytest -q $files
