@@ -13,6 +13,7 @@ import jax, numpy as np, optax
 from dew import Checkpoints, Field, Trainer
 from dew.data import Dataset, Loading
 from dew.training import MeshSpec
+from dew.training.distributed import Layout
 import sparx
 from sparx.objectives import RateBand, SpikingClassifierObjective
 from sparx.encode import DirectEncoder
@@ -28,11 +29,17 @@ objective = SpikingClassifierObjective(net, Field("image", (6, 6, 1)), DirectEnc
                                        rates=RateBand(0.02, 0.4))
 data = Dataset.from_records({"image": images, "label": labels}, batch=32,
                             loading=Loading(workers=0, threads=1, read_buffer=1))
-trainer = Trainer(objective, optax.adam(1e-2), key=jax.random.key(0), mesh=MeshSpec(fsdp=FSDP))
+# Every parameter is far below dew's default min_shard, which would leave them all replicated.
+trainer = Trainer(objective, optax.adam(1e-2), key=jax.random.key(0), mesh=MeshSpec(fsdp=FSDP),
+                  layout=Layout(min_shard=0))
 state = trainer.fit(data, steps=6, log_every=6)
-leaves = {jax.tree_util.keystr(path): np.asarray(leaf).tolist()
-          for path, leaf in jax.tree_util.tree_leaves_with_path(state.variables["params"])}
-print(json.dumps({"devices": jax.device_count(), "params": leaves}))
+paths = jax.tree_util.tree_leaves_with_path(state.variables["params"])
+leaves = {jax.tree_util.keystr(path): np.asarray(leaf).tolist() for path, leaf in paths}
+# The mesh axes each parameter is split over.
+specs = {jax.tree_util.keystr(path): [axis for entry in leaf.sharding.spec if entry is not None
+                                      for axis in ((entry,) if isinstance(entry, str) else entry)]
+         for path, leaf in paths}
+print(json.dumps({"devices": jax.device_count(), "params": leaves, "specs": specs}))
 '''
 
 
@@ -50,6 +57,9 @@ def test_eight_devices_train_the_parameters_one_device_trains():
     eight = _train(8, 2)  # data 4 x fsdp 2: batch rows split four ways, parameters two ways
     assert (one["devices"], eight["devices"]) == (1, 8)
     assert set(one["params"]) == set(eight["params"])
+    split = {name for name, axes in eight["specs"].items() if "fsdp" in axes}
+    # The dense synapses and the recurrent matrix are split over fsdp.
+    assert {"['dense_0']['kernel']", "['recurrent_0']['recurrent']"} <= split, eight["specs"]
     for name, value in one["params"].items():
         # The batch mean is summed in a different order across devices, so
         # float32 rounding differs; observed at most 1.8e-7 after six steps.
