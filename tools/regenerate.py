@@ -21,13 +21,12 @@ boolean and string arrays match exactly. With `--update`, a fixture that
 changed replaces the committed one and its checksum. Exits with 1 when a
 fixture changed and `--update` is not given.
 
-Some references are not bit-reproducible across machines at all: a network
-TensorFlow trains (snntoolbox's), a Hodgkin-Huxley membrane whose spike
-upswings amplify the last bit (Brian2's), a margin read off a long float32
-computation (SNN-delays'). On another CPU these differ beyond rounding and
-are no less the reference. The References workflow keeps what such a run
-writes (`--update`) and runs the parity tests that read it against it: a
-reference holds when sparx agrees with it within the tests' own tolerances.
+Two references are not deterministic across machines (`NONDETERMINISTIC`):
+on another CPU they differ beyond rounding and are no less the reference.
+One of them that differs is kept in the checkout, with its arrays' largest
+differences on record, and the References workflow runs the parity tests
+that read it against it; any other fixture that differs beyond rounding
+fails.
 """
 
 from __future__ import annotations
@@ -43,8 +42,16 @@ from pathlib import Path
 import numpy as np
 from references import FIXTURES, MADE_BY, ROOT, digest, recorded, write_checksums
 
-VARIES: dict[str, str] = {"microcircuit.npz": "/seconds"}
-"""Fixtures with arrays that differ between identical runs, by the suffix of their names."""
+VARIES: dict[str, str] = {"microcircuit.npz": "/seconds", "snn_delays.npz": "margin"}
+"""Arrays left out of the comparison, by the suffix of their names: the microcircuit's wall-clock times,
+and SNN-delays' margin, the closest a membrane came to threshold, a difference of float32 values near 1
+that rounds by their units, not by its own."""
+
+NONDETERMINISTIC: dict[str, str] = {
+    "brian2.npz": "a Hodgkin-Huxley membrane's spike upswings amplify the last bit of each step",
+    "snntoolbox.npz": "TensorFlow trains the network it converts, in an order a CPU's threads decide",
+}
+"""References that differ beyond rounding between machines, with the reason; their parity tests hold them."""
 
 ULPS = 16
 """The rounding a fixture may differ by, in units in the last place of an array's largest value: about
@@ -102,7 +109,8 @@ def same_graph(made: Path, committed: Path) -> bool:
 
 
 def compare(made: Path, committed: Path) -> tuple[str, bool]:
-    """How `made` compares with the committed fixture, and whether that counts as reproduced."""
+    """How `made` compares with the committed fixture, and whether it reproduced it, to rounding or, for a
+    nondeterministic reference, at all."""
     if digest(made) == recorded()[committed.name]:
         return "reproduced", True
     if committed.suffix == ".nir":
@@ -112,6 +120,9 @@ def compare(made: Path, committed: Path) -> tuple[str, bool]:
     limit = ROUNDING.get(committed.name, ULPS)
     beyond = [f"{name} ({'its shape or type' if apart is None else f'{apart:.1f} ulps'})"
               for name, apart in changed.items() if apart is None or apart > limit]
+    if beyond and committed.name in NONDETERMINISTIC:
+        return (f"differs, as a nondeterministic reference may ({NONDETERMINISTIC[committed.name]}), in "
+                f"arrays {', '.join(beyond)}; kept for its parity tests"), True
     if beyond:
         return f"differs in arrays {', '.join(beyond)}", False
     if not changed:
@@ -142,8 +153,8 @@ def main() -> None:
             print(f"{name}: {outcome}")
             if not reproduced:
                 failed.append(name)
-                if args.update:
-                    shutil.copyfile(copy / "tests" / "fixtures" / name, FIXTURES / name)
+            if outcome.endswith("kept for its parity tests") or (not reproduced and args.update):
+                shutil.copyfile(copy / "tests" / "fixtures" / name, FIXTURES / name)
     if failed and args.update:
         write_checksums()
     elif failed:
