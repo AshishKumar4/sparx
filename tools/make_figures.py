@@ -70,7 +70,7 @@ def lif_trace(steps: int = 400) -> tuple[np.ndarray, np.ndarray]:
 
 def banner(theme: Theme, data: dict) -> Canvas:
     width, height = 1600, 420
-    c = Canvas(width, height, theme)
+    c = Canvas(width, height, theme, radius=28)
     dark = theme.name == "dark"
     top, bottom = ("#ffffff", "#f3f6fb") if not dark else ("#0d1117", "#111a2c")
     c.defs.append(f'<linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">'

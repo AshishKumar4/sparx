@@ -41,10 +41,8 @@ FPS = 30
 
 
 def card(theme: Theme, width: float, height: float, title: str, subtitle: str) -> Canvas:
-    """A frame: the clip's own rounded surface, its title and its subtitle."""
+    """A frame, on the canvas's rounded surface: its title and its subtitle."""
     c = Canvas(width, height, theme)
-    c.rect(0.5, 0.5, width - 1, height - 1, r=22, fill=theme.page if theme.name == "dark" else "#ffffff",
-           stroke=theme.panel_line)
     c.text(36, 56, title, size=28, weight=600)
     c.inline(36, 90, subtitle, size=19, fill=theme.muted)
     return c

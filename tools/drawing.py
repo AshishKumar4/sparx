@@ -118,16 +118,14 @@ def _subset(key: tuple[str, int], chars: frozenset[str]) -> str:
 
 
 class Canvas:
-    """An SVG of `width` by `height` px drawn in `theme`'s colors."""
+    """An SVG of `width` by `height` px drawn in `theme`'s colors, on a surface with corners of `radius`."""
 
-    def __init__(self, width: float, height: float, theme: Theme, *, background: bool = False):
-        self.width, self.height, self.theme = width, height, theme
+    def __init__(self, width: float, height: float, theme: Theme, radius: float = 22):
+        self.width, self.height, self.theme, self.radius = width, height, theme, radius
         self.parts: list[str] = []
         self.defs: list[str] = []
         self.used: dict[tuple[str, int], set[str]] = defaultdict(set)
         self.markers: set[str] = set()
-        if background:
-            self.rect(0, 0, width, height, fill=theme.page)
 
     def add(self, element: str) -> None:
         self.parts.append(element)
@@ -233,9 +231,20 @@ class Canvas:
         tint = self.theme.soft(color, alpha) if color else self.theme.panel
         self.rect(x, y, w, h, r=r, fill=fill or tint, stroke=color or self.theme.panel_line, width=1.25)
 
+    def surface(self) -> str:
+        """The figure's own rounded surface in its theme's page color, under everything drawn on it.
+
+        A README picks the light or dark version by the reader's system
+        theme, which can differ from the theme GitHub draws the page in; on
+        its own surface either version reads on either page.
+        """
+        return (f'<rect x="0.50" y="0.50" width="{self.width - 1:.2f}" height="{self.height - 1:.2f}" '
+                f'rx="{self.radius}" fill="{self.theme.page}" stroke="{self.theme.panel_line}" '
+                f'stroke-width="1"/>')
+
     def svg(self, *, title: str, description: str, glyphs: str = "") -> str:
-        """The SVG, its fonts holding the glyphs it uses and `glyphs`; frames of one clip pass the same
-        `glyphs` so their subsets match and are made once."""
+        """The SVG on its `surface`, its fonts holding the glyphs it uses and `glyphs`; frames of one clip
+        pass the same `glyphs` so their subsets match and are made once."""
         faces = []
         for (family, weight), chars in sorted(self.used.items()):
             subset_ = _subset((family, weight), frozenset(chars | set(glyphs)))
@@ -247,4 +256,4 @@ class Canvas:
                 f'width="{self.width}" height="{self.height}" role="img" aria-labelledby="title desc">'
                 f'<title id="title">{html.escape(title)}</title>'
                 f'<desc id="desc">{html.escape(description)}</desc>'
-                f'<defs><style>{style}</style>{"".join(self.defs)}</defs>{"".join(self.parts)}</svg>')
+                f'<defs><style>{style}</style>{"".join(self.defs)}</defs>{self.surface()}{"".join(self.parts)}</svg>')
