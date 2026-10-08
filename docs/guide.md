@@ -1,6 +1,6 @@
 # sparx guide
 
-The README shows what sparx does. This guide covers how to use each part. [units.md](units.md) lists the units of time, rates and every physical quantity, [fidelity.md](fidelity.md) what every model is checked against, [design.md](design.md) the architecture, and [performance.md](performance.md) the measurements behind the defaults.
+The README shows what sparx does. This guide covers how to use each part, and [From NEST and Brian2](tutorials/nest-and-brian2.md) maps those simulators' names onto sparx's. [units.md](units.md) lists the units of time, rates and every physical quantity, [fidelity.md](fidelity.md) what every model is checked against, [design.md](design.md) the architecture, and [performance.md](performance.md) the measurements behind the defaults.
 
 ## Contents
 
