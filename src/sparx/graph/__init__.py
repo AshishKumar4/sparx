@@ -21,7 +21,7 @@ from sparx.graph.connectivity import (
     OneToOne,
 )
 from sparx.graph.connectome import Connectome, matched_w_syn, shiu2024
-from sparx.graph.models import brunel, coba, cuba, from_record
+from sparx.graph.models import brunel, coba, cuba, from_record, microcircuit
 from sparx.graph.network import (
     ArrivalInput,
     CurrentInput,
@@ -73,6 +73,7 @@ __all__ = [
     "cuba",
     "from_record",
     "matched_w_syn",
+    "microcircuit",
     "shiu2024",
     "simulate",
 ]

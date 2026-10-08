@@ -80,15 +80,16 @@ The readout's leak still needs one filtered trace per synapse, `B x N x (in + N)
 
 ## Against NEST and Brian2
 
-`python benchmarks/bench_networks.py` times sparx, and `python tools/bench_reference_simulators.py` (in the reference environment of HANDOFF.md) times NEST 3.10 and Brian2 2.10, on the same networks at `dt = 0.1` ms: Brunel's (2000) network at the paper's size in its asynchronous irregular regime, and Brette et al.'s (2007) CUBA and COBA. The machine is a 4-core Intel Xeon at 2.8 GHz with 15 GB, otherwise idle; NEST runs 4 threads, Brian2's C++ standalone 4 OpenMP threads, and sparx JAX 0.11.2 on CPU in float32. Measured on 8 October 2026. Wall time per simulated second, after building and compiling:
+`python benchmarks/bench_networks.py` times sparx, and `python tools/bench_reference_simulators.py` (in the reference environment of HANDOFF.md) times NEST 3.10 and Brian2 2.10, on the same networks at `dt = 0.1` ms: Brunel's (2000) network at the paper's size in its asynchronous irregular regime, Brette et al.'s (2007) CUBA and COBA, and Potjans and Diesmann's (2014) cortical microcircuit at a fifth of its neurons and inputs, which NEST builds with the reference's own PyNEST code. The machine is a 4-core Intel Xeon at 2.8 GHz with 15 GB, otherwise idle; NEST runs 4 threads, Brian2's C++ standalone 4 OpenMP threads, and sparx JAX 0.11.2 on CPU in float32. Measured on 8 October 2026. Wall time per simulated second, after building and compiling:
 
 | Network | Neurons, synapses | Excitatory rate | sparx | NEST | Brian2 standalone | Brian2 Cython |
 | --- | --- | --- | --- | --- | --- | --- |
 | Brunel | 12,500, 15.6M | 37.3 to 37.6 Hz | 9.6 s | 7.5 s | 11.8 s | 16.1 s |
 | CUBA | 4,000, 320,000 | 5.4 to 5.6 Hz | 0.71 s | 0.42 s | 0.33 s | 0.59 s |
 | COBA | 4,000, 320,000 | 18 to 20 Hz | 1.01 s | 3.85 s | 0.54 s | 0.98 s |
+| Microcircuit, a fifth | 15,435, 12.0M | 0.6 to 0.7 Hz (layer 2/3) | 21.0 s | 2.89 s | | |
 
-Each simulator's rate is within the spread of the others', so they run the same networks. NEST integrates `iaf_cond_exp` with adaptive Runge-Kutta per neuron, which is more accurate and costs it the COBA row; sparx and Brian2 hold the conductance over the step. Building Brunel's network and drawing its synapses took sparx 12.5 s and compiling a chunk 2.7 s, against NEST's 2.8 s to build, and Brian2's 10.2 s (standalone, its C++ compilation included) and 26.7 s (Cython).
+Each simulator's rate is within the spread of the others', so they run the same networks. The microcircuit row was measured the same day, after its event delivery gained delays per edge: building it took sparx 9.4 s and compiling a chunk 9.3 s, against NEST's 4.5 s. A step of it carries about 4 spikes over 55 projections, and sparx takes 2.1 ms for it. NEST integrates `iaf_cond_exp` with adaptive Runge-Kutta per neuron, which is more accurate and costs it the COBA row; sparx and Brian2 hold the conductance over the step. Building Brunel's network and drawing its synapses took sparx 12.5 s and compiling a chunk 2.7 s, against NEST's 2.8 s to build, and Brian2's 10.2 s (standalone, its C++ compilation included) and 26.7 s (Cython).
 
 Until 8 October 2026 a projection under `format="auto"` was a dense matrix or an edge list, and every step paid for every synapse: Brunel took 457 s per simulated second, CUBA 15.5 s and COBA 15.3 s. The changes that brought them to the table's times, each measured on these three networks:
 

@@ -2,11 +2,16 @@
 
     python tools/bench_reference_simulators.py                       # every network and simulator
     python tools/bench_reference_simulators.py --networks cuba --simulators nest
+    python tools/bench_reference_simulators.py --networks microcircuit --simulators nest \
+        --microcircuit microcircuit-PD14-model
 
 Brunel's (2000) network at the paper's size, 12,500 neurons in the
 asynchronous irregular regime (`g = 5`, `eta = 2`, NEST's
 `brunel_delta_nest.py`), and Brette et al.'s (2007) CUBA and COBA on 4,000
-neurons, as `sparx.graph.models` builds them and at `dt = 0.1` ms:
+neurons, as `sparx.graph.models` builds them, and Potjans and Diesmann's
+(2014) cortical microcircuit at a fifth of its neurons and inputs, as the
+PyNEST implementation of INM-6/microcircuit-PD14-model at `--microcircuit`
+(commit f79f8ac) builds it, all at `dt = 0.1` ms:
 
 - NEST (`iaf_psc_delta`, `iaf_psc_exp`, `iaf_cond_exp`) on `--threads`
   threads. The build is creating and connecting; the time per simulated
@@ -18,8 +23,10 @@ neurons, as `sparx.graph.models` builds them and at `dt = 0.1` ms:
   threads. The time per simulated second is the sum of its profiled code
   objects other than those that create synapses, over a run of `--seconds`.
 
-Each prints the excitatory population's mean rate after the first 100 ms,
-to show it runs the network sparx runs. Needs NEST 3.10 and Brian2 2.10 (the
+Each prints the excitatory population's mean rate after the first 100 ms
+(after 500 ms, layer 2/3's, in the microcircuit, whose onset lasts that
+long), to show it runs the network sparx runs. The microcircuit runs in
+NEST only. Needs NEST 3.10 and Brian2 2.10 (the
 reference environment of HANDOFF.md) and a C++ compiler.
 """
 
@@ -98,6 +105,37 @@ def bench_nest(name, threads, seconds):
     nest.Simulate(1000.0 * seconds)
     elapsed = time.perf_counter() - start
     rate = recorder.n_events / len(e) / seconds
+    return built, elapsed / seconds, rate
+
+
+def bench_nest_microcircuit(reference, threads, seconds):
+    import sys
+
+    import nest
+
+    sys.path.insert(0, os.path.join(reference, "PyNEST", "src"))
+    from microcircuit import network
+    from microcircuit.network_params import default_net_dict
+    from microcircuit.sim_params import default_sim_dict
+    from microcircuit.stimulus_params import default_stim_dict
+
+    with tempfile.TemporaryDirectory() as data:
+        sim_dict = {**default_sim_dict, "data_path": data + "/", "rng_seed": 1, "print_time": False,
+                    "store_metadata": False, "sim_resolution": DT, "local_num_threads": threads}
+        start = time.perf_counter()
+        net = network.Network(sim_dict, {**default_net_dict, "N_scaling": 0.2, "K_scaling": 0.2},
+                              dict(default_stim_dict))
+        net.create()
+        net.spike_recorders.record_to = "memory"
+        net.connect()
+        built = time.perf_counter() - start
+        nest.Simulate(500.0)
+        recorder = net.spike_recorders[0]
+        recorder.n_events = 0
+        start = time.perf_counter()
+        nest.Simulate(1000.0 * seconds)
+        elapsed = time.perf_counter() - start
+        rate = recorder.n_events / len(net.pops[0]) / seconds
     return built, elapsed / seconds, rate
 
 
@@ -194,7 +232,8 @@ def bench_brian2_standalone(name, threads, seconds):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--networks", nargs="+", default=["brunel", "cuba", "coba"],
-                        choices=["brunel", "cuba", "coba"])
+                        choices=["brunel", "cuba", "coba", "microcircuit"])
+    parser.add_argument("--microcircuit", help="checkout of INM-6/microcircuit-PD14-model at f79f8ac")
     parser.add_argument("--simulators", nargs="+", default=["nest", "brian2-cython", "brian2-standalone"],
                         choices=["nest", "brian2-cython", "brian2-standalone"])
     parser.add_argument("--threads", type=int, default=os.cpu_count())
@@ -206,7 +245,12 @@ def main():
     print(f"NEST {nest.__version__}, Brian2 {brian2.__version__}, {args.threads} threads")
     for name in args.networks:
         for simulator in args.simulators:
-            if simulator == "nest":
+            if name == "microcircuit" and simulator != "nest":
+                continue
+            if name == "microcircuit":
+                built, per_second, rate = bench_nest_microcircuit(args.microcircuit, args.threads,
+                                                                  args.seconds)
+            elif simulator == "nest":
                 built, per_second, rate = bench_nest(name, args.threads, args.seconds)
             elif simulator == "brian2-cython":
                 built, per_second, rate = bench_brian2_runtime(name, args.seconds)

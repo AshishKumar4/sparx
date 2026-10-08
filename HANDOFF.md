@@ -4,7 +4,7 @@ The state of sparx and its dew work as of 8 October 2026: what exists, what is o
 
 ## State
 
-- The suite passes: 622 tests, among them every example run in its `--smoke` mode, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
+- The suite passes: 661 tests, among them every example run in its `--smoke` mode, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
 - sparx pins dew at `6329435` on dew's `main` (`pyproject.toml`).
 - Every commit is authored by Ashish Kumar Singh <ashishkmr472@gmail.com>.
 
@@ -28,7 +28,8 @@ The state of sparx and its dew work as of 8 October 2026: what exists, what is o
   - Neurons: LIF, AdEx, Izhikevich (2003 classes and all twenty 2004 patterns), Hodgkin-Huxley, graded-potential neurons and rate units.
   - Synapses: current, conductance and graded synapses; stochastic release; gap junctions; neuromodulators.
   - Plasticity: STDP, triplet STDP, reward-modulated STDP (NEST's `stdp_dopamine_synapse`) and Tsodyks-Markram.
-  - Networks with delays and event delivery; `simulate` on dew's mesh and checkpoints; records by name.
+  - Networks with delays and event delivery, a delay per edge included; NEST's connection rules, `FixedTotalNumber` among them; `simulate` on dew's mesh and checkpoints; records by name.
+  - Potjans and Diesmann's (2014) cortical microcircuit (`sparx.graph.models.microcircuit`), built as the reference implementation (INM-6/microcircuit-PD14-model) builds it.
   - Connectomes: Shiu et al.'s whole fly brain on FlyWire (reproduced) and on the male CNS (weight calibrated with `matched_w_syn`).
 - **One name, one object.** No public name binds two objects across sparx's modules (the review's item 6): the model in mV is `sparx.dynamics.LeakyIntegrateAndFire`, `sparx.nn.LIF` builds the dimensionless `LIFCell`, the encoders end in `Encoder` (`RateEncoder`, `DeltaEncoder`, ...), and `nn.Dynamics(Izhikevich())` replaces `nn.Izhikevich`. The registry's encoder aliases (`rate`, `delta`, ...) are unchanged.
 - **One neuron protocol for both halves.** `step(state, SynapticInput, dt) -> (state, Output)` covers ML cells, physical models and graded models. `nn.Dynamics` makes any of them a layer, and any of them can be a `Population`.
@@ -42,6 +43,7 @@ The state of sparx and its dew work as of 8 October 2026: what exists, what is o
 - **FLYNN:** Wang and Chen's PyTorch cell and sparx's agree in activity and gradients within 1e-15 in float64. Their code scales the weights by a power iteration whose estimate depends on its random start when the dominant eigenvalues are a complex pair, as a signed connectome's often are (on the parity test's connectome: 1.8 to 46 by start, against an exact 48.1); sparx scales by the exact radius.
 - **RNeuralNet:** its C++ (d4b7803), compiled unchanged and driven single-threaded, and `sparx.learn.RNeuralNet` agree within 7.2e-7 in outputs over 80 ticks and in local rewards and weights after three rewards. On the notes' delayed cue-order task (256 neurons, seeds 0 to 4) a linear readout of the network's state is 100% right, REINFORCE through the network teaches its output neurons on 4 of 5 seeds, and reward diffusion leaves their choice as drawn on all 5 (the guide's results). Of AGREL's changes (`RNeuralNetObjective(rule=...)`), a signed reward prediction error spread from the chosen output by the original's shares (`gated`) learns the task on no seed and its reverse on one; sent back through the weights and slopes over time (`agrel`) it learns on the same 4 seeds as REINFORCE.
 - **Continual learning (`research/continual`):** on the switch-and-door sessions with four doors, the notes' modular core with fast weights on a few inputs per unit learns within a session almost as a learner that remembers every pair does (98.1% on the eighth trial, against 98.8%), where the same core without fast weights reaches 67.5% and a dense recurrent network with 2.8 times the parameters 73.2%. One seed, one task.
+- **Cortical microcircuit:** at a fifth of its neurons and inputs, on the network sparx draws, NEST 3.10 and sparx in float64 fire the same 12,689 spikes over 300 ms; over the reference's own draws at 15 seeds, every population's rate, ISI CV and correlation distribution falls within NEST's spread between seeds. At a tenth the network falls silent in both. sparx takes 21 s per simulated second at a fifth, NEST 2.9 s.
 - **No GPU or TPU numbers exist yet.**
 
 ## dew: the bedrock
@@ -87,7 +89,8 @@ Open in dew, for sparx:
 4. **Speed.** `benchmarks/bench_networks.py` and `tools/bench_reference_simulators.py` compare sparx with NEST and Brian2 (`docs/performance.md`): per simulated second, Brunel's 12,500 neurons take sparx 9.6 s, NEST 7.5 s and Brian2 11.8 s; CUBA 0.71, 0.42 and 0.33 s; COBA 1.01, 3.85 and 0.54 s. Open:
    - the connectome rows of `docs/performance.md` predate the event delivery of 8 October 2026 and need measuring again with the FlyWire tables;
    - drawing Brunel's 15.6M synapses takes 12.5 s against NEST's 2.8 s;
-   - a step of CUBA costs twice Brian2's; most of it is the fixed work of finding spikes and running four projections' loops.
+   - a step of CUBA costs twice Brian2's; most of it is the fixed work of finding spikes and running four projections' loops;
+   - the microcircuit at a fifth takes 21 s per simulated second against NEST's 2.9 s: a step carries about 4 spikes over 55 projections, each running its own event loop. Every event projection could send ahead (as those with a delay per edge now do), which would let one loop per step deliver every projection's spikes.
 5. **`docs/design.md`** describes the code as it is (rewritten 8 October 2026), with what is not built in its section 12. Keep it true: a change to a contract, a format or a collection updates it in the same commit.
 6. **GPU and TPU measurements** (design phase 7), then kernels where profiling shows they pay: event delivery and bit-packed spikes. A plastic layer's step reads and writes several `[B, F, F]` arrays and backpropagating keeps one trace per step, so its CPU time is memory traffic (1.6 s per episode of 106 steps at F = 1001 on 4 cores); a remat of the step would trade compute for that memory.
 7. **Smaller deferred items:**

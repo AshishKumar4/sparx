@@ -47,5 +47,6 @@ networks: Aliases[Callable[..., Network], Network] = Aliases("network", {
     "brunel": "sparx.graph.models:brunel",
     "coba": "sparx.graph.models:coba",
     "cuba": "sparx.graph.models:cuba",
+    "microcircuit": "sparx.graph.models:microcircuit",
     "shiu2024": "sparx.graph.connectome:shiu2024",
 }, base="sparx.graph.network:Network")
