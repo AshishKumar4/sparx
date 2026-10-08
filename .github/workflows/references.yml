@@ -49,7 +49,7 @@ jobs:
     - name: Regenerate
       run: |
         # regenerate PYTHONPATH TOOL [ARGUMENTS]
-        regenerate() { env PYTHONPATH="$1" ../env/bin/python tools/regenerate.py "${@:2}" || failed="$failed $2"; }
+        regenerate() { env PYTHONPATH="$1" ../env/bin/python tools/regenerate.py --keep-nondeterministic "${@:2}" || failed="$failed $2"; }
         up=$(realpath ..)
         regenerate "" make_snntorch_fixtures.py
         regenerate "" make_nir_fixtures.py
@@ -90,7 +90,7 @@ jobs:
         curl -fsSL -o ../figure1.m "https://web.archive.org/web/2015id_/http://www.izhikevich.org/publications/figure1.m"
     - name: Regenerate
       run: |
-        regenerate() { "../$1/bin/python" tools/regenerate.py "${@:2}" || failed="$failed $2"; }
+        regenerate() { "../$1/bin/python" tools/regenerate.py --keep-nondeterministic "${@:2}" || failed="$failed $2"; }
         regenerate brian2 make_brian2_fixtures.py
         regenerate brian2 make_brian2_benchmarks.py
         regenerate brian2 make_shiu_fixtures.py ../ref-shiu
@@ -129,13 +129,13 @@ jobs:
         clone SakanaAI/pc-alm ref-pc-alm 660747f61a8a7e547c0ecd2c48c8883380a7d1f6
     - name: Regenerate
       run: |
-        regenerate() { python tools/regenerate.py "$@" || failed="$failed $1"; }
+        regenerate() { python tools/regenerate.py --keep-nondeterministic "$@" || failed="$failed $1"; }
         regenerate make_nest_fixtures.py
         regenerate make_nest_gap_fixtures.py
         regenerate make_brunel_fixtures.py
         ../sparx-env/bin/python tools/make_microcircuit_fixtures.py export ../microcircuit-network.npz
         regenerate make_microcircuit_fixtures.py nest ../microcircuit-PD14-model ../microcircuit-network.npz
-        ../sparx-env/bin/python tools/regenerate.py make_pcalm_fixtures.py ../ref-pc-alm || failed="$failed pcalm"
+        ../sparx-env/bin/python tools/regenerate.py --keep-nondeterministic make_pcalm_fixtures.py ../ref-pc-alm || failed="$failed pcalm"
         test -z "$failed" || { echo "failed:$failed"; exit 1; }
     - name: Parity tests against what differs
       run: |

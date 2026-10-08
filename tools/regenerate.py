@@ -23,10 +23,10 @@ fixture changed and `--update` is not given.
 
 Two references are not deterministic across machines (`NONDETERMINISTIC`):
 on another CPU they differ beyond rounding and are no less the reference.
-One of them that differs is kept in the checkout, with its arrays' largest
-differences on record, and the References workflow runs the parity tests
-that read it against it; any other fixture that differs beyond rounding
-fails.
+One of them that differs has its arrays' largest differences printed and,
+with `--keep-nondeterministic`, which the References workflow passes, is
+kept in the checkout so the parity tests that read it run against it; any
+other fixture that differs beyond rounding fails.
 """
 
 from __future__ import annotations
@@ -122,7 +122,7 @@ def compare(made: Path, committed: Path) -> tuple[str, bool]:
               for name, apart in changed.items() if apart is None or apart > limit]
     if beyond and committed.name in NONDETERMINISTIC:
         return (f"differs, as a nondeterministic reference may ({NONDETERMINISTIC[committed.name]}), in "
-                f"arrays {', '.join(beyond)}; kept for its parity tests"), True
+                f"arrays {', '.join(beyond)}"), True
     if beyond:
         return f"differs in arrays {', '.join(beyond)}", False
     if not changed:
@@ -137,6 +137,8 @@ def main() -> None:
     parser.add_argument("tool", choices=sorted({tool for tool, _ in MADE_BY.values()}))
     parser.add_argument("arguments", nargs=argparse.REMAINDER, help="the tool's own arguments")
     parser.add_argument("--update", action="store_true", help="keep the fixtures that changed")
+    parser.add_argument("--keep-nondeterministic", action="store_true",
+                        help="keep a nondeterministic reference that differs, for its parity tests")
     args = parser.parse_args()
     made = [name for name, (tool, _) in MADE_BY.items() if tool == args.tool]
     with tempfile.TemporaryDirectory() as scratch:
@@ -153,7 +155,9 @@ def main() -> None:
             print(f"{name}: {outcome}")
             if not reproduced:
                 failed.append(name)
-            if outcome.endswith("kept for its parity tests") or (not reproduced and args.update):
+            differs = not outcome.startswith("reproduced")
+            kept = args.keep_nondeterministic and name in NONDETERMINISTIC and differs
+            if kept or (not reproduced and args.update):
                 shutil.copyfile(copy / "tests" / "fixtures" / name, FIXTURES / name)
     if failed and args.update:
         write_checksums()
