@@ -1,5 +1,6 @@
 """The spiking objectives trained by dew's own Trainer, on CPU."""
 
+import dew
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -25,7 +26,7 @@ from sparx.learn import (
     squared_error,
 )
 from sparx.metrics import Accuracy
-from sparx.nn import LI, LIF
+from sparx.nn import LI, LIF, Flatten
 from sparx.objectives import (
     ActivityFitObjective,
     EPropObjective,
@@ -87,6 +88,17 @@ def test_a_rate_coded_spiking_classifier_learns_through_dews_trainer(tmp_path):
     x = RateEncoder(8)(jax.random.key(5), jnp.asarray(val["image"]))
     predicted = jnp.argmax(jnp.mean(Net().apply(state.variables, x), axis=0), -1)
     assert float(jnp.mean(predicted == val["label"])) >= 0.95
+
+
+def test_a_stack_that_takes_no_train_argument_trains_and_loads_back(tmp_path):
+    # A flax nn.Sequential passes keyword arguments to its first layer, so it is called without `train`.
+    stack = nn.Sequential([Flatten(), nn.Dense(32), LIF(tau=2.0), nn.Dense(2), LI(tau=2.0)])
+    objective = SpikingClassifierObjective(stack, Field("image", (8, 8, 1)), RateEncoder(steps=8))
+    trainer, _ = fit(objective, tmp_path)
+    assert trainer._display.evaluations["val"][-1].scores["val/accuracy"] >= 0.95
+    val = halves(64, 1)
+    loaded = dew.pipeline(str(tmp_path / "run"), trust=("sparx",))  # the layers are named by import path
+    assert float(jnp.mean(loaded(val["image"]) == val["label"])) >= 0.95
 
 
 def test_batch_norm_dropout_ema_and_per_step_readout_train_together(tmp_path):
@@ -478,8 +490,6 @@ def test_a_repeated_row_counts_for_nothing_in_the_eprop_objectives_loss_and_grad
 
 
 def test_an_eprop_run_loads_back_as_its_spiking_mlp(tmp_path):
-    import dew
-
     objective = eprop_objective()
     run = tmp_path / "run"
     data = Dataset.from_records(eprop_batch(2), batch=8, validation=eprop_batch(3), loading=LOADING)

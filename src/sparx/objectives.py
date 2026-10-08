@@ -155,8 +155,10 @@ class SpikingClassifierObjective(Objective[Ratio]):
     integer class field. `encoder` is one of `sparx.encode`'s, which read a
     uint8 field of intensities as `x / 255`.
 
-    The model takes `train`, as dew's models do: `True` in the loss, with
-    `rngs={"dropout": ...}`, and `False` in evaluation. A model that keeps
+    A model that takes `train`, as dew's models do, gets `True` in the loss,
+    with `rngs={"dropout": ...}`, and `False` in evaluation; one without
+    BatchNorm or dropout need not take it, so an `nn.Sequential` stack of
+    sparx layers trains as it is, and exports to NIR (`sparx.nir.to_nir`). A model that keeps
     `batch_stats` (BatchNorm) has them updated by the loss. `ema_decay`
     keeps an exponential moving average of the parameters, which `evaluate`
     scores when the trainer passes it.

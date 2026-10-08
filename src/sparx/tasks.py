@@ -10,6 +10,7 @@ from a state still in memory.
 from __future__ import annotations
 
 import functools
+import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -33,12 +34,17 @@ __all__ = ["SpikingClassification", "bound_call"]
 
 def bound_call(model: nn.Module, *, train: bool,
                kwargs: Mapping[str, jax.Array | float]) -> functools.partial[jax.Array]:
-    """The model's `__call__` with `train` and the keyword arguments `kwargs` bound, as `apply`'s method.
+    """The model's `__call__` with the keyword arguments `kwargs` bound, and `train` when it takes one, as
+    `apply`'s method.
 
-    A model a spiking objective trains takes `train`, as dew's models do, so
-    BatchNorm and dropout know which pass they are in.
+    A model with BatchNorm or dropout takes `train`, as dew's models do, so
+    they know which pass they are in. A stack without them, a flax
+    `nn.Sequential` of sparx layers say, need not.
     """
-    return functools.partial(type(model).__call__, train=train, **kwargs)
+    call = type(model).__call__
+    if "train" in inspect.signature(call).parameters:
+        return functools.partial(call, train=train, **kwargs)
+    return functools.partial(call, **kwargs)
 
 
 @dataclass(frozen=True)

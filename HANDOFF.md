@@ -4,7 +4,7 @@ The state of sparx and its dew work as of 8 October 2026: what exists, what is o
 
 ## State
 
-- The suite passes: 662 tests, among them every example run in its `--smoke` mode, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
+- The suite passes: 666 tests, among them every example run in its `--smoke` mode, plus the two whole-brain tests, which run when their data is present. ruff, pyright and dew's prose checker (`tools/lint_slop.py`, dew's file verbatim) are clean. CI runs the same gate and checks that the prose checker is still dew's.
 - sparx pins dew at `6329435` on dew's `main` (`pyproject.toml`).
 - Every commit is authored by Ashish Kumar Singh <ashishkmr472@gmail.com>.
 
@@ -22,7 +22,7 @@ The state of sparx and its dew work as of 8 October 2026: what exists, what is o
   - RNeuralNet-Research (the owner's 2018 project), rebuilt deterministically: `PulseCell`, its threshold-shifted ELU neuron, over a `Sparse` wiring with a delay per connection, and its reward diffusion (`sparx.learn.reward_diffusion`, the original's first-visit spread and the notes' all-paths repair), with a dew objective that trains it by the rule or by REINFORCE.
   - EventProp-style exact gradients.
   - ANN-to-SNN conversion of CNNs, checked against snntoolbox.
-  - NIR exchange with snnTorch: dense, conv and recurrent.
+  - NIR exchange with snnTorch: dense, conv and recurrent layers, and the `LI` readout; an `nn.Sequential` stack trains under `SpikingClassifierObjective` as it is and exports.
   - Streaming serving.
 - **Simulating biology.**
   - Neurons: LIF, AdEx, Izhikevich (2003 classes and all twenty 2004 patterns), Hodgkin-Huxley, graded-potential neurons and rate units.
@@ -85,7 +85,7 @@ Open in dew, for sparx:
    - a faster recurrence over a small `Sparse` wiring: after gathering rows (`docs/performance.md`), the cores' training steps take 9 and 25 times the dense network's; dense matrices per delay would halve the send again at this size;
    - anything awkward to express there is a gap to fix in sparx or dew.
 3. **Remaining DX review items** (the review's numbering). Items 7 and 11 are done: `docs/units.md` lists the two conventions of time and units and the two units of rates, and `EPropObjective` trains a `SpikingMLP`, so an e-prop run loads back as that model. Open:
-   - the rest of the documentation plan: tutorials from training to export, connectomes, mixing the halves, and generated API pages. Done: a short README with a banner, six diagrams and three clips; `docs/guide.md`, which holds the reference material the README used to; and `docs/tutorials/nest-and-brian2.md`, NEST's and Brian2's names in sparx and the cortical microcircuit. `tests/test_readme.py` and `tests/test_tutorials.py` run their code blocks.
+   - the rest of the documentation plan: tutorials on connectomes and on mixing the halves, and generated API pages. Done: a short README with a banner, six diagrams and three clips; `docs/guide.md`, which holds the reference material the README used to; `docs/tutorials/train-and-deploy.md`, one `nn.Sequential` classifier trained on dew, loaded with `dew.pipeline`, served and exported to NIR; and `docs/tutorials/nest-and-brian2.md`, NEST's and Brian2's names in sparx and the cortical microcircuit. `tests/test_readme.py` and `tests/test_tutorials.py` run their code blocks.
 4. **Speed.** `benchmarks/bench_networks.py` and `tools/bench_reference_simulators.py` compare sparx with NEST and Brian2 (`docs/performance.md`): per simulated second, Brunel's 12,500 neurons take sparx 9.6 s, NEST 7.5 s and Brian2 11.8 s; CUBA 0.71, 0.42 and 0.33 s; COBA 1.01, 3.85 and 0.54 s. Open:
    - the connectome rows of `docs/performance.md` predate the event delivery of 8 October 2026 and need measuring again with the FlyWire tables;
    - drawing Brunel's 15.6M synapses takes 12.5 s against NEST's 2.8 s;

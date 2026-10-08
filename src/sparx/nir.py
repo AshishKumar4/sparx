@@ -23,6 +23,8 @@ else refused:
 - `sparx.nn.LIF` with `reset="zero"` (NIR's reset) and one threshold, as `LIF`;
 - `sparx.nn.IF` with `reset="zero"`, as `IF`, whose `r = 1 / dt` makes a
   step add its input to the membrane, under either discretization;
+- `sparx.nn.LI`, a classifier's readout, as `LI`, the same leak without a
+  threshold;
 - `sparx.nn.Recurrent(LIF(...))` on a flat input, as a `LIF` node with a
   `Linear` edge from its output back to its input.
 
@@ -73,8 +75,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from sparx.dynamics import Dense, LIFCell, NeuronModel, RecurrentCell, decay
-from sparx.nn import IF, LIF, Flatten, Flattens, Modelled, Recurrent
+from sparx.dynamics import Dense, LICell, LIFCell, NeuronModel, RecurrentCell, decay
+from sparx.nn import IF, LI, LIF, Flatten, Flattens, Modelled, Recurrent
 
 if TYPE_CHECKING:
     import nir
@@ -137,17 +139,22 @@ def _output_shape(layer: nn.Module, params: LayerParams, shape: tuple[int, ...])
 
 
 def _export_neuron(cell: NeuronModel, step: float, shape: tuple[int, ...], dt: float,
-                   discretization: Discretization) -> nir.LIF | nir.IF:
-    """The NIR node of a layer's model, a `LIFCell` stepped at `step` in the unit of its decay:
-    `IF` when it does not leak, else `LIF`."""
+                   discretization: Discretization) -> nir.LIF | nir.IF | nir.LI:
+    """The NIR node of a layer's model stepped at `step` in the unit of its decay: `LI` for an `LICell`,
+    and for a `LIFCell`, `IF` when it does not leak, else `LIF`."""
     import nir
 
+    ones = np.ones(_to_nir_shape(shape))
+    if isinstance(cell, LICell):
+        if np.ndim(cell.decay):
+            raise NotImplementedError("NIR's LI holds one time constant: export a fixed tau")
+        tau, r = _continuous(float(cell.decay) ** step, dt, discretization)
+        return nir.LI(tau=tau * ones, r=r * ones, v_leak=0 * ones)
     if not isinstance(cell, LIFCell):
         raise NotImplementedError(f"NIR has no neuron for a {type(cell).__name__}: LIF and IF export")
     if cell.reset != "zero" or np.ndim(cell.decay) or np.ndim(cell.threshold):
         raise NotImplementedError("NIR's LIF and IF reset to v_reset and hold one time constant and "
                                   "threshold: export reset='zero' with a fixed tau")
-    ones = np.ones(_to_nir_shape(shape))
     threshold = float(cell.threshold) * ones
     if cell.decay == 1.0:
         return nir.IF(r=ones / dt, v_threshold=threshold, v_reset=0 * ones)
@@ -443,6 +450,19 @@ def _import_lif(node: nir.LIF, w_rec: nir.NIRNode | None, previous: dict[str, np
     return Recurrent(neuron=lif), {"recurrent": (weight.T * scales).astype(weight.dtype)}
 
 
+def _import_li(node: nir.LI, previous: dict[str, np.ndarray] | None, dt: float,
+               discretization: Discretization) -> LI:
+    """The layer of an `LI` node, with `r` folded into `previous`."""
+    tau = np.asarray(node.tau, float)
+    if not np.allclose(node.v_leak, 0):
+        raise NotImplementedError("only LI nodes with v_leak = 0 import")
+    if np.unique(tau).size != 1:
+        raise NotImplementedError("an LI node imports with one tau")
+    kept, scale = _discrete(float(tau.ravel()[0]), 1.0, dt, discretization)
+    _fold_input_scale(previous, _per_channel(np.asarray(node.r), "r") * scale, np.zeros(()), "LI")
+    return LI(tau=-1 / math.log(kept))
+
+
 def from_nir(graph: nir.NIRGraph, *, dt: float, discretization: Discretization = "exact"
              ) -> tuple[nn.Sequential, dict[str, dict[str, dict[str, np.ndarray]]]]:
     """A sequential stack and its variables from a NIR graph of a chain of the nodes above, read with
@@ -465,6 +485,8 @@ def from_nir(graph: nir.NIRGraph, *, dt: float, discretization: Discretization =
             layer, layer_params = _import_lif(node, w_rec, params.get(f"layers_{k - 1}"), dt, discretization)
         elif isinstance(node, nir.IF):
             layer, layer_params = _import_if(node, params.get(f"layers_{k - 1}"), dt), {}
+        elif isinstance(node, nir.LI):
+            layer, layer_params = _import_li(node, params.get(f"layers_{k - 1}"), dt, discretization), {}
         else:
             raise NotImplementedError(f"cannot import NIR node {type(node).__name__}")
         layers.append(layer)

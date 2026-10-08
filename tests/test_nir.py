@@ -10,7 +10,7 @@ import pytest
 
 from sparx.dynamics import LIFCell, decay
 from sparx.nir import from_nir, to_nir
-from sparx.nn import LIF, Flatten, Neuron, Recurrent
+from sparx.nn import LI, LIF, Flatten, Neuron, Recurrent
 
 nir = pytest.importorskip("nir")
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -172,6 +172,21 @@ def test_sparx_round_trips_through_nir_exactly():
     back, back_variables = from_nir(graph, dt=1e-3)
     np.testing.assert_array_equal(np.asarray(back.apply(back_variables, x)),
                                   np.asarray(model.apply(variables, x)))
+
+
+@pytest.mark.parametrize("discretization", ["exact", "euler"])
+def test_a_classifier_with_a_leaky_readout_round_trips(discretization):
+    # NIR's LI is the LIF without a threshold; the readout's membrane comes back exactly.
+    model = nn.Sequential([nn.Dense(7), LIF(tau=3.0, reset="zero"), nn.Dense(2), LI(tau=5.0)])
+    x = jnp.asarray(np.random.default_rng(0).random((20, 3, 4)), jnp.float32)
+    variables = jax.tree.map(lambda w: 3 * w, model.init(jax.random.key(0), x))
+    graph = to_nir(model, variables, dt=1e-3, discretization=discretization)
+    assert type(graph.nodes["3"]).__name__ == "LI"
+    back, back_variables = from_nir(graph, dt=1e-3, discretization=discretization)
+    assert isinstance(back.layers[3], LI)
+    expected = np.asarray(model.apply(variables, x))
+    np.testing.assert_array_equal(np.asarray(back.apply(back_variables, x)), expected)
+    assert np.abs(expected).max() > 1
 
 
 def test_a_sparx_conv_and_recurrent_stack_round_trips_exactly(tmp_path):

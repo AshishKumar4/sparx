@@ -1,6 +1,6 @@
 # sparx guide
 
-The README shows what sparx does. This guide covers how to use each part, and [From NEST and Brian2](tutorials/nest-and-brian2.md) maps those simulators' names onto sparx's. [units.md](units.md) lists the units of time, rates and every physical quantity, [fidelity.md](fidelity.md) what every model is checked against, [design.md](design.md) the architecture, and [performance.md](performance.md) the measurements behind the defaults.
+The README shows what sparx does. This guide covers how to use each part. [Train, serve and export](tutorials/train-and-deploy.md) takes one classifier from data to deployment, and [From NEST and Brian2](tutorials/nest-and-brian2.md) maps those simulators' names onto sparx's. [units.md](units.md) lists the units of time, rates and every physical quantity, [fidelity.md](fidelity.md) what every model is checked against, [design.md](design.md) the architecture, and [performance.md](performance.md) the measurements behind the defaults.
 
 ## Contents
 
@@ -351,7 +351,7 @@ rates = run_converted(snn, snn_variables, images, steps=100)  # output firing ra
 
 `sparx.serve.StreamServer` serves streaming models to many sessions at once, each with its own neuron state in a slot of one batch, and a session's outputs equal a direct call over its stream. A reloaded run is served with `StreamServer(classifier.model, classifier.variables, slots=8, frame=10, sample_shape=(700,))`. A model that cannot stream, a `PSN` or a readout averaged over time, is refused when the server is built.
 
-`sparx.nir` exchanges networks through NIR: dense and 2-D convolutional layers, `Flatten`, hard-reset `LIF` and `IF`, and `Recurrent(LIF)`. Networks exported by snnTorch run in sparx spike for spike and export back with the same parameters.
+`sparx.nir` exchanges networks through NIR: dense and 2-D convolutional layers, `Flatten`, hard-reset `LIF` and `IF`, the `LI` readout, and `Recurrent(LIF)`. A stack of them is a flax `nn.Sequential`, which `SpikingClassifierObjective` trains as it is. Networks exported by snnTorch run in sparx spike for spike and export back with the same parameters.
 
 ## Results in detail
 
