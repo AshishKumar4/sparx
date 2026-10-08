@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["cv_isi", "population_fano", "rates_hz", "spike_steps", "victor_purpura"]
+__all__ = ["coincidence_factor", "cv_isi", "population_fano", "rates_hz", "spike_steps", "victor_purpura"]
 
 
 def rates_hz(spikes: np.ndarray, dt: float) -> np.ndarray:
@@ -82,3 +82,41 @@ def victor_purpura(times_a: np.ndarray, times_b: np.ndarray, cost: float) -> flo
         for j in range(1, len(b) + 1):
             row[j] = min(table[i - 1, j] + 1, row[j - 1] + 1, moves[j - 1])
     return float(table[-1, -1])
+
+
+def coincidence_factor(spikes: np.ndarray, reference: np.ndarray, dt: float, window: float) -> np.ndarray:
+    """Each neuron's coincidence factor Γ, how well its spikes in `spikes` predict those in `reference`,
+    both `[steps, neurons]` at step `dt` ms, with a precision of `window` ms.
+
+        Γ = (N_coinc - 2 nu Δ N_ref) / (½ (N + N_ref) (1 - 2 nu Δ))
+
+    `N_coinc` counts the reference's spikes with one of the neuron's within
+    `Δ`, `window` rounded to steps, and `nu = N / duration` is the rate of
+    the neuron in `spikes`, so `2 nu Δ N_ref` is what a Poisson train of that
+    rate meets by chance. Γ is 1 for the same spikes, 0 on average for a
+    Poisson train, and below 0 for fewer coincidences than chance. This is
+    Jolivet and Gerstner's (J. Physiol. Paris 2004, eq. 13) form of Kistler
+    et al.'s (Neural Comput. 1997) measure, the score of spike-time
+    prediction in Jolivet et al.'s (J. Neurosci. Methods 2008) benchmark.
+    brian2modelfitting's `get_gamma_factor` counts the same coincidences
+    and takes `nu` from the reference; the two agree where the counts do.
+    A neuron silent in both trains has none (NaN).
+    """
+    spikes, reference = np.asarray(spikes), np.asarray(reference)
+    within = round(window / dt)
+    delta, duration = within * dt, spikes.shape[0] * dt
+    gamma = []
+    for steps, target in zip(spike_steps(spikes), spike_steps(reference), strict=True):
+        n, n_ref = len(steps), len(target)
+        if n + n_ref == 0:
+            gamma.append(np.nan)
+            continue
+        coincident = 0
+        if n:
+            after = np.clip(np.searchsorted(steps, target), 0, n - 1)
+            before = np.clip(after - 1, 0, n - 1)
+            nearest = np.minimum(np.abs(steps[after] - target), np.abs(steps[before] - target))
+            coincident = int(np.sum(nearest <= within))
+        chance = 2 * (n / duration) * delta
+        gamma.append((coincident - chance * n_ref) / (0.5 * (n + n_ref) * (1 - chance)))
+    return np.asarray(gamma)

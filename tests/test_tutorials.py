@@ -44,3 +44,17 @@ def test_the_train_and_deploy_tutorial_trains_loads_serves_and_exports_one_class
     assert scope["predicted"] == int(scope["classifier"](scope["test"]["spikes"][:1])[0])
     assert scope["same"]
     assert [type(scope["graph"].nodes[k]).__name__ for k in "0123"] == ["Affine", "LIF", "Affine", "LI"]
+
+
+def test_the_fit_a_circuit_tutorial_recovers_weights_from_voltages_and_fits_spike_times():
+    scope = {}
+    for block in _blocks("fit-a-circuit.md"):
+        exec(block, scope)
+    v = scope["recorded"]["v"]
+    assert float(v.min()) > -74.0 and float(v.max()) < -57.0  # the text's -73 to -58 mV
+    assert scope["correlation"] > 0.999 and scope["error"] < 10.0  # the text's 0.9999 and 8 pA
+    assert int(scope["target"].sum()) == 63 and abs(int(scope["fired"].sum()) - 63) <= 10  # 58 to 63
+    assert scope["gamma"] > 0.75  # the text's 0.84
+    student, variables, params = scope["student"], scope["variables"], scope["params"]
+    learned = student.connections({**variables, "params": params})["in->out:ampa"].weight
+    assert np.corrcoef(learned, scope["actual"] + 100.0)[0, 1] < 0.5  # the text's 0.25
