@@ -30,6 +30,7 @@ The state of sparx and its dew work as of 8 October 2026: what exists, what is o
   - Plasticity: STDP, triplet STDP, reward-modulated STDP (NEST's `stdp_dopamine_synapse`) and Tsodyks-Markram.
   - Networks with delays and event delivery; `simulate` on dew's mesh and checkpoints; records by name.
   - Connectomes: Shiu et al.'s whole fly brain on FlyWire (reproduced) and on the male CNS (weight calibrated with `matched_w_syn`).
+- **One name, one object.** No public name binds two objects across sparx's modules (the review's item 6): the model in mV is `sparx.dynamics.LeakyIntegrateAndFire`, `sparx.nn.LIF` builds the dimensionless `LIFCell`, the encoders end in `Encoder` (`RateEncoder`, `DeltaEncoder`, ...), and `nn.Dynamics(Izhikevich())` replaces `nn.Izhikevich`. The registry's encoder aliases (`rate`, `delta`, ...) are unchanged.
 - **One neuron protocol for both halves.** `step(state, SynapticInput, dt) -> (state, Output)` covers ML cells, physical models and graded models. `nn.Dynamics` makes any of them a layer, and any of them can be a `Population`.
 
 ### Results worth knowing
@@ -81,7 +82,6 @@ Open in dew, for sparx:
    - Start with the small modular core (16 x 256 units), selective fast plasticity (`sparx.nn.Recurrent` with a neuromodulated trace; on a connectome's sparse wiring as well), a BPTT reference and a switch-and-door adaptation task, as the notes recommend.
    - Anything awkward to express there is a gap to fix in sparx or dew.
 3. **Remaining DX review items** (the review's numbering):
-   - item 6, the name clashes: `LIF` in four places, `Delta`, `Izhikevich`;
    - item 7, a "Time, units and rates" reference page;
    - item 11, e-prop weights into an `nn` model;
    - the documentation plan: tutorials from training to export, a cortical circuit with a Brian2/NEST lookup table, connectomes, mixing the halves, and generated API pages.

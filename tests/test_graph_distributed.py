@@ -15,7 +15,7 @@ from dew.training import MeshSpec
 sys.path.insert(0, TESTS)
 jax.config.update("jax_enable_x64", True)
 from test_graph import nest_network
-from sparx.dynamics import LIF, Exponential, Receptor
+from sparx.dynamics import LeakyIntegrateAndFire, Exponential, Receptor
 from sparx.graph import FixedProbability, Network, PoissonInput, Population, Projection, SpikeRaster, simulate
 
 mesh = MeshSpec()  # every device on the data axis
@@ -33,7 +33,7 @@ out["neuron_sharding"] = list(v.sharding.spec)
 out["shards"] = len(v.addressable_shards)
 
 # Trials spread: a Poisson-driven network, 8 trials of 50 ms.
-net = Network((Population("a", 64, LIF(), {"ex": Receptor(Exponential(5.0))}),),
+net = Network((Population("a", 64, LeakyIntegrateAndFire(), {"ex": Receptor(Exponential(5.0))}),),
               (Projection("a", "a", FixedProbability(0.1), weight=20.0, delay=1.0, receptor="ex"),),
               inputs=(PoissonInput("a", rate=1000.0, weight=60.0, receptor="ex", count=5),), dt=0.1,
               dtype=jnp.float64)

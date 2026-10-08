@@ -9,7 +9,6 @@ import pytest
 from scipy.integrate import quad
 
 from sparx.dynamics import (
-    LIF,
     Alpha,
     Arrivals,
     BiExponential,
@@ -17,6 +16,7 @@ from sparx.dynamics import (
     Exponential,
     Graded,
     GradedPotential,
+    LeakyIntegrateAndFire,
     LIFCell,
     MgBlock,
     PointNeuron,
@@ -28,7 +28,7 @@ from sparx.dynamics import (
 from sparx.dynamics.core import response
 
 
-def lif_period(neuron: LIF, current: float) -> float:
+def lif_period(neuron: LeakyIntegrateAndFire, current: float) -> float:
     """The analytic interspike interval of a current-driven LIF reset to rest: refractory plus
     the time the membrane takes to climb from E_L to v_th toward E_L + R I."""
     r = neuron.tau_m / neuron.c_m
@@ -39,7 +39,7 @@ def lif_period(neuron: LIF, current: float) -> float:
 def test_one_long_step_equals_many_short_ones_below_threshold():
     # The update is the exact solution for inputs constant over the step, so
     # its accuracy does not depend on dt.
-    neuron = LIF()
+    neuron = LeakyIntegrateAndFire()
     with jax.enable_x64(new_val=True):
         current = jnp.asarray([10.0, 40.0])  # steady states -51.5 and -59.3 mV
         g = {"ampa": jnp.asarray([2.0, 0.5]), "gaba_a": jnp.asarray([1.0, 3.0])}
@@ -54,7 +54,7 @@ def test_one_long_step_equals_many_short_ones_below_threshold():
 
 
 def test_constant_conductances_relax_to_their_analytic_steady_state():
-    neuron = LIF()
+    neuron = LeakyIntegrateAndFire()
     g_l = neuron.c_m / neuron.tau_m
     g_e, g_i = 3.0, 6.0
     v_inf = (g_l * neuron.e_l + g_e * 0.0 + g_i * -80.0) / (g_l + g_e + g_i)
@@ -69,7 +69,7 @@ def test_constant_conductances_relax_to_their_analytic_steady_state():
 
 @pytest.mark.parametrize("current", [250.0, 400.0, 900.0])
 def test_firing_period_is_the_analytic_one_within_a_step(current):
-    neuron = LIF()
+    neuron = LeakyIntegrateAndFire()
     dt = 0.01
     with jax.enable_x64(new_val=True):
         spikes, _ = run(neuron, SynapticInput(jnp.full((40_000, 1), current)), dt=dt)
@@ -84,7 +84,7 @@ def test_firing_period_is_the_analytic_one_within_a_step(current):
 
 
 def test_in_step_spike_times_are_closer_than_the_grid():
-    neuron = LIF()
+    neuron = LeakyIntegrateAndFire()
     dt = 0.5
     current = 400.0
     with jax.enable_x64(new_val=True):
@@ -97,7 +97,7 @@ def test_in_step_spike_times_are_closer_than_the_grid():
 
 
 def test_refractoriness_holds_for_t_ref_over_dt_steps():
-    neuron = LIF(t_ref=2.0)
+    neuron = LeakyIntegrateAndFire(t_ref=2.0)
     dt = 0.1
     spikes, _ = run(neuron, SynapticInput(jnp.full((400, 1), 5000.0)), dt=dt)
     steps = np.flatnonzero(np.asarray(spikes.value[:, 0]))
@@ -110,7 +110,7 @@ def test_refractoriness_holds_for_t_ref_over_dt_steps():
 
 
 def test_the_surrogate_passes_gradients_to_the_input_current():
-    neuron = LIF()
+    neuron = LeakyIntegrateAndFire()
 
     def rate(current):
         spikes, _ = run(neuron, SynapticInput(jnp.full((2000, 1), current)), dt=0.1)
@@ -177,7 +177,7 @@ def test_mg_block_is_jahr_and_stevens():
 
 
 def test_nmda_conductance_is_scaled_by_the_block_at_the_start_of_the_step():
-    neuron = LIF()
+    neuron = LeakyIntegrateAndFire()
     with jax.enable_x64(new_val=True):
         state = neuron.init_state((1,), jnp.float64)
         nmda, _ = neuron.step(state, SynapticInput(conductance={"nmda": jnp.asarray([4.0])}), 0.1)

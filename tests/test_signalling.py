@@ -11,13 +11,13 @@ import reference
 from flax import struct
 
 from sparx.dynamics import (
-    LIF,
     Arrivals,
     Delta,
     DopamineSTDP,
     Exponential,
     Graded,
     GradedPotential,
+    LeakyIntegrateAndFire,
     LICell,
     LIFCell,
     PairSTDP,
@@ -121,7 +121,8 @@ def test_flynn_on_a_sparse_connectome_is_their_recurrence(format, activation):
 
 def test_a_graded_population_refuses_event_delivery_and_spike_driven_options():
     graded = Population("g", 4, GradedPotential())
-    target = Population("t", 4, LIF(), {"syn": Receptor(Graded(2.0)), "exp": Receptor(Exponential(2.0))})
+    receptors = {"syn": Receptor(Graded(2.0)), "exp": Receptor(Exponential(2.0))}
+    target = Population("t", 4, LeakyIntegrateAndFire(), receptors)
 
     def build(**options):
         receptor = options.pop("receptor", "syn")
@@ -138,7 +139,8 @@ def test_a_graded_population_refuses_event_delivery_and_spike_driven_options():
     with pytest.raises(ValueError, match="plasticity acts on spikes"):
         build(plasticity=PairSTDP())
     with pytest.raises(ValueError, match="sends spikes"):  # and the other way round
-        Network((Population("s", 4, LIF()), target), (Projection("s", "t", AllToAll(), receptor="syn"),))
+        source = Population("s", 4, LeakyIntegrateAndFire())
+        Network((source, target), (Projection("s", "t", AllToAll(), receptor="syn"),))
     network = build(format="edges")
     with pytest.raises(ValueError, match="OutputTrace"):
         network.apply(network.init(jax.random.key(0)), steps=2, monitors={"r": SpikeRaster("g")},
@@ -338,8 +340,9 @@ def dopamine_network(rule):
     whose spikes release dopamine with NEST's increment, 1 / tau_n, decaying with 200 ms."""
     receptors = {"ex": Receptor(Exponential(5.0))}
     drive = tuple(PoissonInput(name, rate=1000.0, weight=60.0, receptor="ex", count=5) for name in "abd")
-    return Network((Population("a", 20, LIF(), receptors), Population("b", 20, LIF(), receptors),
-                    Population("d", 4, LIF(), receptors)),
+    neuron = LeakyIntegrateAndFire()
+    return Network((Population("a", 20, neuron, receptors), Population("b", 20, neuron, receptors),
+                    Population("d", 4, neuron, receptors)),
                    (Projection("a", "b", FixedProbability(0.3), weight=20.0, delay=1.0, receptor="ex",
                                plasticity=rule),),
                    inputs=drive, modulators=(Modulator("dopamine", "d", tau=200.0, release=1 / 200.0),),

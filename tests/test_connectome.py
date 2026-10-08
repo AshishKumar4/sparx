@@ -7,7 +7,7 @@ import jax
 import numpy as np
 import pytest
 
-from sparx.dynamics import LIF, Exponential, Receptor
+from sparx.dynamics import Exponential, LeakyIntegrateAndFire, Receptor
 from sparx.graph import (
     FixedProbability,
     Network,
@@ -37,7 +37,7 @@ def test_connectome_indexes_ids_and_silences_neurons():
 
 
 def test_spike_counts_and_times_agree_with_full_spike_records():
-    network = Network((Population("a", 300, LIF(), {"ex": Receptor(Exponential(5.0))}),),
+    network = Network((Population("a", 300, LeakyIntegrateAndFire(), {"ex": Receptor(Exponential(5.0))}),),
                       (Projection("a", "a", FixedProbability(0.05), weight=30.0, delay=1.0, receptor="ex"),),
                       inputs=(PoissonInput("a", rate=1000.0, weight=60.0, receptor="ex", count=5),), dt=DT)
     result = simulate(network, network.init(jax.random.key(0)), duration=60.0, key=jax.random.key(1),

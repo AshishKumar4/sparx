@@ -86,7 +86,8 @@ def test_the_circuit_example_sustains_irregular_activity():
 
 def test_the_graded_signalling_example_releases_fires_and_modulates():
     scope = {}
-    exec(_block("import jax\nimport numpy as np\nfrom sparx.dynamics import LIF, Exponential, Graded"), scope)
+    exec(_block("import jax\nimport numpy as np\nfrom sparx.dynamics import Exponential, Graded, GradedPotential"),
+         scope)
     records = scope["result"].records
     release, spikes, dopamine = records["release"], records["spikes"], records["dopamine"]
     assert release.shape == (3000, 20) and 0 < release.min() < release.max() < 1

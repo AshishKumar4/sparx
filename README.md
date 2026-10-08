@@ -50,7 +50,7 @@ class Net(nn.Module):
 net = Net()
 images = jax.random.uniform(jax.random.key(0), (32, 784))  # intensities in [0, 1]
 labels = jnp.zeros(32, jnp.int32)
-spikes = sparx.encode.Rate(steps=8)(jax.random.key(1), images)  # [8, 32, 784]
+spikes = sparx.encode.RateEncoder(steps=8)(jax.random.key(1), images)  # [8, 32, 784]
 params = net.init(jax.random.key(2), spikes)
 
 
@@ -92,8 +92,7 @@ The LIF family (`LIF`, `IF`, `LI`, `Synaptic`, `ALIF`) shares one discrete-time 
 | `Rate(tau, activation)` | leaky rate unit, FLYNN's: `h <- alpha h + (1 - alpha) f(x + b)`, returns its activity; `tau=0` keeps no memory, `h = f(x + b)` | `b`; `learn_tau` |
 | `Synaptic(tau, tau_synapse, ...)` | current-based LIF: a decaying synaptic current charges the membrane | `learn_tau` (both) |
 | `ALIF(tau, tau_adapt, beta, ...)` | adaptive threshold that rises by `beta` per spike (Bellec et al. 2020) | `learn_tau` (both) |
-| `Izhikevich(a, b, c, d, dt)` | Izhikevich's two-variable neuron (2003) on input currents, `dt` in ms | |
-| `Dynamics(model, dt=dt)` | any neuron model of `sparx.dynamics`, such as `AdEx`, on input currents | |
+| `Dynamics(model, dt=dt)` | any neuron model of `sparx.dynamics`, such as `AdEx` or `Izhikevich`, on input currents | |
 | `Recurrent(neuron, rule=None)` | feeds any neuron's output back to its input through a learned `[F, F]` matrix; with a `rule`, plus fast weights, `alpha` times a Hebbian trace that each sequence writes from zero (Miconi et al. 2018, 2019) | the matrix; `alpha` and the rule's rates and neuromodulator |
 | `PSN()` | parallel spiking neuron: `H = W X + b` over all `T x T` step pairs (Fang et al. 2023) | `W`, `b` |
 | `MaskedPSN(k)` | the PSN restricted to the `k` most recent steps | `W`, `b` |
@@ -147,7 +146,7 @@ logits = net.apply(variables, frames, train=False)   # frames [T, B, 32, 32, 3] 
 
 ## Encoding, losses and firing rates
 
-`sparx.encode` turns a batch field `[B, ...]` into time-major input `[T, B, ...]`. An encoder is a frozen dataclass called as `encoder(key, x)`, where `key` is a JAX PRNG key such as `jax.random.key(0)`, never an int seed; the entry points called from outside JAX (dew's `Trainer`, `SpikingClassification.logits`) take an int seed, as dew's do. The encoders are `Rate(steps)` (Bernoulli spikes at the value's probability), `Latency(steps)` (one spike, earlier for larger values), `Direct(steps)` (the values as a constant input current, direct encoding), `Delta(threshold)` (spikes on changes of a signal over each record's time axis) and `Events()` (records that already hold spikes over time). The first four read uint8 fields as `x / 255`; `Events` passes spike counts unscaled.
+`sparx.encode` turns a batch field `[B, ...]` into time-major input `[T, B, ...]`. An encoder is a frozen dataclass called as `encoder(key, x)`, where `key` is a JAX PRNG key such as `jax.random.key(0)`, never an int seed; the entry points called from outside JAX (dew's `Trainer`, `SpikingClassification.logits`) take an int seed, as dew's do. The encoders are `RateEncoder(steps)` (Bernoulli spikes at the value's probability), `LatencyEncoder(steps)` (one spike, earlier for larger values), `DirectEncoder(steps)` (the values as a constant input current, direct encoding), `DeltaEncoder(threshold)` (spikes on changes of a signal over each record's time axis) and `EventsEncoder()` (records that already hold spikes over time). The first four read uint8 fields as `x / 255`; `EventsEncoder` passes spike counts unscaled.
 
 `sparx.losses` has losses over the whole output sequence, one value per example: `per_step_cross_entropy` asks every time step to classify (Deng et al. 2022) and `rate_mse` pulls each output neuron's firing rate toward a target. For a loss on one readout, reduce time first and use optax: `jnp.max(v, axis=0)` of an `LI` membrane, its mean, or the spike count.
 
@@ -200,7 +199,7 @@ from dew import Checkpoints, Field, Trainer
 from dew.data import Dataset
 
 from sparx.datasets import shd
-from sparx.encode import Events
+from sparx.encode import EventsEncoder
 from sparx.metrics import Accuracy
 from sparx.models import SpikingMLP
 from sparx.nn import ALIF
@@ -209,7 +208,7 @@ from sparx.objectives import RateBand, SpikingClassifierObjective
 train, test = shd("train"), shd("test")           # {"spikes": [N, 100, 700], "label": [N]}
 net = SpikingMLP(hidden=(256,), classes=20, neuron=ALIF(tau=5.0, tau_adapt=20.0, learn_tau=True))
 objective = SpikingClassifierObjective(
-    net, Field("spikes", (100, 700)), Events(),   # the records already hold spikes
+    net, Field("spikes", (100, 700)), EventsEncoder(),   # the records already hold spikes
     readout="max",                                # each class's peak membrane
     rates=RateBand(lower=0.01, upper=0.3),        # keep neurons in a firing band
 )
@@ -259,12 +258,12 @@ Training on several devices is dew's: `Trainer(..., mesh=MeshSpec(fsdp=2))` plac
 
 ```python
 import jax
-from sparx.dynamics import LIF, Exponential, Receptor
+from sparx.dynamics import Exponential, LeakyIntegrateAndFire, Receptor
 from sparx.graph import (FixedProbability, Network, Population, PopulationRate, Projection, SpikeRaster,
                          StateMonitor, simulate)
 from sparx.spiketrains import cv_isi, rates_hz
 
-neuron = LIF(tau_m=20.0, c_m=200.0, e_l=-60.0, v_th=-50.0, v_reset=-60.0, t_ref=5.0)
+neuron = LeakyIntegrateAndFire(tau_m=20.0, c_m=200.0, e_l=-60.0, v_th=-50.0, v_reset=-60.0, t_ref=5.0)
 receptors = {"ampa": Receptor(Exponential(5.0), "conductance"),  # LIF reverses ampa at 0 mV
              "gaba_a": Receptor(Exponential(10.0), "conductance")}  # and gaba_a at -80 mV
 initial = {"v": lambda rng, n: rng.uniform(-60.0, -50.0, n),  # random voltages (mV)
@@ -306,7 +305,7 @@ Three more mechanisms sit beside the projections. `StochasticRelease(p, quantal)
 ```python
 import jax
 import numpy as np
-from sparx.dynamics import LIF, Exponential, Graded, GradedPotential, Receptor, StochasticRelease
+from sparx.dynamics import Exponential, Graded, GradedPotential, LeakyIntegrateAndFire, Receptor, StochasticRelease
 from sparx.graph import (CurrentInput, FixedProbability, GapJunction, Modulator, ModulatorTrace, Network,
                          OutputTrace, Population, Projection, SpikeRaster, simulate)
 
@@ -314,7 +313,7 @@ receptors = {"ampa": Receptor(Graded(tau=5.0), "conductance"),  # follows the gr
              "gaba_a": Receptor(Exponential(10.0), "conductance")}
 network = Network(
     populations=(Population("graded", 20, GradedPotential()),  # never spikes, sends its release (0 to 1)
-                 Population("relay", 50, LIF(), receptors)),
+                 Population("relay", 50, LeakyIntegrateAndFire(), receptors)),
     projections=(Projection("graded", "relay", FixedProbability(0.3), weight=3.0, delay=0.0, receptor="ampa"),
                  Projection("relay", "relay", FixedProbability(0.2), weight=10.0, delay=1.0, receptor="gaba_a",
                             release=StochasticRelease(p=0.4))),  # each synapse releases with p = 0.4

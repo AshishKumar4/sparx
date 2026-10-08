@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 import reference
 
-from sparx.dynamics import AdEx, Izhikevich as IzhikevichModel, LIFCell, SynapticInput, decay, run
-from sparx.nn import ALIF, IF, LI, LIF, RATES, STATE, Dynamics, Flatten, Izhikevich, Rate, Recurrent, Synaptic
+from sparx.dynamics import AdEx, Izhikevich, LIFCell, SynapticInput, decay, run
+from sparx.nn import ALIF, IF, LI, LIF, RATES, STATE, Dynamics, Flatten, Rate, Recurrent, Synaptic
 from sparx.surrogate import ATan, FastSigmoid
 
 T, B, D = 24, 4, 6
@@ -148,9 +148,9 @@ def test_a_recurrent_rate_layer_is_flynns_recurrence_and_sows_no_spike_rate():
     assert sown == {}  # its output is an activity, which has no spike rate
 
 
-def test_izhikevich_layer_runs_with_its_defaults():
+def test_an_izhikevich_layer_runs_with_its_defaults():
     x = jnp.full((400, 1, 2), 10.0)
-    assert float(Izhikevich().apply({}, x).sum()) > 0
+    assert float(Dynamics(Izhikevich()).apply({}, x).sum()) > 0
 
 
 def test_conv_networks_run_over_time_and_batch_axes():
@@ -247,7 +247,8 @@ def test_a_steep_surrogate_keeps_the_gradient_through_adex_bounded():
     assert _adex_gradient(FastSigmoid(100.0)) < 10
 
 
-def test_izhikevich_layer_is_the_dynamics_model_on_currents():
+def test_an_izhikevich_layer_is_the_dynamics_model_on_currents():
     x = jnp.asarray(np.random.default_rng(12).normal(10.0, 3.0, (300, 2, 3)), jnp.float32)
-    expected = run(IzhikevichModel(c=-55.0, v_init=-55.0), SynapticInput(current=x))[0].value
-    np.testing.assert_array_equal(Izhikevich(c=-55.0).apply({}, x), expected)
+    model = Izhikevich(c=-55.0, v_init=-55.0)
+    expected = run(model, SynapticInput(current=x))[0].value
+    np.testing.assert_array_equal(Dynamics(model).apply({}, x), expected)

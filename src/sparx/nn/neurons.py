@@ -68,7 +68,6 @@ __all__ = [
     "RATES",
     "STATE",
     "Dynamics",
-    "Izhikevich",
     "Modelled",
     "Neuron",
     "Rate",
@@ -314,35 +313,12 @@ class ALIF(Neuron):
             self.beta, self.threshold, self.reset, self.surrogate, self.detach_reset, self.refractory)
 
 
-class Izhikevich(Neuron):
-    """Izhikevich's neuron (`sparx.dynamics.Izhikevich`) on input currents; defaults are regular spiking.
-
-    The input is a current in the model's own units, where a constant 10
-    drives tonic spiking, and time is in ms, the model's unit, so `dt` is
-    the step in ms. The scheme is his published code's, which at the
-    default `dt = 1` it reproduces to the last bit. The membrane starts at
-    `c`.
-    """
-
-    a: float = 0.02
-    b: float = 0.2
-    c: float = -65.0
-    d: float = 8.0
-    surrogate: Surrogate = ATan()
-
-    def inputs(self, x: jax.Array) -> SynapticInput:
-        return SynapticInput(current=x)
-
-    def build(self, x: jax.Array) -> dynamics.Izhikevich:
-        return dynamics.Izhikevich(a=self.a, b=self.b, c=self.c, d=self.d, v_init=self.c,
-                                   surrogate=self.surrogate)
-
-
 class Dynamics(Neuron):
     """Any neuron model of `sparx.dynamics` as a layer, its fields fixed.
 
     `Dynamics(AdEx(), dt=0.1)` runs AdEx in steps of 0.1 ms on input
-    currents `[T, ...]` in pA; the model defaults to the physical `LIF`
+    currents `[T, ...]` in pA, and `Dynamics(Izhikevich())` Izhikevich's
+    neuron in steps of 1 ms on currents in its own units; the model defaults to `LeakyIntegrateAndFire`
     with its defaults. `drive` names what the input is to the
     model: a `"current"` held over each step, the physical models' input,
     or a `"jump"` of the membrane, the dimensionless family's. A layer that
@@ -358,14 +334,14 @@ class Dynamics(Neuron):
     For AdEx at 40 Hz over 2000 steps of 0.1 ms, behind a dense layer, the
     gradient norm reaching that layer was 7.9e8 with the default `ATan()`,
     3.4 with `FastSigmoid(25)` and 0.42 with `FastSigmoid(100)`; the
-    physical `LIF`, which has no upswing, gave 0.28 with `FastSigmoid(25)`.
+    `LeakyIntegrateAndFire`, which has no upswing, gave 0.28 with `FastSigmoid(25)`.
     A wider surrogate (one normalized by a voltage scale, `ATan(0.1)`)
     made AdEx's gradient larger, so a steep `FastSigmoid` is the
     recommended start. `tests/test_nn.py` reruns the AdEx case with
     `ATan()` and `FastSigmoid(100)`.
     """
 
-    neuron: NeuronModel = dynamics.LIF()
+    neuron: NeuronModel = dynamics.LeakyIntegrateAndFire()
     drive: Literal["current", "jump"] = "current"
 
     def inputs(self, x: jax.Array) -> SynapticInput:

@@ -12,7 +12,7 @@ from collections.abc import Mapping
 import numpy as np
 from dew.registry import Record
 
-from sparx.dynamics.neurons import LIF
+from sparx.dynamics.neurons import LeakyIntegrateAndFire
 from sparx.dynamics.synapses import Delta, Exponential, Receptor
 from sparx.graph.connectivity import FixedInDegree, FixedProbability
 from sparx.graph.network import Network, PerNeuron, PoissonInput, Population, Projection
@@ -56,7 +56,7 @@ def brunel(order: int = 2500, *, g: float = 5.0, eta: float = 2.0, j: float = 0.
     tau_m, theta = 20.0, 20.0
     nu_threshold = theta / (j * c_e * tau_m)  # 1/ms
     external = eta * nu_threshold * 1000.0 * c_e  # Hz, all C_E sources together
-    neuron = LIF(tau_m=tau_m, c_m=250.0, e_l=0.0, v_th=theta, v_reset=10.0, t_ref=2.0)
+    neuron = LeakyIntegrateAndFire(tau_m=tau_m, c_m=250.0, e_l=0.0, v_th=theta, v_reset=10.0, t_ref=2.0)
     receptors = {"ampa": Receptor(Delta()), "gaba_a": Receptor(Delta())}
     populations = (Population("e", excitatory, neuron, receptors),
                    Population("i", inhibitory, neuron, receptors))
@@ -69,8 +69,8 @@ def brunel(order: int = 2500, *, g: float = 5.0, eta: float = 2.0, j: float = 0.
     return Network(populations, projections, inputs, dt=dt)
 
 
-def _vogels_abbott(neuron: LIF, receptors: Mapping[str, Receptor], weights: tuple[float, float],
-                   initial: Mapping[str, PerNeuron], dt: float) -> Network:
+def _vogels_abbott(neuron: LeakyIntegrateAndFire, receptors: Mapping[str, Receptor],
+                   weights: tuple[float, float], initial: Mapping[str, PerNeuron], dt: float) -> Network:
     populations = (Population("e", 3200, neuron, receptors, initial=initial),
                    Population("i", 800, neuron, receptors, initial=initial))
     projections = tuple(
@@ -95,7 +95,7 @@ def cuba(dt: float = 0.1) -> Network:
     on a 200 pF membrane they are 16.2 and -90 pA. Voltages start uniform
     between reset and threshold.
     """
-    neuron = LIF(tau_m=20.0, c_m=200.0, e_l=-49.0, v_th=-50.0, v_reset=-60.0, t_ref=5.0)
+    neuron = LeakyIntegrateAndFire(tau_m=20.0, c_m=200.0, e_l=-49.0, v_th=-50.0, v_reset=-60.0, t_ref=5.0)
     receptors = {"ampa": Receptor(Exponential(5.0)), "gaba_a": Receptor(Exponential(10.0))}
     return _vogels_abbott(neuron, receptors, (16.2, -90.0), {"v": _random_voltage}, dt)
 
@@ -105,12 +105,12 @@ def coba(dt: float = 0.1) -> Network:
 
     The CUBA network's structure with conductances of 6 and 67 nS, decaying
     in 5 and 10 ms, reversing at 0 and -80 mV, on membranes of 200 pF and
-    10 nS resting at -60 mV (the reversal potentials are `LIF`'s defaults for
+    10 nS resting at -60 mV (the reversal potentials are `LeakyIntegrateAndFire`'s defaults for
     `ampa` and `gaba_a`). Activity is sustained from random initial
     voltages and conductances (excitatory `N(40, 15)` nS, inhibitory
     `N(200, 120)` nS), as Brian's example sets them.
     """
-    neuron = LIF(tau_m=20.0, c_m=200.0, e_l=-60.0, v_th=-50.0, v_reset=-60.0, t_ref=5.0)
+    neuron = LeakyIntegrateAndFire(tau_m=20.0, c_m=200.0, e_l=-60.0, v_th=-50.0, v_reset=-60.0, t_ref=5.0)
     receptors = {"ampa": Receptor(Exponential(5.0), "conductance"),
                  "gaba_a": Receptor(Exponential(10.0), "conductance")}
     initial = {"v": _random_voltage,

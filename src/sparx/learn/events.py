@@ -12,7 +12,7 @@ are in ms, as in `sparx.dynamics`, and so are spike times. `V` is the
 membrane voltage in mV above rest, and `I` the synaptic current in pA
 through a membrane resistance of 1 GOhm, so a current of 1 pA held would
 settle the voltage at 1 mV. A weight is the jump of the current, in pA.
-`sparx.dynamics.LIF` with `c_m = tau_m` (a leak conductance of 1 nS),
+`sparx.dynamics.LeakyIntegrateAndFire` with `c_m = tau_m` (a leak conductance of 1 nS),
 `e_l = v_reset = 0` and no refractory period, driven by an
 `Exponential(tau_syn)` synapse, is this neuron (`tests/test_learn.py`
 checks it on a 1 us grid).

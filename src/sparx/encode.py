@@ -3,18 +3,18 @@
 An encoder is a frozen dataclass called as `encoder(key, x)` on a batch
 field `[B, ...]`. The same object encodes in a plain JAX loop and inside
 `sparx.objectives.SpikingClassifierObjective`, and a run's record holds it
-as dew records any class, `{"class": "sparx.encode:Rate", "fields": {"steps":
+as dew records any class, `{"class": "sparx.encode:RateEncoder", "fields": {"steps":
 8}}`, which rebuilds it in another process. Each has a short name in
 `sparx.registry.spike_encoders` (`rate`), for the recipe's command line.
 
-Encoders of static data (`Direct`, `Rate`, `Latency`) add a leading time
+Encoders of static data (`DirectEncoder`, `RateEncoder`, `LatencyEncoder`) add a leading time
 axis of `steps`: an image batch `[B, H, W, C]` becomes `[steps, B, H, W, C]`.
-Encoders of data that already runs over time (`Delta`, `Events`) move each
+Encoders of data that already runs over time (`DeltaEncoder`, `EventsEncoder`) move each
 record's time axis to the front: `[B, T, F]` becomes `[T, B, F]`.
 
-The encoders that read values as intensities (`Direct`, `Rate`, `Latency`,
-`Delta`) read a uint8 field as `x / 255` and expect anything else in
-[0, 1], so raw image bytes and normalized arrays encode alike. `Events`
+The encoders that read values as intensities (`DirectEncoder`, `RateEncoder`, `LatencyEncoder`,
+`DeltaEncoder`) read a uint8 field as `x / 255` and expect anything else in
+[0, 1], so raw image bytes and normalized arrays encode alike. `EventsEncoder`
 reads spike counts or currents, which it passes on unscaled. Every encoder
 returns float32.
 
@@ -33,13 +33,13 @@ import jax.numpy as jnp
 import numpy as np
 from jax.typing import ArrayLike
 
-__all__ = ["Delta", "Direct", "Events", "Latency", "Rate", "SpikeEncoder"]
+__all__ = ["DeltaEncoder", "DirectEncoder", "EventsEncoder", "LatencyEncoder", "RateEncoder", "SpikeEncoder"]
 
 
 class SpikeEncoder(ABC):
     """Turns one batch field `[B, ...]` into the network's time-major input `[T, B, ...]`.
 
-    `key` drives the random encoders (`Rate`); the others ignore it, so
+    `key` drives the random encoders (`RateEncoder`); the others ignore it, so
     every encoder is called the same way. It is a JAX PRNG key, as
     `jax.random`'s functions take, never an int seed: an encoder runs inside
     jitted training steps, where the caller splits one key per step. The
@@ -77,7 +77,7 @@ def _intensities(x: ArrayLike) -> jax.Array:
 
 
 @dataclass(frozen=True)
-class Direct(SpikeEncoder):
+class DirectEncoder(SpikeEncoder):
     """The values themselves as the input current at each of `steps` steps, as a broadcast."""
 
     steps: int
@@ -88,7 +88,7 @@ class Direct(SpikeEncoder):
 
 
 @dataclass(frozen=True)
-class Rate(SpikeEncoder):
+class RateEncoder(SpikeEncoder):
     """Bernoulli spikes that fire with probability `x` at each of `steps` steps, independently.
 
     `x` is clipped to [0, 1]. The spike count over `steps` is binomial with
@@ -105,7 +105,7 @@ class Rate(SpikeEncoder):
 
 
 @dataclass(frozen=True)
-class Latency(SpikeEncoder):
+class LatencyEncoder(SpikeEncoder):
     """One spike per value over `steps` steps, earlier for larger values: time-to-first-spike coding.
 
     A value `x` in [0, 1] fires once, at step `round((1 - x) * (steps - 1))`,
@@ -130,7 +130,7 @@ def _time_major(x: jax.Array, time_axis: int) -> jax.Array:
 
 
 @dataclass(frozen=True)
-class Delta(SpikeEncoder):
+class DeltaEncoder(SpikeEncoder):
     """Spike where a signal rises by at least `threshold` from the step before.
 
     Each record holds the signal over time on axis `time_axis`. The step
@@ -153,7 +153,7 @@ class Delta(SpikeEncoder):
 
 
 @dataclass(frozen=True)
-class Events(SpikeEncoder):
+class EventsEncoder(SpikeEncoder):
     """Data that already holds spikes or currents over time, on axis `time_axis` of each record.
 
     A record `[T, F]` arrives batched as `[B, T, F]`; the default moves its

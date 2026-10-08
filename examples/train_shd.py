@@ -96,7 +96,7 @@ from dew.training.optim import Cosine, Exponential, Linear, OneCycle, ParamGroup
 
 import sparx
 from sparx.datasets import holdout, shd, write_synthetic_shd
-from sparx.encode import Events
+from sparx.encode import EventsEncoder
 from sparx.metrics import Accuracy
 from sparx.models import SpikingMLP
 from sparx.objectives import RateBand, SpikingClassifierObjective
@@ -179,7 +179,7 @@ def alif(config: Config) -> None:
                      learn_readout_tau=True)
     width = {"sigma": Linear(peak=config.delays / 2, end=0.5)} if config.delays else None
     objective = SpikingClassifierObjective(
-        net, Field("spikes", train["spikes"].shape[1:]), Events(), readout="max",
+        net, Field("spikes", train["spikes"].shape[1:]), EventsEncoder(), readout="max",
         rates=RateBand(lower=0.01, upper=0.3, weight=1.0), schedules=width, schedule_steps=config.steps,
         deployed={"sigma": 0} if config.delays else None)
     schedule = optax.cosine_decay_schedule(config.learning_rate, config.steps)
@@ -238,8 +238,8 @@ def snn_delays(config: Config) -> None:
     width = Exponential(init=float((MAX_DELAY + 1) // 2), end=0.23, decay_steps=config.epochs // 4,
                         offset=0.27, every=per_epoch)
     objective = SpikingClassifierObjective(
-        net, Field("spikes", (STEPS, 140)), Events(), readout="softmax_sum", schedules={"sigma": width},
-        schedule_steps=steps, deployed={"sigma": 0})
+        net, Field("spikes", (STEPS, 140)), EventsEncoder(), readout="softmax_sum",
+        schedules={"sigma": width}, schedule_steps=steps, deployed={"sigma": 0})
     run = config.out or Path("runs/shd-snn-delays")
     journal = LocalTracker(run / "tracking")
     checkpoints = Checkpoints(str(run))

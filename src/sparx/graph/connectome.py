@@ -38,7 +38,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from sparx.dynamics import FastWeights, RateCell, RecurrentCell, Sparse, SynapticInput
-from sparx.dynamics.neurons import LIF
+from sparx.dynamics.neurons import LeakyIntegrateAndFire
 from sparx.dynamics.synapses import Delta, Exponential, Receptor
 from sparx.graph.connectivity import FromEdges
 from sparx.graph.network import Network, PoissonInput, Population, Projection
@@ -216,7 +216,8 @@ def shiu2024(connectome: Connectome, *, stimuli: Sequence[tuple[Sequence[int], f
     for neurons, _ in stimuli:
         t_ref[np.asarray(neurons)] = 0.0
     # With C = tau_m, g_L = 1 nS and a current in pA is Brian2's g in mV.
-    neuron = LIF(tau_m=20.0, c_m=20.0, e_l=-52.0, v_th=-45.0, v_reset=-52.0, t_ref=jnp.asarray(t_ref))
+    neuron = LeakyIntegrateAndFire(tau_m=20.0, c_m=20.0, e_l=-52.0, v_th=-45.0, v_reset=-52.0,
+                                   t_ref=jnp.asarray(t_ref))
     receptors = {"syn": Receptor(Exponential(5.0)), "stimulus": Receptor(Delta(after_threshold=True))}
     brain = Population("brain", connectome.size, neuron, receptors, reset_synapses=True, freeze_synapses=True)
     synapses = Projection("brain", "brain", FromEdges(connectome.pre, connectome.post),

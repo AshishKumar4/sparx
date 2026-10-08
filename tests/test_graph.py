@@ -10,10 +10,10 @@ import pytest
 from dew.checkpoints import Checkpoints
 
 from sparx.dynamics import (
-    LIF,
     ALIFCell,
     Delta,
     Exponential,
+    LeakyIntegrateAndFire,
     LICell,
     LIFCell,
     PairSTDP,
@@ -42,7 +42,7 @@ from sparx.graph import (
     simulate,
 )
 from sparx.graph.models import brunel, coba, cuba
-from sparx.nn import LIF as LayerLIF
+from sparx.nn import LIF
 from sparx.spiketrains import cv_isi, population_fano, rates_hz
 
 NEST = np.load(Path(__file__).parent / "fixtures" / "nest.npz")
@@ -53,13 +53,13 @@ def nest_network(model):
     case = {key.split("/", 2)[2]: NEST[key] for key in NEST.files if key.startswith(f"network/{model}/")}
     p = {key[len("param/"):]: float(v) for key, v in case.items() if key.startswith("param/")}
     if model == "iaf_cond_exp":
-        neuron = LIF(tau_m=p["C_m"] / p["g_L"], c_m=p["C_m"], e_l=p["E_L"], v_th=p["V_th"],
+        neuron = LeakyIntegrateAndFire(tau_m=p["C_m"] / p["g_L"], c_m=p["C_m"], e_l=p["E_L"], v_th=p["V_th"],
                      v_reset=p["V_reset"], t_ref=p["t_ref"], reversal={"ex": p["E_ex"], "in": p["E_in"]})
         receptors = {"ex": Receptor(Exponential(p["tau_syn_ex"]), "conductance"),
                      "in": Receptor(Exponential(p["tau_syn_in"]), "conductance")}
     else:
-        neuron = LIF(tau_m=p["tau_m"], c_m=p["C_m"], e_l=p["E_L"], v_th=p["V_th"], v_reset=p["V_reset"],
-                     t_ref=p["t_ref"])
+        neuron = LeakyIntegrateAndFire(tau_m=p["tau_m"], c_m=p["C_m"], e_l=p["E_L"], v_th=p["V_th"],
+                                       v_reset=p["V_reset"], t_ref=p["t_ref"])
         if model == "iaf_psc_delta":
             receptors = {"ex": Receptor(Delta()), "in": Receptor(Delta())}
         else:
@@ -109,7 +109,7 @@ def test_recurrent_network_fires_with_nest_spike_for_spike(model):
 def test_a_delay_of_d_steps_lands_at_the_end_of_step_m_plus_d():
     # One neuron driven to fire once; its spike reaches a second neuron's
     # exponential synapse D steps later and moves its membrane from the next step.
-    neuron = LIF(t_ref=1000.0)
+    neuron = LeakyIntegrateAndFire(t_ref=1000.0)
     pops = (Population("a", 1, neuron, {"ex": Receptor(Exponential(2.0))}),
             Population("b", 1, neuron, {"ex": Receptor(Exponential(2.0))}))
     for delay_steps in (0, 1, 7):
@@ -127,7 +127,7 @@ def test_a_delay_of_d_steps_lands_at_the_end_of_step_m_plus_d():
 
 
 def test_delta_synapses_refuse_zero_delays():
-    network = Network((Population("a", 2, LIF(), {"ex": Receptor(Delta())}),),
+    network = Network((Population("a", 2, LeakyIntegrateAndFire(), {"ex": Receptor(Delta())}),),
                       (Projection("a", "a", AllToAll(), weight=1.0, delay=0.0, receptor="ex"),), dt=DT)
     with pytest.raises(ValueError, match="at least 1 step"):
         network.init(jax.random.key(0))
@@ -146,7 +146,7 @@ def test_connectivity_rules_draw_what_they_promise():
 
 
 def test_the_same_key_builds_the_same_network():
-    network = Network((Population("a", 50, LIF(), {"ex": Receptor(Exponential(2.0))}),),
+    network = Network((Population("a", 50, LeakyIntegrateAndFire(), {"ex": Receptor(Exponential(2.0))}),),
                       (Projection("a", "a", FixedProbability(0.2),
                                   weight=lambda rng, n: rng.normal(size=n), receptor="ex"),), dt=DT)
     one, two = network.init(jax.random.key(3)), network.init(jax.random.key(3))
@@ -178,7 +178,7 @@ def test_brunel_regimes_match_nests_statistics(regime):
 
 
 def small_network():
-    network = Network((Population("a", 200, LIF(), {"ex": Receptor(Exponential(5.0))}),),
+    network = Network((Population("a", 200, LeakyIntegrateAndFire(), {"ex": Receptor(Exponential(5.0))}),),
                       (Projection("a", "a", FixedProbability(0.1), weight=20.0, delay=1.5, receptor="ex"),),
                       inputs=(PoissonInput("a", rate=1000.0, weight=60.0, receptor="ex", count=5),), dt=DT)
     return network, network.init(jax.random.key(0))
@@ -257,7 +257,7 @@ def test_poisson_counts_follow_the_poisson_distribution(mean):
 
 def test_dense_and_edge_projections_deliver_the_same_spikes():
     def network(format):
-        return Network((Population("a", 300, LIF(), {"ex": Receptor(Exponential(5.0)),
+        return Network((Population("a", 300, LeakyIntegrateAndFire(), {"ex": Receptor(Exponential(5.0)),
                                                       "in": Receptor(Exponential(10.0))}),),
                        (Projection("a", "a", FixedInDegree(30, multapses=True), weight=25.0, delay=1.5,
                                    receptor="ex", format=format),
@@ -308,12 +308,12 @@ def test_a_layer_stack_is_the_same_network_through_sparx_nn_and_graph():
     x = (rng.random((steps, sizes[0])) < 0.3).astype(np.float64)
     w1, w2 = rng.normal(0.6, 0.5, sizes[:2]), rng.normal(0.5, 0.6, sizes[1:])
     with jax.enable_x64(new_val=True):
-        layer = LayerLIF(tau=tau, reset="zero")
+        layer = LIF(tau=tau, reset="zero")
         h = layer.apply({}, jnp.asarray(x @ w1)[:, None])
         out = np.asarray(layer.apply({}, h @ w2)[:, 0])
         h = np.asarray(h[:, 0])
 
-        neuron = LIF(tau_m=tau, c_m=tau, e_l=0.0, v_th=1.0, v_reset=0.0, t_ref=0.0)
+        neuron = LeakyIntegrateAndFire(tau_m=tau, c_m=tau, e_l=0.0, v_th=1.0, v_reset=0.0, t_ref=0.0)
         receptors = {"ex": Receptor(Delta())}
         every = np.indices(sizes[:2]).reshape(2, -1)
         network = Network(
@@ -364,7 +364,8 @@ def shiu_network(format):
     t_ref = np.full(size, 2.1)  # Brian2's 2.2 ms (it counts one step less)
     t_ref[stimulated] = 0.0
     # g_L = C / tau_m = 1 nS, so a synaptic current in pA is Brian2's g in mV.
-    neuron = LIF(tau_m=20.0, c_m=20.0, e_l=-52.0, v_th=-45.0, v_reset=-52.0, t_ref=jnp.asarray(t_ref))
+    neuron = LeakyIntegrateAndFire(tau_m=20.0, c_m=20.0, e_l=-52.0, v_th=-45.0, v_reset=-52.0,
+                                   t_ref=jnp.asarray(t_ref))
     population = Population("n", size, neuron, {"syn": Receptor(Exponential(5.0)),
                                                 "drive": Receptor(Delta(after_threshold=True))},
                             reset_synapses=True, freeze_synapses=True)
@@ -407,12 +408,13 @@ def test_population_rate_is_the_raster_mean_in_hz():
 def test_a_conductance_receptor_without_a_reversal_potential_is_refused_when_built():
     receptors = {"ex": Receptor(Exponential(5.0), "conductance")}
     with pytest.raises(ValueError, match=r"population 'a': conductance receptor 'ex'.*'ampa', 'nmda'"):
-        Network((Population("a", 3, LIF(), receptors),))
-    Network((Population("a", 3, LIF(reversal={"ex": 0.0}), receptors),))  # named, so accepted
+        Network((Population("a", 3, LeakyIntegrateAndFire(), receptors),))
+    named = LeakyIntegrateAndFire(reversal={"ex": 0.0})
+    Network((Population("a", 3, named, receptors),))  # named, so accepted
 
 
 def test_a_projection_onto_a_missing_receptor_names_the_ones_there_are():
-    population = Population("a", 3, LIF(), {"ampa": Receptor(Exponential(5.0))})
+    population = Population("a", 3, LeakyIntegrateAndFire(), {"ampa": Receptor(Exponential(5.0))})
     with pytest.raises(ValueError, match=r"receptor 'ex', which population 'a' lacks; it has 'ampa'"):
         Network((population,), (Projection("a", "a", AllToAll(), receptor="ex"),))
     with pytest.raises(ValueError, match=r"receptor 'gaba_a', which population 'a' lacks"):
@@ -428,7 +430,7 @@ def test_a_dimensionless_population_refuses_a_kinetic_receptor_when_built(kind):
 
 
 def test_a_time_off_the_step_grid_is_refused():
-    network = Network((Population("a", 2, LIF(), {"ex": Receptor(Exponential(2.0))}),),
+    network = Network((Population("a", 2, LeakyIntegrateAndFire(), {"ex": Receptor(Exponential(2.0))}),),
                       (Projection("a", "a", AllToAll(), delay=0.15, receptor="ex"),), dt=0.1)
     with pytest.raises(ValueError, match=r"delay must be a whole number of steps of 0.1 ms; \[0.15\]"):
         network.init(jax.random.key(0))
@@ -446,7 +448,7 @@ def test_poisson_inputs_ask_for_their_key():
 
 
 def test_initial_state_is_drawn_per_field_and_receptor():
-    neuron = LIF(tau_m=20.0, e_l=-60.0)
+    neuron = LeakyIntegrateAndFire(tau_m=20.0, e_l=-60.0)
     receptors = {"ampa": Receptor(Exponential(5.0), "conductance")}
     initial = {"v": lambda rng, n: rng.uniform(-60.0, -50.0, n), "ampa": np.arange(4.0)}
     network = Network((Population("a", 4, neuron, receptors, initial=initial),))
@@ -484,7 +486,7 @@ def test_connections_read_each_storage_back_as_the_edges_it_was_given():
     receptors = {"ex": Receptor(Exponential(2.0)), "in": Receptor(Exponential(2.0))}
     for format in ("edges", "dense", "events"):
         per_edge = format == "edges"
-        network = Network((Population("a", 3, LIF(), receptors),), (
+        network = Network((Population("a", 3, LeakyIntegrateAndFire(), receptors),), (
             Projection("a", "a", FromEdges(pre, post), weight=weight, delay=delay if per_edge else 0.1,
                        receptor="ex", format=format),
             Projection("a", "a", FromEdges(pre, post), weight=-weight, receptor="in", trainable=True)),
@@ -499,7 +501,7 @@ def test_connections_read_each_storage_back_as_the_edges_it_was_given():
 
 
 def test_connections_read_plastic_weights_as_learned():
-    network = Network((Population("a", 40, LIF(), {"ex": Receptor(Exponential(5.0))}),),
+    network = Network((Population("a", 40, LeakyIntegrateAndFire(), {"ex": Receptor(Exponential(5.0))}),),
                       (Projection("a", "a", FixedProbability(0.2), weight=20.0, delay=1.0, receptor="ex",
                                   plasticity=PairSTDP(lambda_=0.05)),),
                       inputs=(PoissonInput("a", rate=1000.0, weight=60.0, receptor="ex", count=5),), dt=DT)

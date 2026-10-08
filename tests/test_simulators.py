@@ -17,7 +17,6 @@ import reference
 from sparx.dynamics import (
     IZHIKEVICH_2003,
     IZHIKEVICH_2004,
-    LIF,
     AdEx,
     Alpha,
     Arrivals,
@@ -26,6 +25,7 @@ from sparx.dynamics import (
     Exponential,
     HodgkinHuxley,
     IzhikevichState,
+    LeakyIntegrateAndFire,
     PointNeuron,
     Receptor,
     SynapticInput,
@@ -53,7 +53,7 @@ def nest_lif(model, **overrides):
     fields = {"tau_m": tau_m, "c_m": param(model, "C_m"), "e_l": param(model, "E_L"),
               "v_th": param(model, "V_th"), "v_reset": param(model, "V_reset"),
               "t_ref": param(model, "t_ref"), "reversal": REVERSAL}
-    return LIF(**{**fields, **overrides})
+    return LeakyIntegrateAndFire(**{**fields, **overrides})
 
 
 def nest_run(cell, model, sign=1.0):

@@ -35,7 +35,6 @@ from sparx.surrogate import ATan, Surrogate, spike
 __all__ = [
     "IZHIKEVICH_2003",
     "IZHIKEVICH_2004",
-    "LIF",
     "RECEPTORS",
     "AdEx",
     "AdExState",
@@ -45,7 +44,8 @@ __all__ = [
     "HodgkinHuxleyState",
     "Izhikevich",
     "IzhikevichState",
-    "LIFState",
+    "LeakyIntegrateAndFire",
+    "LeakyIntegrateAndFireState",
     "MgBlock",
     "izhikevich_2003",
     "izhikevich_2004",
@@ -75,8 +75,8 @@ class MgBlock:
         return 1 / (1 + self.mg / 3.57 * jnp.exp(-0.062 * v))
 
 
-def _synaptic(model: LIF | GradedPotential | AdEx | Izhikevich | HodgkinHuxley, inputs: SynapticInput,
-              v: jax.Array) -> tuple[jax.Array, jax.Array]:
+def _synaptic(model: LeakyIntegrateAndFire | GradedPotential | AdEx | Izhikevich | HodgkinHuxley,
+              inputs: SynapticInput, v: jax.Array) -> tuple[jax.Array, jax.Array]:
     """The total held conductance (nS) and its drive `sum g E` (pA) at voltage `v`, gates applied; the
     conductance includes gap junctions', whose drive is a current waveform (`SynapticInput.waveforms`)."""
     conductance = {name: g * model.gates[name](v) if name in model.gates else g
@@ -88,7 +88,8 @@ def _synaptic(model: LIF | GradedPotential | AdEx | Izhikevich | HodgkinHuxley, 
     return total, drive
 
 
-def _leaky(model: LIF | GradedPotential, v: jax.Array, inputs: SynapticInput, dt: float) -> jax.Array:
+def _leaky(model: LeakyIntegrateAndFire | GradedPotential, v: jax.Array, inputs: SynapticInput,
+           dt: float) -> jax.Array:
     """`v` after a step of the leaky membrane on `inputs`, its jump included: exact.
 
     With the conductances and the current held, the membrane relaxes toward
@@ -105,14 +106,14 @@ def _leaky(model: LIF | GradedPotential, v: jax.Array, inputs: SynapticInput, dt
         (response(term, tau, dt) for term in inputs.waveforms), jnp.zeros(())) / model.c_m + inputs.jump
 
 
-class LIFState(NamedTuple):
+class LeakyIntegrateAndFireState(NamedTuple):
     v: jax.Array
     refractory: jax.Array
     """Milliseconds of refractoriness left."""
 
 
 @struct.dataclass
-class LIF:
+class LeakyIntegrateAndFire:
     """Leaky integrate-and-fire with current and conductance input.
 
         C dv/dt = -g_L (v - E_L) + sum_k g_k (E_k - v) + I,    g_L = C / tau_m
@@ -147,11 +148,12 @@ class LIF:
     surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
     graded = False
 
-    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> LIFState:
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> LeakyIntegrateAndFireState:
         dtype = membrane_dtype(dtype)
-        return LIFState(jnp.full(shape, self.e_l, dtype), jnp.zeros(shape, dtype))
+        return LeakyIntegrateAndFireState(jnp.full(shape, self.e_l, dtype), jnp.zeros(shape, dtype))
 
-    def step(self, state: LIFState, inputs: SynapticInput, dt: float) -> tuple[LIFState, Output]:
+    def step(self, state: LeakyIntegrateAndFireState, inputs: SynapticInput,
+             dt: float) -> tuple[LeakyIntegrateAndFireState, Output]:
         integrated = _leaky(self, state.v, inputs, dt)
         held = state.refractory > dt / 2
         v = jnp.where(held, self.v_reset, integrated)
@@ -159,12 +161,14 @@ class LIF:
         offset = jnp.where(fired > 0, crossing(state.v, v, self.v_th), 1.0)
         refractory = jnp.where(fired > 0, self.t_ref, jnp.maximum(state.refractory - dt, 0))
         dtype = state.v.dtype
-        return LIFState(reset.astype(dtype), refractory.astype(dtype)), Output(fired, offset)
+        state = LeakyIntegrateAndFireState(reset.astype(dtype), refractory.astype(dtype))
+        return state, Output(fired, offset)
 
-    def is_refractory(self, state: LIFState, dt: float) -> jax.Array:
+    def is_refractory(self, state: LeakyIntegrateAndFireState, dt: float) -> jax.Array:
         return state.refractory > dt / 2
 
-    def after_threshold(self, state: LIFState, jump: jax.Array, fired: jax.Array) -> LIFState:
+    def after_threshold(self, state: LeakyIntegrateAndFireState, jump: jax.Array,
+                        fired: jax.Array) -> LeakyIntegrateAndFireState:
         return state._replace(v=jump_after_threshold(state.v, jump, fired))
 
 
@@ -179,9 +183,9 @@ class GradedPotential:
         C dv/dt = -g_L (v - E_L) + sum_k g_k (E_k - v) + I,    g_L = C / tau_m
         release(v) = 1 / (1 + exp((v_half - v) / slope))
 
-    The membrane is `LIF`'s without a threshold, solved exactly over each
+    The membrane is `LeakyIntegrateAndFire`'s without a threshold, solved exactly over each
     step for held inputs, with conductances, gates, synaptic current
-    waveforms and gap junctions as `LIF` reads them. The output is the
+    waveforms and gap junctions as `LeakyIntegrateAndFire` reads them. The output is the
     release at the end of the step, as a fraction of the maximal rate, in
     [0, 1]. A `Graded` synapse holds it over the next step and filters it
     with its own kinetics, so the weight of a projection from a graded
@@ -195,7 +199,7 @@ class GradedPotential:
     visual system is non-spiking in this sense, and Lappalainen et al.'s
     connectome-constrained model of it (Nature 2024) also uses passive
     point neurons that transmit a function of their voltage, there a
-    rectified linear one. The membrane's defaults are `LIF`'s.
+    rectified linear one. The membrane's defaults are `LeakyIntegrateAndFire`'s.
     """
 
     tau_m: jax.Array | float = 20.0

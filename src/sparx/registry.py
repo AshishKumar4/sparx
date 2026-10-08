@@ -37,11 +37,11 @@ if TYPE_CHECKING:
 __all__ = ["networks", "spike_encoders"]
 
 spike_encoders: Aliases[type[SpikeEncoder], SpikeEncoder] = Aliases("spike_encoder", {
-    "delta": "sparx.encode:Delta",
-    "direct": "sparx.encode:Direct",
-    "events": "sparx.encode:Events",
-    "latency": "sparx.encode:Latency",
-    "rate": "sparx.encode:Rate",
+    "delta": "sparx.encode:DeltaEncoder",
+    "direct": "sparx.encode:DirectEncoder",
+    "events": "sparx.encode:EventsEncoder",
+    "latency": "sparx.encode:LatencyEncoder",
+    "rate": "sparx.encode:RateEncoder",
 }, base="sparx.encode:SpikeEncoder")
 networks: Aliases[Callable[..., Network], Network] = Aliases("network", {
     "brunel": "sparx.graph.models:brunel",

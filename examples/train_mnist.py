@@ -66,7 +66,8 @@ def main(config: Config) -> None:
     assert per_epoch is not None  # records held in memory have a count
     net = SpikingMLP(hidden=(config.hidden, config.hidden), classes=10,
                      neuron=sparx.nn.LIF(tau=2.0, detach_reset=True), readout_tau=2.0)
-    objective = SpikingClassifierObjective(net, Field("image", (28, 28)), sparx.encode.Rate(config.steps))
+    encoder = sparx.encode.RateEncoder(config.steps)
+    objective = SpikingClassifierObjective(net, Field("image", (28, 28)), encoder)
     trainer = Trainer(objective, optax.adam(config.learning_rate), key=jax.random.key(0),
                       checkpoints=Checkpoints(str(config.out)))
     state = trainer.fit(data, steps=config.epochs * per_epoch, log_every=min(100, per_epoch),

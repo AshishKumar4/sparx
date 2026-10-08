@@ -28,7 +28,7 @@ from dew.inputs import Field
 from dew.registry import import_path
 
 from sparx.datasets import SHD, write_synthetic_shd
-from sparx.encode import Events, SpikeEncoder
+from sparx.encode import EventsEncoder, SpikeEncoder
 from sparx.metrics import Accuracy
 from sparx.models import SpikingMLP
 from sparx.nn.neurons import ALIF
@@ -60,7 +60,7 @@ class SNNRunConfig(RunConfig):
     data: SHD = dataclasses.field(default_factory=SHD)
     optim: OptimConfig = dataclasses.field(default_factory=lambda: OptimConfig(learning_rate=2e-3,
                                                                                 clip_grads=1.0))
-    encoder: EncoderSpec = dataclasses.field(default_factory=Events)
+    encoder: EncoderSpec = dataclasses.field(default_factory=EventsEncoder)
     """How a batch field becomes spikes; `encoder:rate --encoder.steps 8` for static data."""
     sample: str = "spikes"
     """The batch field the encoder reads."""

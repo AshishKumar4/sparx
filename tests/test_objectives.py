@@ -15,7 +15,7 @@ from dew.training.optim import Exponential, Linear, OneCycle, ParamGroup
 
 import sparx
 from sparx.datasets import holdout
-from sparx.encode import Direct, Events, Rate
+from sparx.encode import DirectEncoder, EventsEncoder, RateEncoder
 from sparx.learn import (
     PredictiveCoding,
     RNeuralNet,
@@ -79,18 +79,18 @@ def fit(objective, tmp_path, steps=40, optimizer=None):
 
 
 def test_a_rate_coded_spiking_classifier_learns_through_dews_trainer(tmp_path):
-    objective = SpikingClassifierObjective(Net(), Field("image", (8, 8, 1)), Rate(steps=8))
+    objective = SpikingClassifierObjective(Net(), Field("image", (8, 8, 1)), RateEncoder(steps=8))
     trainer, state = fit(objective, tmp_path)
     assert trainer._display.evaluations["val"][-1].scores["val/accuracy"] >= 0.95
     # The validation score is the model's own accuracy on the validation set.
     val = halves(64, 1)
-    x = Rate(8)(jax.random.key(5), jnp.asarray(val["image"]))
+    x = RateEncoder(8)(jax.random.key(5), jnp.asarray(val["image"]))
     predicted = jnp.argmax(jnp.mean(Net().apply(state.variables, x), axis=0), -1)
     assert float(jnp.mean(predicted == val["label"])) >= 0.95
 
 
 def test_batch_norm_dropout_ema_and_per_step_readout_train_together(tmp_path):
-    objective = SpikingClassifierObjective(NormNet(), Field("image", (8, 8, 1)), Direct(steps=4),
+    objective = SpikingClassifierObjective(NormNet(), Field("image", (8, 8, 1)), DirectEncoder(steps=4),
                                            readout="per_step", ema_decay=0.9)
     trainer, state = fit(objective, tmp_path)
     assert set(state.variables) == {"params", "batch_stats"}
@@ -101,13 +101,13 @@ def test_batch_norm_dropout_ema_and_per_step_readout_train_together(tmp_path):
 
 
 def test_the_loss_is_the_mean_cross_entropy_of_the_readout_plus_the_rate_penalty():
-    objective = SpikingClassifierObjective(Net(), Field("image", (8, 8, 1)), Direct(steps=4), readout="max",
-                                           rates=RateBand(lower=0.3, upper=0.4, weight=2.0))
+    objective = SpikingClassifierObjective(Net(), Field("image", (8, 8, 1)), DirectEncoder(steps=4),
+                                           readout="max", rates=RateBand(lower=0.3, upper=0.4, weight=2.0))
     batch = {key: jnp.asarray(value) for key, value in halves(16, 2).items()}
     variables = objective.init(jax.random.key(0))
     stats, aux = objective.loss(variables, batch, Step(jnp.asarray(0), jax.random.key(1), None))
 
-    x = Direct(4)(jax.random.key(1), batch["image"])
+    x = DirectEncoder(4)(jax.random.key(1), batch["image"])
     outputs, sown = Net().apply(variables, x, mutable=["spike_rates"])
     ce = optax.softmax_cross_entropy_with_integer_labels(jnp.max(outputs, 0), batch["label"])
     (rate,) = sown["spike_rates"]["LIF_0"]["rate"]
@@ -122,14 +122,14 @@ def test_the_loss_is_the_mean_cross_entropy_of_the_readout_plus_the_rate_penalty
 
 def test_event_data_moves_its_time_axis_to_the_front():
     events = jnp.arange(2 * 5 * 3).reshape(2, 5, 3)
-    out = Events(time_axis=0)(jax.random.key(0), events)
+    out = EventsEncoder(time_axis=0)(jax.random.key(0), events)
     assert out.shape == (5, 2, 3) and out.dtype == jnp.float32
     np.testing.assert_array_equal(out[:, 1], events[1])
 
 
 def test_an_unknown_readout_is_refused():
     with pytest.raises(ValueError, match="readout"):
-        SpikingClassifierObjective(Net(), Field("image", (8, 8, 1)), Direct(4), readout="last")  # type: ignore[arg-type]
+        SpikingClassifierObjective(Net(), Field("image", (8, 8, 1)), DirectEncoder(4), readout="last")  # type: ignore[arg-type]
 
 
 class Scaled(nn.Module):
@@ -142,13 +142,13 @@ class Scaled(nn.Module):
 
 def test_scheduled_call_arguments_reach_the_model_in_loss_and_evaluation():
     # A linear ramp from 3 to 1 over 4 steps is 2 at step 2.
-    objective = SpikingClassifierObjective(Scaled(), Field("image", (8, 8, 1)), Direct(steps=4),
+    objective = SpikingClassifierObjective(Scaled(), Field("image", (8, 8, 1)), DirectEncoder(steps=4),
                                            schedules={"scale": Linear(peak=3.0, end=1.0)}, schedule_steps=4)
     batch = {key: jnp.asarray(value) for key, value in halves(16, 3).items()}
     variables = objective.init(jax.random.key(0))
     step = Step(jnp.asarray(2), jax.random.key(1), None)
     stats, _ = objective.loss(variables, batch, step)
-    outputs = Scaled().apply(variables, Direct(4)(jax.random.key(1), batch["image"]), 2.0)
+    outputs = Scaled().apply(variables, DirectEncoder(4)(jax.random.key(1), batch["image"]), 2.0)
     ce = optax.softmax_cross_entropy_with_integer_labels(jnp.mean(outputs, 0), batch["label"])
     np.testing.assert_allclose(stats.mean()[0], ce.mean(), rtol=1e-5)  # observed 0 relative
     scores = objective.evaluate(variables, batch, step)
@@ -157,18 +157,18 @@ def test_scheduled_call_arguments_reach_the_model_in_loss_and_evaluation():
 
 def test_schedules_need_their_horizon():
     with pytest.raises(ValueError, match="schedule_steps"):
-        SpikingClassifierObjective(Scaled(), Field("image", (8, 8, 1)), Direct(4),
+        SpikingClassifierObjective(Scaled(), Field("image", (8, 8, 1)), DirectEncoder(4),
                                    schedules={"scale": Linear(peak=1.0)})
 
 
 def test_deployed_arguments_replace_the_schedules_in_evaluation_and_the_trained_classifier():
-    objective = SpikingClassifierObjective(Scaled(), Field("image", (8, 8, 1)), Direct(steps=4),
+    objective = SpikingClassifierObjective(Scaled(), Field("image", (8, 8, 1)), DirectEncoder(steps=4),
                                            schedules={"scale": Linear(peak=3.0, end=1.0)}, schedule_steps=4,
                                            deployed={"scale": 5.0})
     batch = {key: jnp.asarray(value) for key, value in halves(16, 3).items()}
     variables = objective.init(jax.random.key(0))
     step = Step(jnp.asarray(2), jax.random.key(1), None)
-    x = Direct(4)(jax.random.key(1), batch["image"])
+    x = DirectEncoder(4)(jax.random.key(1), batch["image"])
 
     def ce(scale):
         outputs = Scaled().apply(variables, x, scale)
@@ -184,7 +184,7 @@ def test_deployed_arguments_replace_the_schedules_in_evaluation_and_the_trained_
 
 def test_a_schedule_advances_once_every_its_every_steps():
     # Over 8 steps advancing every 4, the ramp from 3 to 1 runs over 2 of its own steps: 3, then 2.
-    objective = SpikingClassifierObjective(Scaled(), Field("image", (8, 8, 1)), Direct(steps=4),
+    objective = SpikingClassifierObjective(Scaled(), Field("image", (8, 8, 1)), DirectEncoder(steps=4),
                                            schedules={"scale": Linear(peak=3.0, end=1.0, every=4)},
                                            schedule_steps=8)
     values = [float(objective._scheduled(jnp.asarray(step))["scale"]) for step in range(8)]
@@ -192,12 +192,12 @@ def test_a_schedule_advances_once_every_its_every_steps():
 
 
 def test_the_softmax_sum_readout_is_scored_and_predicted_by_the_summed_probabilities():
-    objective = SpikingClassifierObjective(Net(), Field("image", (8, 8, 1)), Direct(steps=4),
+    objective = SpikingClassifierObjective(Net(), Field("image", (8, 8, 1)), DirectEncoder(steps=4),
                                            readout="softmax_sum")
     batch = {key: jnp.asarray(value) for key, value in halves(16, 4).items()}
     variables = objective.init(jax.random.key(0))
     step = Step(jnp.asarray(0), jax.random.key(1), None)
-    outputs = Net().apply(variables, Direct(4)(jax.random.key(1), batch["image"]))
+    outputs = Net().apply(variables, DirectEncoder(4)(jax.random.key(1), batch["image"]))
     probabilities = jnp.sum(jax.nn.softmax(outputs, -1), 0)
     expected = optax.softmax_cross_entropy_with_integer_labels(probabilities, batch["label"])
     stats, _ = objective.loss(variables, batch, step)
@@ -219,7 +219,7 @@ def delay_groups(delays):
 
 def test_dews_parameter_groups_find_the_delays_and_keep_them_within_bounds(tmp_path):
     # A rate of 1 per step pushes delays past their range at once; the bounds clamp them.
-    objective = SpikingClassifierObjective(delayed_net(), Field("image", (8, 8, 1)), Direct(steps=4),
+    objective = SpikingClassifierObjective(delayed_net(), Field("image", (8, 8, 1)), DirectEncoder(steps=4),
                                            readout="max", schedules={"sigma": Linear(peak=1.0, end=1.0)},
                                            schedule_steps=10)
     _, state = fit(objective, tmp_path, steps=10, optimizer=delay_groups(Linear(peak=1.0, end=1.0)))
@@ -231,7 +231,7 @@ def test_dews_parameter_groups_find_the_delays_and_keep_them_within_bounds(tmp_p
 
 def test_every_record_of_a_split_is_scored_once_whatever_the_batch(tmp_path):
     # 70 records in batches of 32: dew pads the last batch with repeats, which count for nothing.
-    objective = SpikingClassifierObjective(Net(), Field("image", (8, 8, 1)), Direct(steps=4))
+    objective = SpikingClassifierObjective(Net(), Field("image", (8, 8, 1)), DirectEncoder(steps=4))
     val, test = halves(70, 1), halves(45, 5)
 
     def split(records):
@@ -258,8 +258,8 @@ def padded_batch(batch, repeats):
 
 def test_a_repeated_row_counts_for_nothing_in_the_loss():
     # A narrow band, so the rate penalty is part of the loss.
-    objective = SpikingClassifierObjective(Net(), Field("image", (8, 8, 1)), Direct(steps=4), readout="max",
-                                           rates=RateBand(lower=0.3, upper=0.4, weight=2.0))
+    objective = SpikingClassifierObjective(Net(), Field("image", (8, 8, 1)), DirectEncoder(steps=4),
+                                           readout="max", rates=RateBand(lower=0.3, upper=0.4, weight=2.0))
     real = {key: jnp.asarray(value) for key, value in halves(12, 2).items()}
     variables = objective.init(jax.random.key(0))
     step = Step(jnp.asarray(0), jax.random.key(1), None)
@@ -303,13 +303,14 @@ def test_a_saved_run_loads_back_through_dew_pipeline_in_a_fresh_process(tmp_path
         net = SpikingMLP(hidden=(16,), classes=2, neuron=neuron, delays=(3, 2), extend=True, batch_norm=True,
                          use_bias=False, weight_init="kaiming_uniform", dropout=0.2, dropout_mask="sequence")
         objective = SpikingClassifierObjective(
-            net, Field("image", (8, 8, 1)), Rate(steps=6), readout="softmax_sum",
+            net, Field("image", (8, 8, 1)), RateEncoder(steps=6), readout="softmax_sum",
             schedules={"sigma": Exponential(init=1.5, end=0.23, offset=0.27, every=2)}, schedule_steps=8,
             deployed={"sigma": 0})
         optimizer = delay_groups(OneCycle(peak=0.1, init=0.01, end=0.0))
     else:
         net = SpikingMLP(hidden=(16,), classes=2, neuron=neuron)
-        objective = SpikingClassifierObjective(net, Field("image", (8, 8, 1)), Rate(steps=6), readout="max")
+        objective = SpikingClassifierObjective(net, Field("image", (8, 8, 1)), RateEncoder(steps=6),
+                                               readout="max")
     run = tmp_path / "run"
     data = Dataset.from_records(halves(64, 0), batch=32, loading=LOADING)
     trainer = Trainer(objective, optimizer, key=jax.random.key(0), checkpoints=Checkpoints(str(run)))

@@ -18,11 +18,11 @@ objectives:
     import optax
     from dew import Field, Trainer
     from dew.data import Dataset
-    from sparx.encode import Rate
+    from sparx.encode import RateEncoder
     from sparx.metrics import Accuracy
     from sparx.objectives import SpikingClassifierObjective
 
-    objective = SpikingClassifierObjective(net, Field("image", (28, 28, 1)), Rate(steps=16))
+    objective = SpikingClassifierObjective(net, Field("image", (28, 28, 1)), RateEncoder(steps=16))
     trainer = Trainer(objective, optax.adam(1e-3), key=0)
     state = trainer.fit(Dataset.from_records({"image": x, "label": y}, batch=128),
                         steps=2000, metrics=[Accuracy()])

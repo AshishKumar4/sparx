@@ -486,7 +486,7 @@ def test_event_gradients_are_the_exact_derivatives_of_spike_times():
 def test_event_simulation_is_the_lif_integrated_on_a_fine_grid():
     # The same neurons in sparx.dynamics (exact integration, exponential
     # current synapses) at 1 us fire at the same times, to the grid.
-    from sparx.dynamics import LIF, Arrivals, Exponential, PointNeuron, Receptor, run
+    from sparx.dynamics import Arrivals, Exponential, LeakyIntegrateAndFire, PointNeuron, Receptor, run
 
     neuron = EventLIF()
     dt, horizon = 0.001, 60.0
@@ -498,7 +498,8 @@ def test_event_simulation_is_the_lif_integrated_on_a_fine_grid():
         for source, when in np.argwhere(np.isfinite(np.asarray(inputs[0]))):
             step = round(float(inputs[0, source, when]) / dt) - 1  # lands at the end of this step
             arrivals[step] += np.asarray(weights[source])
-        lif = LIF(tau_m=neuron.tau_m, c_m=neuron.tau_m, e_l=0.0, v_th=neuron.v_th, v_reset=0.0, t_ref=0.0)
+        lif = LeakyIntegrateAndFire(tau_m=neuron.tau_m, c_m=neuron.tau_m, e_l=0.0, v_th=neuron.v_th,
+                                    v_reset=0.0, t_ref=0.0)
         cell = PointNeuron(lif, {"syn": Receptor(Exponential(neuron.tau_syn))})
         fired, _ = run(cell, Arrivals(0.0, {"syn": jnp.asarray(arrivals)}), dt=dt)
     for n in range(weights.shape[1]):
