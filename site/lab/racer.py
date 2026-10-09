@@ -351,6 +351,7 @@ def evaluation(
             "off_road": float(o),
             "crashed": bool(crashed[-1, i]),
             "length": float(length[i]),
+            "covered": float(covered[-1, i]),
         }
         for i, (f, t, o) in enumerate(zip(finished, lap_time, off_road, strict=True))
     ]
