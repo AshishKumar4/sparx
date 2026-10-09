@@ -8,7 +8,7 @@ import Slider from './Slider.astro';
 	<Figure engine="exact vs Euler" height="15rem">
 		<canvas role="img" aria-label="A membrane potential rising toward a target while a current is on and decaying after, drawn exactly, with the values of the exact step and of Euler's step at the chosen step size"></canvas>
 		<Fragment slot="controls">
-			<Slider name="dt" label="Step dt" min={0.5} max={25} step={0.5} value={4} unit="ms" digits={1} />
+			<Slider name="dt" label="Step dt" min={0.5} max={25} step={0.5} value={5} unit="ms" digits={1} />
 			<Slider name="tau" label="Time constant tau" min={2} max={40} step={1} value={10} unit="ms" digits={0} />
 		</Fragment>
 		<p slot="after" class="readout" data-status aria-live="polite"></p>

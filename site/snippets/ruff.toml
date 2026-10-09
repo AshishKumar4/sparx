@@ -1,3 +1,7 @@
 # The pages show these files beside their prose, and phones show about 72 columns of code.
 extend = "../../pyproject.toml"
 line-length = 72
+
+[lint.per-file-ignores]
+# jax.config.update("jax_enable_x64", True) is JAX's own idiom.
+"*.py" = ["FBT003"]

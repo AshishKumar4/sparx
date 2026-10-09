@@ -48,7 +48,7 @@ export function discretize(root: HTMLElement, read: () => { m: Membrane; dt: num
 		const top = 14;
 		const bottom = height - 26;
 		const lo = -0.6;
-		const hi = 1.6;
+		const hi = 1.8;
 		const x = (t: number) => left + (t / m.span) * (right - left);
 		const y = (v: number) => bottom - ((Math.min(Math.max(v, lo), hi) - lo) / (hi - lo)) * (bottom - top);
 		ctx.font = `11px ${getComputedStyle(canvas).getPropertyValue('--sx-mono')}`;
@@ -63,9 +63,23 @@ export function discretize(root: HTMLElement, read: () => { m: Membrane; dt: num
 		ctx.textAlign = 'right';
 		for (const v of [0, 1]) ctx.fillText(String(v), left - 6, y(v) + 4);
 		ctx.textAlign = 'center';
-		for (let t = 0; t <= m.span; t += 20) ctx.fillText(`${t}`, x(t), height - 8);
+		for (let t = 0; t <= m.span; t += 20) ctx.fillText(t === m.span ? `${t} ms` : `${t}`, Math.min(x(t), right - 18), height - 8);
 		ctx.textAlign = 'left';
-		ctx.fillText('ms', right - 16, height - 8);
+		const legend: [string, string, string][] = [['exact', colors.ink2, 'line'], ['exact steps', colors.membrane, 'dot'], ['Euler steps', colors.spike, 'square']];
+		let lx = left + 8;
+		for (const [label, color, mark] of legend) {
+			ctx.fillStyle = color;
+			if (mark === 'square') ctx.fillRect(lx, top + 3, 7, 7);
+			else if (mark === 'line') ctx.fillRect(lx - 2, top + 5.5, 11, 2);
+			else {
+				ctx.beginPath();
+				ctx.arc(lx + 3.5, top + 6.5, 3.5, 0, 2 * Math.PI);
+				ctx.fill();
+			}
+			ctx.fillStyle = colors.ink2;
+			ctx.fillText(label, lx + 12, top + 10);
+			lx += ctx.measureText(label).width + 30;
+		}
 		ctx.strokeStyle = colors.ink2;
 		ctx.lineWidth = 1.5;
 		ctx.beginPath();

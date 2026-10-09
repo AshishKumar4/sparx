@@ -105,7 +105,7 @@ The count that decides the energy question is spikes per synapse per inference, 
 
 <CodeBlock code={sparsity} colab={colab('why-spikes')} source={source('src/sparx/rates.py')} />
 
-The input layer comes out at 1.0 spikes per synapse: an image with a mean intensity of 0.125, rate-coded over 8 steps, sends one spike per pixel on average. That is already near the break-even. Chapter 4 shows codes that use fewer spikes.
+It prints about 0.99 spikes per synapse into the hidden layer and 0.13 out of it. An image with a mean intensity of 0.125, rate-coded over 8 steps, sends one spike per pixel on average, which is already near the break-even. The untrained hidden layer is sparser. Chapter 4 shows codes that use fewer spikes at the input.
 
 ## Try this
 

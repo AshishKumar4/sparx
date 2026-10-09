@@ -17,7 +17,10 @@ keep = decay(tau=10.0)              # an exponential filter of 10 steps
 
 
 def smooth(spikes):
-    return jax.lax.scan(lambda f, s: (keep * f + s,) * 2, 0.0, spikes)[1]
+    def step(f, s):
+        f = keep * f + s
+        return f, f
+    return jax.lax.scan(step, 0.0, spikes)[1]
 
 
 def loss(w):

@@ -1,0 +1,110 @@
+---
+layout: ../../layouts/Chapter.astro
+title: Membranes and time constants
+description: Chapter 1's neuron forgot its input at a rate set by a number called the time constant. This chapter derives that rate from the cell membrane itself, solves the equation exactly, and shows what happens when a computer approximates it in steps.
+---
+
+import CodeBlock from '../../components/CodeBlock.astro';
+import Discretize from '../../components/live/Discretize.astro';
+import { colab, source } from '../../data/site.mjs';
+import membrane from '../../../snippets/membrane.py?raw';
+
+## A membrane is a capacitor with a leak
+
+A neuron's membrane is a thin layer of fat that separates two salty solutions. Fat does not conduct, so the membrane holds charge on its two faces the way a capacitor does: push current in and the voltage across it rises. Scattered through the membrane are ion channels, small pores that let charge trickle back out. They act as a resistor in parallel with the capacitor.
+
+So the simplest electrical model of a patch of membrane is a capacitor $C$ beside a resistor $R$, driven by a current $I(t)$. The current splits two ways. Some charges the capacitor, $C\,\mathrm{d}v/\mathrm{d}t$, and some leaks through the resistor, $(v - E_L)/R$, where $E_L$ is the voltage the membrane rests at when nothing drives it:
+
+$$
+I(t) = \frac{v(t) - E_L}{R} + C\,\frac{\mathrm{d}v}{\mathrm{d}t}
+$$
+
+Multiply by $R$ and call $\tau = RC$ the membrane time constant:
+
+$$
+\tau\,\frac{\mathrm{d}v}{\mathrm{d}t} = -\big(v(t) - E_L\big) + R\,I(t)
+$$
+
+Read it as a rule for how the voltage moves. The term $-(v - E_L)$ pulls $v$ back toward rest, harder the further away it is. The term $R\,I$ pushes it toward $E_L + R\,I$. And $\tau$ sets how fast all of it happens. For a typical neuron $\tau$ is around 10 ms, long next to a 1 ms spike.
+
+## The exact solution
+
+Switch on a constant current $I_0$ at time 0, with the membrane at rest. The voltage climbs toward $E_L + R I_0$ and slows as it approaches:
+
+$$
+v(t) = E_L + R\,I_0\left(1 - e^{-t/\tau}\right)
+$$
+
+After one time constant it has covered $1 - e^{-1} \approx 63\%$ of the way; after three, 95%. Switch the current off and it falls back the same way, losing 63% of what is left every $\tau$.
+
+That is all the leaky membrane does, and it is why the neuron in chapter 1 forgot: whatever charge an input left decays as $e^{-t/\tau}$.
+
+## Taking steps
+
+A computer advances time in steps of some $\Delta t$. The question is what update rule gets from $v$ at one step to $v$ at the next.
+
+If the current is constant over the step, the exact solution answers it. Starting from any $v$, after $\Delta t$:
+
+$$
+v \leftarrow E_L + (v - E_L)\,e^{-\Delta t/\tau} + R\,I\left(1 - e^{-\Delta t/\tau}\right)
+$$
+
+This is exact for any step size, small or large, as long as the current really is constant within each step. sparx's physical neurons step this way, as NEST's do.
+
+The more obvious rule is Euler's: take the slope at the start of the step and follow it in a straight line.
+
+$$
+v \leftarrow v + \frac{\Delta t}{\tau}\big(-(v - E_L) + R\,I\big)
+$$
+
+Compare the two by what they keep of the distance from the target each step. The exact rule keeps $e^{-\Delta t/\tau}$; Euler keeps $1 - \Delta t/\tau$. For small steps they agree, since $e^{-x} \approx 1 - x$. For large ones they don't. At $\Delta t = \tau$, Euler keeps nothing and lands on the target in one step, where the true membrane has covered only 63% of the way. Past $\Delta t = \tau$, Euler's factor is negative and the voltage overshoots, flipping from one side of the target to the other. Past $2\tau$ its size exceeds 1, and every step throws the voltage further away than the last.
+
+<Discretize />
+
+The grey curve is the exact solution, the blue dots the exact update at each step, and the orange squares Euler's. The shaded band is when the current is on. Push the step up and watch Euler fall behind, overshoot, and finally blow up.
+
+## The form spiking networks use
+
+Machine learning networks drop the units. Measure time in steps, so $\Delta t = 1$, put rest at 0, and fold $R\,I(1 - e^{-1/\tau})$ into a single input $x$. The exact update becomes
+
+$$
+v \leftarrow \beta\,v + x, \qquad \beta = e^{-1/\tau}
+$$
+
+which is chapter 1's membrane. The factor $1 - \beta$ that scaled the input is gone because the weights that produce $x$ learn whatever scale they need. In sparx, `decay(tau)` returns $\beta$ for a time constant in steps, and `decay(tau, dt)` gives $e^{-\Delta t/\tau}$ for a time constant and step in the same unit.
+
+## The sparx way
+
+`LeakyIntegrateAndFire` takes its parameters in ms, pF and mV, and its input current in pA. With a 20 ms time constant and 200 pF, its leak conductance is 10 nS, so 150 pA should lift the membrane $150\text{ pA} / 10\text{ nS} = 15$ mV above rest. Run the same 120 ms at steps of 0.1 ms and of 5 ms, and compare the two at the instants they share:
+
+<CodeBlock code={membrane} colab={colab('membranes')} source={source('src/sparx/dynamics/neurons.py')} />
+
+The two runs agree to within about $10^{-13}$ mV, rounding error in float64, because the current switches on and off exactly on a 5 ms boundary. Fifty steps of 0.1 ms land where one step of 5 ms does. The value at 70 ms is the exact solution's, $-60 + 15(1 - e^{-3}) \approx -45.75$ mV.
+
+## Try this
+
+1. Set the step equal to the time constant, 10 ms. How far off is Euler's first value after the current turns on?
+2. Find the step size at which Euler's values start to grow instead of settle. Why that value?
+3. Set the step to 4 ms. The exact update now shows an error too, but only around two moments. Which ones, and why?
+4. With $\tau = 20$ ms, how small must the step be for Euler's factor to be within 1% of the exact one?
+
+<details>
+<summary>Answers</summary>
+
+1. Euler jumps straight to the target, 1.2, in one step. The exact value after 10 ms is $1.2(1 - e^{-1}) \approx 0.76$, so Euler is off by about 0.44, more than a third of the whole rise.
+2. At $\Delta t = 2\tau$, 20 ms with $\tau = 10$. Euler's factor $1 - \Delta t/\tau$ then reaches $-1$, so each step flips the distance from the target without shrinking it. Beyond that, the size of the factor exceeds 1 and the error grows.
+3. The current switches on at 10 ms and off at 70 ms, and with a 4 ms step neither falls on a step boundary. The stepped model reads the current at the start of each step, so it switches on at 12 ms and off at 72 ms. The exact update is exact for the input it is given; the input itself moved. A real simulation has the same issue with spikes that arrive between steps.
+4. With $x = \Delta t/\tau$, the ratio of Euler's factor to the exact one is $(1 - x)\,e^{x}$, which falls to 0.99 at $x \approx 0.135$: a step below about 2.7 ms.
+
+</details>
+
+## Summary
+
+A membrane is a capacitor with a leak, and its voltage relaxes toward $E_L + R\,I$ with time constant $\tau = RC$. With the current held constant over each step, that relaxation can be stepped exactly at any step size; Euler's straight-line step drifts, overshoots past $\Delta t = \tau$, and diverges past $2\tau$. Dropping the units turns the exact step into the $v \leftarrow \beta v + x$ of every spiking network. The next chapter adds the threshold back and asks how fast a neuron fires.
+
+## References
+
+<ul class="references">
+<li>W. Gerstner, W. M. Kistler, R. Naud and L. Paninski, <a href="https://neuronaldynamics.epfl.ch/online/Ch1.S3.html"><em>Neuronal Dynamics</em>, section 1.3</a>, Cambridge University Press, 2014, <a href="https://doi.org/10.1017/CBO9781107447615">doi:10.1017/CBO9781107447615</a>. Equations 1.3 to 1.7 and the typical time constant.</li>
+<li>S. Rotter and M. Diesmann, "Exact digital simulation of time-invariant linear systems with applications to neuronal modeling", <em>Biological Cybernetics</em> 81, 1999, <a href="https://doi.org/10.1007/s004220050570">doi:10.1007/s004220050570</a>. The exact update NEST and sparx use, extended to synaptic currents.</li>
+</ul>
