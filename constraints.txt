@@ -4,9 +4,9 @@
 #
 # dew at the commit of its main branch sparx is tested against; the published
 # sparxml takes any dewml 0.1 from PyPI (pyproject.toml).
-dewml @ git+https://github.com/AshishKumar4/dew@7ca258a09bc9d17d5e93de05743742b5158de164
+dewml @ git+https://github.com/AshishKumar4/dew@9235af7f3e8e80169dac359b2c60a295a8c92845
 #
-# dew's constraints.txt at the commit sparx pins (7ca258a0) names jax 0.11.2
+# dew's constraints.txt at the commit sparx pins (9235af7f, dewml 0.1.0) names jax 0.11.2
 # with the multi-process cache-key fix (AshishKumar4/jax branch
 # v0.11.2-cache-key-pool-fingerprints, reported as jax-ml/jax#40940), which no
 # release has yet. Sparx installs the same build, so its tests run on the jax
