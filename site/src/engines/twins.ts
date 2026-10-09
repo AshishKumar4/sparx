@@ -29,7 +29,8 @@ export class Twins {
 		const ea = this.a.draw();
 		const eb = this.b.draw();
 		if (this.kick >= 0) {
-			eb[this.kick] += this.b.network.spec.v_th - this.b.network.spec.v_reset + 10;
+			// 1 V crosses threshold from any membrane potential; the reset discards the excess.
+			eb[this.kick] += 1000;
 			this.kick = -1;
 		}
 		this.a.network.step(ea);

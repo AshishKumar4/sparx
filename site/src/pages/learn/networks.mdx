@@ -28,7 +28,7 @@ $$
 
 so at $g = 4$ excitation and inhibition cancel exactly, and above 4 inhibition wins. The second is the external drive. Brunel measured it in units of $\nu_\text{thr} = \theta / (J C_E \tau)$, the external rate that would bring the mean membrane exactly to threshold with no recurrent input at all; $\eta = \nu_\text{ext}/\nu_\text{thr}$.
 
-Depending on $g$ and $\eta$, the network falls into one of four states. In Brunel's figure 8:
+Depending on $g$ and $\eta$, his network falls into one of four states. In his figure 8, with $N_E = 10{,}000$:
 
 | State | $g$ | $\eta$ | What the network does |
 | --- | --- | --- | --- |
@@ -37,17 +37,25 @@ Depending on $g$ and $\eta$, the network falls into one of four states. In Brune
 | Synchronous irregular, fast | 6 | 4 | Strong inhibition and drive; the population oscillates fast while each neuron skips most cycles |
 | Synchronous irregular, slow | 4.5 | 0.9 | Weak drive; the population oscillates slowly, neurons irregular within it |
 
+## A smaller network
+
+His network is too big to run smoothly in a browser, and shrinking it is not innocent. Brunel's analysis assumes each neuron receives many small inputs: 1,000 excitatory synapses of 0.1 mV. A network a tenth the size gives each neuron 100 such inputs, and their total is a tenth of his. The recurrent input is then too weak to balance the external drive, and the network fires fast and regularly at his asynchronous irregular parameters.
+
+One way to keep what matters is to scale the synapses with the size, so that each neuron's total excitatory input stays at his $C_E J = 100$ mV: 100 inputs of 1 mV in a tenth of his network, 200 of 0.5 mV in the figure's 2,500 neurons. The mean input is then the same as in his network, and the fluctuations are larger, since fewer, bigger inputs make a noisier sum.
+
 <BrunelRaster order={500} sliders sizes height="24rem" />
 
-Each dot is a spike: 160 excitatory neurons above, 40 inhibitory below, over the last 400 ms. The trace below is the excitatory population's rate. Pick a regime, or move $g$ and $\eta$ yourself and watch the raster reorganize. The network runs in a worker in your browser with sparx's step: each membrane solved exactly over 0.1 ms, delta synapses that arrive after their delay and land before the threshold test, and the reset held for 2 ms. Its test holds it to sparx's own run of a smaller Brunel network, spike for spike.
-
-Brunel's figures use $N_E = 10{,}000$, so each neuron receives 1,000 excitatory connections. At 2,500 neurons each receives 200, and the states are less distinct than his. The 5,000-neuron option gives 400, and runs slower.
+Each dot is a spike: 160 excitatory neurons above, 40 inhibitory below, over the last 400 ms. The trace below is the excitatory population's rate, and the line under the figure measures the network as it runs, from its first 100 ms on: the median CV of its excitatory neurons' intervals and the Fano factor of their count in 1 ms windows (both explained below). Pick one of Brunel's four parameter sets, or move $g$ and $\eta$ yourself, and switch between his synapses and his total input. The network runs in a worker in your browser with sparx's step: each membrane solved exactly over 0.1 ms, delta synapses that arrive after their delay and land before the threshold test, and the reset held for 2 ms. Its test holds it to sparx's own run of a smaller Brunel network, spike for spike.
 
 ## Measuring irregularity
 
 Two numbers separate the states. The coefficient of variation of a neuron's interspike intervals, $\text{CV} = \sigma_\text{ISI}/\mu_\text{ISI}$, is 0 for a clock and 1 for a Poisson process. The Fano factor of the population's spike count in short windows, its variance over its mean, is near 1 when neurons fire independently and far above 1 when they fire together. Synchronous regular has a low CV and a high Fano factor; asynchronous irregular has a CV near 1 and a Fano factor near 1.
 
+sparx's `brunel(order)` builds his network at any size, `brunel(2500)` being his, and `sparx.spiketrains` measures it. This runs a tenth of it, 1,250 neurons, with his synapses and then with his total input:
+
 <CodeBlock code={regimes} colab={colab('networks')} source={source('src/sparx/graph/models.py')} />
+
+With his 0.1 mV synapses, his asynchronous irregular parameters give 85.8 Hz with a CV of 0.13: regular firing. With 1 mV synapses the same parameters give 73.5 Hz and a CV of 1.47, irregular, though the Fano factor of 14.7 says the population still fluctuates together more than independent neurons would. His synchronous regular parameters give 327 Hz, a CV of 0.09 and a Fano factor of 156, and his slow synchronous parameters 38.7 Hz, a CV of 1.18 and a Fano factor of 29.8. A tenth of his network is not his network, but the progression from clockwork to irregular firing as inhibition grows is there.
 
 ## One spike changes everything
 
@@ -74,7 +82,7 @@ The same machinery runs Shiu et al.'s model of the whole fly brain, built from t
 ## Try this
 
 1. With $g = 4$ and $\eta = 2$, what is the mean recurrent input? What fires the neurons then?
-2. In the raster, go from asynchronous irregular to synchronous regular by lowering $g$ alone. Around which value does the population start to oscillate?
+2. In the raster, at $g = 5$ and $\eta = 2$, switch between his synapses and his total input. Which fires irregularly, and why does the number of inputs matter?
 3. In the twin figure, nudge the network, wait until the copies have parted, and press "Start over". The copies are identical again. Why can't a real experiment do this?
 4. Why do two chaotic networks keep the same population rate after they part?
 
@@ -82,7 +90,7 @@ The same machinery runs Shiu et al.'s model of the whole fly brain, built from t
 <summary>Answers</summary>
 
 1. Zero: excitation and inhibition cancel on average. The external input alone, at twice the threshold rate, then sets the mean twice as far above rest as threshold, and the neurons fire fast and regularly.
-2. Near 4, where inhibition stops cancelling excitation; the exact point blurs in a network this small.
+2. His total input. With 100 inputs of 0.1 mV, a neuron's recurrent inhibition can cancel only a tenth of what it does in his network, so the external drive, which alone would hold the mean at twice the threshold, wins and the neurons fire like clocks. With 1 mV synapses the recurrent input is as strong as his, inhibition balances the drive, and fluctuations decide when each neuron fires.
 3. The two copies share every random number: their connections and every external spike. A brain never repeats its input exactly, and its neurons have noise of their own, so every trial starts from a different state, and the chaos amplifies that difference.
 4. The rate is set by the balance of mean inputs, which depends on the parameters, not on which neuron fired when. Chaos scrambles the details and keeps the statistics.
 

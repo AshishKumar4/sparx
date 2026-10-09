@@ -14,7 +14,7 @@ export interface TwinsFigure {
 export function twins(root: HTMLElement, read: () => { g: number; eta: number }): TwinsFigure {
 	const canvas = root.querySelector('canvas') as HTMLCanvasElement;
 	const status = root.querySelector<HTMLElement>('[data-status]');
-	let sim = new Twins({ order: 250, ...read() });
+	let sim = new Twins({ order: 250, j: 1, ...read() });
 	const a = new Uint8Array(WINDOW * ROWS);
 	const b = new Uint8Array(WINDOW * ROWS);
 	const share = new Float32Array(WINDOW);
@@ -144,7 +144,7 @@ export function twins(root: HTMLElement, read: () => { g: number; eta: number })
 			nudgedAt = t;
 		},
 		restart() {
-			sim = new Twins({ order: 250, ...read() });
+			sim = new Twins({ order: 250, j: 1, ...read() });
 			a.fill(0);
 			b.fill(0);
 			share.fill(0);

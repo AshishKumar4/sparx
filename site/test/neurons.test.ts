@@ -98,7 +98,7 @@ test("Brunel's network on sparx's edges and external input", () => {
 });
 
 test('one nudged neuron makes two identical Brunel networks part within 50 ms', () => {
-	const twins = new Twins({ order: 250, g: 5, eta: 2 });
+	const twins = new Twins({ order: 250, g: 5, eta: 2, j: 1 });
 	let before = 0;
 	for (let t = 0; t < 1000; t++) before += twins.step();
 	expect(before).toBe(0);
