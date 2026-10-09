@@ -1,0 +1,16 @@
+// sparx.sh, www.sparx.sh and www.sparxml.dev answer every request with a permanent redirect to the
+// same path on sparxml.dev.
+{
+	"$schema": "../../node_modules/wrangler/config-schema.json",
+	"name": "sparx-redirect",
+	"account_id": "f44999d1ddda7012e9a87729eba250f1",
+	"main": "index.js",
+	"compatibility_date": "2026-10-01",
+	"routes": [
+		{ "pattern": "sparx.sh", "custom_domain": true },
+		{ "pattern": "www.sparx.sh", "custom_domain": true },
+		{ "pattern": "www.sparxml.dev", "custom_domain": true }
+	],
+	"workers_dev": false,
+	"preview_urls": false
+}

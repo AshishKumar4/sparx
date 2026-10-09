@@ -1,0 +1,19 @@
+// preview.sparxml.dev: the built site for review before it goes to sparxml.dev, marked noindex.
+// `pnpm build`, then `pnpm deploy:preview`.
+{
+	"$schema": "../../node_modules/wrangler/config-schema.json",
+	"name": "sparx-preview",
+	"account_id": "f44999d1ddda7012e9a87729eba250f1",
+	"main": "worker.js",
+	"compatibility_date": "2026-10-01",
+	"assets": {
+		"directory": "../../dist",
+		"binding": "ASSETS",
+		"html_handling": "auto-trailing-slash",
+		"not_found_handling": "404-page",
+		"run_worker_first": true
+	},
+	"routes": [{ "pattern": "preview.sparxml.dev", "custom_domain": true }],
+	"workers_dev": false,
+	"preview_urls": false
+}

@@ -12,7 +12,7 @@ const { code, title, colab, source } = Astro.props;
 ---
 
 <div class="code-block">
-	<Code code={code.trim()} lang="python" title={title} />
+	<Code code={code.trim()} lang="python" title={title} wrap preserveIndent />
 	{
 		(colab || source) && (
 			<div class="links">

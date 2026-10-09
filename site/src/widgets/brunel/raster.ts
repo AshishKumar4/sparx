@@ -17,7 +17,6 @@ export function raster(canvas: HTMLCanvasElement, { order = 250, g = 5, eta = 2,
 	const ids: number[] = [];
 	const rate = new Float32Array(capacity);
 	let now = 0;
-	let smoothed = 0;
 	let colors: Palette;
 	let view = fit(canvas);
 	let dirty = true;
@@ -103,7 +102,6 @@ export function raster(canvas: HTMLCanvasElement, { order = 250, g = 5, eta = 2,
 				let sum = 0;
 				for (let b = 0; b < bin; b++) sum += rate[(step - b + capacity * 4) % capacity];
 				const value = sum / bin;
-				smoothed = value;
 				const xx = width - ((capacity - 1 - c) / capacity) * width;
 				const yy = base - Math.min(1, value / peak) * (band - 6);
 				if (first) ctx.moveTo(xx, yy);
@@ -121,9 +119,10 @@ export function raster(canvas: HTMLCanvasElement, { order = 250, g = 5, eta = 2,
 			start(gg, ee);
 		},
 		rate() {
+			const filled = Math.min(capacity, Math.round(now / dt));
 			let sum = 0;
 			for (const r of rate) sum += r;
-			return now > window ? sum / capacity : smoothed;
+			return filled ? sum / filled : 0;
 		},
 	};
 }

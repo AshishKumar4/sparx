@@ -41,8 +41,8 @@ const kinds = { exact: 'Same numbers', tolerance: 'Within a tolerance', statisti
 				neuron sends a spike, a single 1, and resets. The rest of the time it sends nothing.
 			</p>
 			<p>
-				Every sparx neuron is a small JAX dataclass with a <code>step</code>, and <code>sparx.run</code> scans one over time. The
-				figure is that step, in your browser.
+				Every sparx neuron is a small JAX dataclass with a <code>step</code>, and <code>sparx.run</code> scans one over time.
+				The figure is that step, in your browser.
 			</p>
 			<CodeBlock code={neuron} colab={colab('neuron')} source={source('src/sparx/dynamics/ml.py')} />
 			<a class="more" href="/learn/neuron/">Neurons, from LIF to Izhikevich</a>
@@ -69,9 +69,9 @@ const kinds = { exact: 'Same numbers', tolerance: 'Within a tolerance', statisti
 				through the spikes and through the physics.
 			</p>
 			<p>
-				After {trained.steps.toLocaleString('en-US')} steps it brings the drone within 15 cm of a fixed target, and keeps it there, on
-				{percent(evaluation.arrived)} of 1,000 random starts, {percent(evaluation.arrived_from_inverted)} of those that began upside
-				down, in a median of {evaluation.median_time_s.toFixed(2)} s.
+				After {trained.steps.toLocaleString('en-US')} steps it brings the drone within 15 cm of a fixed target, and keeps it there,
+				on {percent(evaluation.arrived)} of 1,000 random starts, and {percent(evaluation.arrived_from_inverted)} of those that began
+				upside down, in a median of {evaluation.median_time_s.toFixed(2)} s.
 			</p>
 			<CodeBlock code={pilot} source={source('site/lab/pilot.py')} />
 			<a class="more" href="/learn/pilot/">Training, lesions and the check against sparx</a>
@@ -100,9 +100,9 @@ const kinds = { exact: 'Same numbers', tolerance: 'Within a tolerance', statisti
 
 		<Section id="checked" label="Fidelity" role="bio" title="Every model is checked against a reference">
 			<p>
-				Each model is checked against what defines it: a float64 loop of its equations, the authors' code, or NEST and Brian2. The
-				<a href="/docs/fidelity/">fidelity ledger</a> lists every check, its observed error and every known difference, and the
-				<a href="/docs/status/">status</a> page what is not established.
+				Each model is checked against what defines it: a float64 loop of its equations, the authors' code, or NEST and Brian2.
+				The <a href="/docs/fidelity/">fidelity ledger</a> lists every check, its observed error and every known difference,
+				and the <a href="/docs/status/">status</a> page what is not established.
 			</p>
 			<div slot="figure" class="checks" role="table" aria-label="Checks against references">
 				<div class="row head" role="row">
