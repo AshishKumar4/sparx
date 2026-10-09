@@ -1,0 +1,102 @@
+---
+layout: ../../layouts/Chapter.astro
+title: Networks and dynamics
+description: Wire thousands of neurons together at random, a fifth of them inhibitory, and they settle into firing that looks like noise but is the network's own. This chapter shows where that comes from, how the network changes state as its balance shifts, and why no two runs of it are ever alike.
+---
+
+import CodeBlock from '../../components/CodeBlock.astro';
+import BrunelRaster from '../../components/live/BrunelRaster.astro';
+import TwinNetworks from '../../components/live/TwinNetworks.astro';
+import { colab, source } from '../../data/site.mjs';
+import regimes from '../../../snippets/regimes.py?raw';
+
+## A puzzle about cortex
+
+Record a neuron in a living cortex and its spikes look random: the intervals between them vary about as much as a Poisson process's, the purest kind of randomness. Yet chapter 3's neuron, given a steady input, fires like a clock. Something about being in a network makes neurons irregular.
+
+The answer most theorists accept is balance. A cortical neuron receives thousands of excitatory inputs and a comparable inhibitory drive. If excitation alone acted, the neuron would be driven far past threshold and fire regularly at its maximum rate. But inhibition cancels most of it. What remains is a mean input just below threshold plus large fluctuations, as the many inputs arrive at random moments. The neuron fires when a fluctuation carries it over, and fluctuations arrive irregularly.
+
+## Brunel's network
+
+Brunel (2000) built the simplest network that shows this, and worked out its behaviour analytically. It has $N_E$ excitatory and $N_I = N_E/4$ inhibitory LIF neurons. Each neuron receives a fixed number of connections chosen at random, 10% of each population: $C_E$ excitatory and $C_I = C_E/4$ inhibitory. An excitatory spike raises the membrane by $J = 0.1$ mV, an inhibitory one lowers it by $gJ$, and every spike arrives $D = 1.5$ ms after it was sent. Each neuron also receives Poisson spikes from outside the network through $C_E$ more excitatory synapses.
+
+Two numbers set its behaviour. The first is the relative strength of inhibition, $g$. If every neuron fires at the same rate $\nu$, the mean recurrent input is proportional to
+
+$$
+C_E\,\nu\,J - C_I\,\nu\,gJ = C_E\,\nu\,J\left(1 - \frac{g}{4}\right)
+$$
+
+so at $g = 4$ excitation and inhibition cancel exactly, and above 4 inhibition wins. The second is the external drive. Brunel measured it in units of $\nu_\text{thr} = \theta / (J C_E \tau)$, the external rate that would bring the mean membrane exactly to threshold with no recurrent input at all; $\eta = \nu_\text{ext}/\nu_\text{thr}$.
+
+Depending on $g$ and $\eta$, the network falls into one of four states. In Brunel's figure 8:
+
+| State | $g$ | $\eta$ | What the network does |
+| --- | --- | --- | --- |
+| Synchronous regular | 3 | 2 | Excitation dominates; neurons fire in near lockstep, each almost periodically |
+| Asynchronous irregular | 5 | 2 | Balanced; each neuron fires irregularly and the population rate is flat |
+| Synchronous irregular, fast | 6 | 4 | Strong inhibition and drive; the population oscillates fast while each neuron skips most cycles |
+| Synchronous irregular, slow | 4.5 | 0.9 | Weak drive; the population oscillates slowly, neurons irregular within it |
+
+<BrunelRaster order={500} sliders sizes height="24rem" />
+
+Each dot is a spike: 160 excitatory neurons above, 40 inhibitory below, over the last 400 ms. The trace below is the excitatory population's rate. Pick a regime, or move $g$ and $\eta$ yourself and watch the raster reorganize. The network runs in a worker in your browser with sparx's step: each membrane solved exactly over 0.1 ms, delta synapses that arrive after their delay and land before the threshold test, and the reset held for 2 ms. Its test holds it to sparx's own run of a smaller Brunel network, spike for spike.
+
+Brunel's figures use $N_E = 10{,}000$, so each neuron receives 1,000 excitatory connections. At 2,500 neurons each receives 200, and the states are less distinct than his. The 5,000-neuron option gives 400, and runs slower.
+
+## Measuring irregularity
+
+Two numbers separate the states. The coefficient of variation of a neuron's interspike intervals, $\text{CV} = \sigma_\text{ISI}/\mu_\text{ISI}$, is 0 for a clock and 1 for a Poisson process. The Fano factor of the population's spike count in short windows, its variance over its mean, is near 1 when neurons fire independently and far above 1 when they fire together. Synchronous regular has a low CV and a high Fano factor; asynchronous irregular has a CV near 1 and a Fano factor near 1.
+
+<CodeBlock code={regimes} colab={colab('networks')} source={source('src/sparx/graph/models.py')} />
+
+## One spike changes everything
+
+Balance has a second consequence. Van Vreeswijk and Sompolinsky showed that balanced networks are chaotic: their activity is irregular even when every input is constant, and the smallest change to it grows until the network's spikes have nothing in common with what they would have been.
+
+London and colleagues measured how sensitive a living cortex is. In rats, they added a single extra spike to one neuron and estimated that it caused about 28 additional spikes in the neurons it connects to.
+
+Here are two copies of the same network: the same connections, the same external input, and so, step after step, the same spikes. Both copies are drawn in one raster: a spike fired by both is grey, a spike fired by only the first copy is orange, and one fired by only the second is violet.
+
+<TwinNetworks />
+
+Nudge one neuron of the second copy over threshold, once. Within 20 ms the coloured spikes have spread through the raster, and after about 50 ms almost no spike is shared, while the two copies' population rates, shown below the figure, stay about the same. Even the synchronous regular state, whose population rhythm survives, loses which neuron fires on which cycle.
+
+For a simulator this means two runs of a chaotic network cannot agree spike for spike, unless every operation rounds identically. The meaningful comparison is the one this chapter used to tell the states apart: rates, CVs and Fano factors over many runs. Chapter 11 returns to this.
+
+## How sparx runs a network
+
+A `sparx.graph.Network` is a Flax module made of populations, projections between them and inputs. Its variables split by role: `connectome` holds the edges and fixed weights, `params` any trainable weights, and `state` the membranes, synapses and spikes in flight. Every step runs in NEST's order: delta synapses deliver what is due, membranes integrate and fire, spikes enter each population's ring buffer of delays, other synapses receive their arrivals, plasticity updates, and monitors record. A spike sent in step $m$ over a delay of $D$ steps lands at the end of step $m + D$.
+
+Spikes are delivered as events: each step takes the neurons that fired and adds their out-edges, so a quiet network costs little. A projection can also be stored as a dense matrix or a list of edges, and every format gives the same input up to the order of summation.
+
+The same machinery runs Shiu et al.'s model of the whole fly brain, built from the FlyWire connectome: 127,400 neurons and 14.7 million connections between them. With 21 sugar-sensing neurons activated at 100 Hz, sparx's rates over ten trials correlate with their published Brian2 runs at 0.9989, and the motor neuron MN9 fires at 67.1 Hz against their 67.0 ± 6.6. It takes about 30 s per simulated second on 4 CPU cores.
+
+## Try this
+
+1. With $g = 4$ and $\eta = 2$, what is the mean recurrent input? What fires the neurons then?
+2. In the raster, go from asynchronous irregular to synchronous regular by lowering $g$ alone. Around which value does the population start to oscillate?
+3. In the twin figure, nudge the network, wait until the copies have parted, and press "Start over". The copies are identical again. Why can't a real experiment do this?
+4. Why do two chaotic networks keep the same population rate after they part?
+
+<details>
+<summary>Answers</summary>
+
+1. Zero: excitation and inhibition cancel on average. The external input alone, at twice the threshold rate, then sets the mean twice as far above rest as threshold, and the neurons fire fast and regularly.
+2. Near 4, where inhibition stops cancelling excitation; the exact point blurs in a network this small.
+3. The two copies share every random number: their connections and every external spike. A brain never repeats its input exactly, and its neurons have noise of their own, so every trial starts from a different state, and the chaos amplifies that difference.
+4. The rate is set by the balance of mean inputs, which depends on the parameters, not on which neuron fired when. Chaos scrambles the details and keeps the statistics.
+
+</details>
+
+## Summary
+
+In a network where inhibition balances excitation, each neuron sits below threshold and fires on fluctuations, irregularly, as cortical neurons do. Brunel's network moves between four states as inhibition and drive change, told apart by the CV and the Fano factor. Balanced networks are chaotic: one nudged neuron makes two identical copies part within tens of milliseconds while their statistics stay the same. The next chapter puts the units back and looks at what real synapses and neurons add.
+
+## References
+
+<ul class="references">
+<li>N. Brunel, "Dynamics of sparsely connected networks of excitatory and inhibitory spiking neurons", <em>Journal of Computational Neuroscience</em> 8, 2000, <a href="https://doi.org/10.1023/A:1008925309027">doi:10.1023/A:1008925309027</a>. Figure 8.</li>
+<li>C. van Vreeswijk and H. Sompolinsky, "Chaos in neuronal networks with balanced excitatory and inhibitory activity", <em>Science</em> 274, 1996, <a href="https://doi.org/10.1126/science.274.5293.1724">doi:10.1126/science.274.5293.1724</a>.</li>
+<li>M. London, A. Roth, L. Beeren, M. Häusser and P. E. Latham, "Sensitivity to perturbations in vivo implies high noise and suggests rate coding in cortex", <em>Nature</em> 466, 2010, <a href="https://doi.org/10.1038/nature09086">doi:10.1038/nature09086</a>.</li>
+<li>P. K. Shiu et al., "A Drosophila computational brain model reveals sensorimotor processing", <em>Nature</em> 634, 2024, <a href="https://doi.org/10.1038/s41586-024-07763-9">doi:10.1038/s41586-024-07763-9</a>.</li>
+</ul>

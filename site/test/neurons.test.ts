@@ -1,6 +1,7 @@
 // The browser's neurons and Brunel network against sparx's float64 runs (site/lab/fixtures.py).
 import { expect, test } from 'bun:test';
 import { DeltaNetwork } from '../src/engines/brunel';
+import { Twins } from '../src/engines/twins';
 import { ALIF, IZHIKEVICH_2003, Izhikevich, LeakyIntegrateAndFire, LIF, type Reset } from '../src/engines/neurons';
 
 const fixtures = await Bun.file(new URL('fixtures/sparx.json', import.meta.url)).json();
@@ -94,4 +95,23 @@ test("Brunel's network on sparx's edges and external input", () => {
 	}
 	console.log(`Brunel, ${network.size} neurons, ${b.edges.pre.length} synapses, ${b.steps} steps: ${total} spikes matched`);
 	expect(total).toBeGreaterThan(100);
+});
+
+test('one nudged neuron makes two identical Brunel networks part within 50 ms', () => {
+	const twins = new Twins({ order: 250, g: 5, eta: 2 });
+	let before = 0;
+	for (let t = 0; t < 1000; t++) before += twins.step();
+	expect(before).toBe(0);
+	twins.nudge();
+	let differ = 0;
+	let total = 0;
+	for (let t = 0; t < 1000; t++) {
+		const d = twins.step();
+		if (t >= 500) {
+			differ += d;
+			for (let i = 0; i < twins.size; i++) total += twins.a.network.fired[i] + twins.b.network.fired[i];
+		}
+	}
+	console.log(`after a nudge, 50 to 100 ms later: ${differ} of ${total} spikes differ`);
+	expect(differ / total).toBeGreaterThan(0.85);
 });

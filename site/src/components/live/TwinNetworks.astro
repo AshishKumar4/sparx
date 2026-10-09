@@ -1,0 +1,69 @@
+---
+// Two copies of one Brunel network that part after one nudged neuron (src/widgets/twins.ts).
+import Choice from './Choice.astro';
+import Figure from './Figure.astro';
+---
+
+<div data-twins>
+	<Figure engine="brunel(250) × 2" height="18rem">
+		<canvas role="img" aria-label="Spikes of 120 neurons in two copies of one network, grey where both copies fire and coloured where only one does, and below, the share of spikes that differ"></canvas>
+		<Fragment slot="controls">
+			<div class="buttons"><button type="button" data-act="nudge" class="primary">Nudge one neuron</button><button type="button" data-act="restart">Start over</button></div>
+			<Choice name="regime" label="Regime" value="5,2" options={[{ value: '5,2', label: 'Asynchronous irregular' }, { value: '3,2', label: 'Synchronous regular' }]} />
+		</Fragment>
+		<p slot="after" class="readout" data-status aria-live="polite"></p>
+	</Figure>
+</div>
+
+<script>
+	import { controls } from '../../widgets/controls';
+	import { twins } from '../../widgets/twins';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-twins]')) {
+		let figure: ReturnType<typeof twins> | null = null;
+		const ui = controls(root, () => figure?.restart());
+		const regime = () => {
+			const [g, eta] = ui.choice('regime').split(',').map(Number);
+			return { g, eta };
+		};
+		new IntersectionObserver(([entry], observer) => {
+			if (!entry.isIntersecting) return;
+			figure = twins(root, regime);
+			observer.disconnect();
+		}, { rootMargin: '200px' }).observe(root);
+		root.querySelector('[data-act="nudge"]')?.addEventListener('click', () => figure?.nudge());
+		root.querySelector('[data-act="restart"]')?.addEventListener('click', () => figure?.restart());
+	}
+</script>
+
+<style>
+	.buttons {
+		display: flex;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+	button {
+		font: inherit;
+		font-size: 0.875rem;
+		font-weight: 550;
+		height: 2.25rem;
+		padding-inline: 1rem;
+		border-radius: 0.5rem;
+		border: 1px solid var(--sx-line-strong);
+		background: var(--sx-page);
+		color: var(--sx-ink);
+		cursor: pointer;
+	}
+	button.primary {
+		background: var(--sx-bio);
+		border-color: var(--sx-bio);
+		color: #fff;
+	}
+	.readout {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+	}
+</style>

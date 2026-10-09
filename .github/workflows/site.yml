@@ -68,11 +68,12 @@ jobs:
       run: |
         python site/lab/notebooks.py write
         git diff --exit-code -- site/notebooks
-    - name: Build
+    - name: Typecheck and build
       working-directory: site
       run: |
         pnpm install --frozen-lockfile
         pnpm build
+        pnpm check
     - name: Every page at 1440 and 390, dark and light
       working-directory: site
       run: |

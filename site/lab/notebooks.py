@@ -29,9 +29,9 @@ NOTEBOOKS = {
     "surrogate-gradients": ("Surrogate gradients", "surrogate-gradients", ["surrogate", "teach"]),
     "bptt": ("Backpropagation through time", "bptt", ["bptt"]),
     "local-rules": ("Local learning rules", "local-rules", ["stdp", "eprop"]),
+    "delays": ("Delays", "delays", ["delays"]),
     "train": ("A first spiking network", "surrogate-gradients", ["train"]),
-    "delays": ("Learned delays", "delays", ["delays"]),
-    "brunel": ("Brunel's balanced network", "networks", ["brunel"]),
+    "networks": ("Networks and dynamics", "networks", ["regimes"]),
     "nir": ("NIR export", "nir", ["export"]),
 }
 
