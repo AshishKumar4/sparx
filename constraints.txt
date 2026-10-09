@@ -1,6 +1,10 @@
-# The jax every CI and development install of sparx runs on, dew's:
+# The dew and the jax every CI and development install of sparx runs on:
 #
 #     pip install -e '.[datasets,test]' -c constraints.txt
+#
+# dew at the commit of its main branch sparx is tested against; the published
+# sparxml takes any dewml 0.1 from PyPI (pyproject.toml).
+dewml @ git+https://github.com/AshishKumar4/dew@7ca258a09bc9d17d5e93de05743742b5158de164
 #
 # dew's constraints.txt at the commit sparx pins (7ca258a0) names jax 0.11.2
 # with the multi-process cache-key fix (AshishKumar4/jax branch

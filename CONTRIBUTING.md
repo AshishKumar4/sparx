@@ -25,7 +25,7 @@ A neuron, surrogate, encoder or loss that a paper or another library defines is 
 - Types are narrow and true. No `Any`, and no casts to quiet a checker. Narrow Flax's union returns with an `isinstance` assertion that says why it holds.
 - Comments say why, never what or what changed. Docstrings describe the code as it is.
 - One lint gate, dew's, run from the repository root: `uvx ruff@0.14.3 check src tests tools benchmarks examples recipes research && python tools/lint_slop.py --package sparx src/sparx tests tools recipes examples benchmarks research && uvx pyright@1.1.406 --pythonpath .venv/bin/python src/sparx`. `tools/lint_slop.py` is dew's checker for what ruff and a type checker cannot state, the file as it is at the dew commit sparx pins (CI compares them); its docstring names every rule and the roots each runs over. Its SLOP010 asks a model for a capability instead of its class: `sparx.nn.Modelled` (a layer's `model`) and `sparx.nn.Flattens` are sparx's. A rule that is wrong for a real reason becomes an ignore in `pyproject.toml` with that reason beside it, never a `# noqa` in `src/`.
-- Install with dew's jax: `pip install -e '.[datasets,test]' -c constraints.txt`.
+- Install on the dew commit and the jax build CI tests (`constraints.txt`): `pip install -e '.[datasets,test]' -c constraints.txt`. The published distribution is `sparxml`, imported as `sparx`.
 - Measure performance claims. A change that claims to be faster ships with the number, the command and the hardware. A path that is not faster where it can be measured does not ship; [docs/performance.md](docs/performance.md) records what was tried.
 - Performance never costs anything else. An optimization matches the outputs and gradients it replaces to fp32 tolerance.
 
@@ -42,3 +42,7 @@ A test is worth keeping only if it would fail on a plausible bug in the thing it
 ## Writing
 
 Plain sentences, short, in the register of someone explaining their own work to a colleague. The README and docs describe what the code does today; a claim without code behind it is a bug. Dew's list of banned constructions applies here unchanged: no colon reveals, no "not X but Y", no puffery, no selling words, no em dashes, no decorative formatting.
+
+## Releasing
+
+A release is a GitHub release tagged `v` and `sparx.__version__` (`v0.1.0`), with its entry in `CHANGELOG.md`. Publishing it runs `.github/workflows/python-publish.yml`: the whole CI on the tag, the wheel and sdist built and checked (`twine check --strict`, dew's `tools/check_distribution.py`), the wheel installed from PyPI's index into an empty environment and trained two steps (`tools/smoke_wheel.py`), and then the upload by trusted publishing. The published package depends on any `dewml` 0.1, so a release waits for the dew it needs to be on PyPI.

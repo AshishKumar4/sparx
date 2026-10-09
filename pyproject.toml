@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,18 +12,44 @@ authors = [
   { name="Ashish Kumar Singh", email="ashishkmr472@gmail.com" }
 ]
 license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["jax", "flax", "spiking-neural-networks", "neuromorphic", "computational-neuroscience",
+            "connectomics", "dew"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Typing :: Typed",
+]
 dependencies = [
     # Dew is the platform sparx trains, distributes, checkpoints and serves
-    # through (docs/design.md). It is not on PyPI, so the dependency names its
-    # repository at a commit of its main branch.
-    "dewml @ git+https://github.com/AshishKumar4/dew@7ca258a09bc9d17d5e93de05743742b5158de164",
+    # through (docs/design.md), and bounds jax, flax and optax to the versions
+    # it supports. Development and CI install the dew commit constraints.txt
+    # names.
+    "dewml>=0.1.0,<0.2",
     "jax",
     "flax",
     "optax",
     "numpy",
 ]
 
+[project.urls]
+Repository = "https://github.com/AshishKumar4/sparx"
+Documentation = "https://github.com/AshishKumar4/sparx/blob/main/docs/guide.md"
+Issues = "https://github.com/AshishKumar4/sparx/issues"
+Changelog = "https://github.com/AshishKumar4/sparx/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
+# The accelerator builds of jax, as dew installs them.
+cuda12 = ["dewml[cuda12]>=0.1.0,<0.2"]
+cuda13 = ["dewml[cuda13]>=0.1.0,<0.2"]
+tpu = ["dewml[tpu]>=0.1.0,<0.2"]
 # sparx.datasets reads the published HDF5 files.
 datasets = ["h5py"]
 # sparx.graph.connectome reads connectome tables (CSV and parquet).

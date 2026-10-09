@@ -23,6 +23,14 @@ def _first_network():
     return scope
 
 
+def test_the_readme_links_and_images_resolve_off_github():
+    # PyPI renders the README as the project's page, where a path relative to the repository leads nowhere.
+    readme = (ROOT / "README.md").read_text()
+    targets = re.findall(r'\]\(([^)]+)\)|(?:src|srcset)="([^"]+)"', readme)
+    relative = [link for pair in targets for link in pair if link and not link.startswith(("https://", "#"))]
+    assert targets and not relative, relative
+
+
 def test_the_first_network_trains():
     scope = _first_network()
     assert all(np.all(np.isfinite(g)) for g in jax.tree.leaves(scope["grads"]))

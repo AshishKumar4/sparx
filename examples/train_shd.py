@@ -1,6 +1,6 @@
 """Train a spiking network on the Spiking Heidelberg Digits with dew's Trainer.
 
-    pip install -e ".[datasets]"
+    pip install "sparxml[datasets]"     # from a clone: pip install -e ".[datasets]" -c constraints.txt
     python examples/train_shd.py --steps 3000
     python examples/train_shd.py --recipe snn-delays --epochs 150
     JAX_PLATFORMS=cpu python examples/train_shd.py --smoke --out /tmp/shd-smoke
