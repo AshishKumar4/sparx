@@ -217,7 +217,8 @@ def train(args: argparse.Namespace) -> None:
     drone, flights = Drone(), Flights(steps=args.horizon)
     net = network(args.hidden, args.tau, args.readout_tau)
     params = net.init(jax.random.key(args.seed), jnp.zeros((1, 1, 7)))["params"]
-    schedule = optax.warmup_cosine_decay_schedule(0.0, args.lr, 100, args.steps, args.lr / 20)
+    warmup = min(100, args.steps // 10)
+    schedule = optax.warmup_cosine_decay_schedule(0.0, args.lr, warmup, args.steps, args.lr / 20)
     optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(schedule))
     opt_state = optimizer.init(params)
 
