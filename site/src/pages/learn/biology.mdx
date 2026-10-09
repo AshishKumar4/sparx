@@ -42,7 +42,7 @@ Here are three copies of chapter 2's membrane: 200 pF, a 10 nS leak, rest at −
 
 Move the held potential. The current input lifts the membrane by 2.83 mV wherever it is held. The AMPA input lifts it by 3.67 mV at −80 mV, by 1.84 mV at −40 mV, and not at all at 0 mV. The GABA-A input does nothing at −80 mV and pulls harder the higher the membrane sits: 0.92 mV at −60 mV, 1.84 mV at −40 mV. Each conductance input is proportional to the distance from its reversal potential.
 
-Now add background inhibition: a steady GABA-A conductance, like the one that ongoing activity in a living cortex provides. In anesthetized cats, during network activity like that of the waking state, Destexhe and Paré found that synaptic input lowered pyramidal neurons' input resistance about fivefold. A 40 nS background does that here, and the membrane's time constant falls from 20 ms to 4 ms. Every input shrinks, the current one included, because its charge leaks away almost as fast as it arrives. Inhibition that barely moves the voltage but divides every other input is called shunting.
+Now add background inhibition: a steady GABA-A conductance, like the one that ongoing activity in a living cortex provides. In anesthetized cats, during network activity like that of the waking state, Destexhe and Paré found that synaptic input lowered pyramidal neurons' input resistance about fivefold. A 40 nS background does that here, and the membrane's time constant falls from 20 ms to 4 ms. Every input shrinks to about half, the current one included: 1.47 mV instead of 2.83, 1.45 mV instead of 2.75 for AMPA, and −0.48 mV instead of −0.92 for GABA-A. The charge an input brings now leaks out within a few milliseconds, before much of it has built up, and each input is over sooner. Inhibition that barely moves the voltage but divides every other input is called shunting.
 
 <CodeBlock code={conductance} colab={colab('biology')} source={source('src/sparx/dynamics/synapses.py')} />
 
@@ -121,7 +121,7 @@ Chapter 9 wired neurons at random. Real circuits are wired by measurement. Potja
 <summary>Answers</summary>
 
 1. At −80 mV, its reversal potential, where no current flows through the open channels. A negative current would pull the membrane down at any potential; the conductance pulls it toward −80 mV, so above −80 mV it inhibits and below it, it excites.
-2. Five times, from $200 / 10 = 20$ ms to $200 / 50 = 4$ ms. The current input injects the same charge, but the membrane now has five times the conductance to lose it through, so the charge leaves almost as fast as it arrives and the peak is far lower.
+2. Five times, from $200 / 10 = 20$ ms to $200 / 50 = 4$ ms. The current input injects the same charge, but the membrane now has five times the conductance to lose it through, so the charge leaves while it is still arriving and the peak is about half as high, 1.47 mV instead of 2.83.
 3. 2.4%, $B(-80) = 1 / (1 + e^{4.96} / 3.57)$. Depolarization, from other inputs or its own spike: at −40 mV nearly a quarter of the channels conduct.
 4. At 620 pA it fires three spikes and stops; at 630 pA it fires steadily at about 52 Hz. No current gives 10 Hz. Its rhythm is set by how fast its channels open and close after a spike, not by how long the input takes to charge the membrane, so firing starts near that rhythm. A leaky integrate-and-fire neuron's interval is the time its input takes to charge the membrane to threshold, which grows without limit as the current falls to the rheobase.
 

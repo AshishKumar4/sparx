@@ -88,5 +88,5 @@ test('a background GABA-A conductance shrinks every input, the chapter figure at
 	};
 	const shown = [0, 40].map((g) => [peak('ex', 'current', 180, g), peak('ampa', 'conductance', 3, g), peak('gaba_a', 'conductance', 3, g)]);
 	console.log(`peaks at -60 mV, background 0 nS: ${shown[0].map((x) => x.toFixed(2)).join(', ')} mV; 40 nS: ${shown[1].map((x) => x.toFixed(2)).join(', ')} mV`);
-	for (let k = 0; k < 3; k++) expect(Math.abs(shown[1][k])).toBeLessThan(Math.abs(shown[0][k]) / 2);
+	for (let k = 0; k < 3; k++) expect(Math.abs(shown[1][k])).toBeLessThan(0.6 * Math.abs(shown[0][k]));
 });

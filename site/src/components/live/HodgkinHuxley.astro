@@ -49,7 +49,7 @@ import Slider from './Slider.astro';
 						{ at: -77, label: 'potassium reversal −77 mV', role: 'learn' },
 					],
 				},
-				{ weight: 2, range: [0, 2500], lines: ['spike', 'learn'], guides: [{ at: 2000, label: '2,000 nS' }] },
+				{ weight: 2, range: [0, 3500], lines: ['spike', 'learn'], guides: [{ at: 3000, label: '3,000 nS' }] },
 			],
 			() => {
 				const fired = cell.step(ui.read('current'), 0.1);
