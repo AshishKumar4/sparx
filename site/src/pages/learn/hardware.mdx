@@ -30,7 +30,7 @@ This is chapter 4's send-on-delta, at every pixel, on the logarithm of the brigh
 
 <EventCamera />
 
-The left half is what a frame camera at 1,000 frames a second would send, every pixel, every millisecond. The right half is what the event camera sends: only the edges of the moving blades, orange where they bring light and blue where they take it away. The striped wall behind the fan is as detailed as the fan, and sends nothing, because it does not move. At one turn a second and a threshold of 0.15, the event camera sends about 46,000 events a second, 1.6% of the frame camera's 2.88 million values.
+The first panel is what a frame camera at 1,000 frames a second would send, every pixel, every millisecond. The second is what the event camera sends: only the edges of the moving blades, orange where they bring light and blue where they take it away. The striped wall behind the fan is as detailed as the fan, and sends nothing, because it does not move. At one turn a second and a threshold of 0.15, the event camera sends about 46,000 events a second, 1.6% of the frame camera's 2.88 million values.
 
 Stop the fan and the events stop. Halve the threshold and the camera sends about twice as many, 96,000 a second, since every edge now crosses twice as many steps of log brightness. Double the speed and the events double too: they measure motion, not time.
 
