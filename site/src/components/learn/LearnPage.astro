@@ -2,7 +2,7 @@
 // A Learn page: a title and lede, then prose with live figures that run wider than the text, then the
 // pages before and after it.
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
-import { explainers } from '../../data/learn.mjs';
+import { chapters } from '../../data/learn.mjs';
 import Explainers from '../Explainers.astro';
 import '../../styles/page.css';
 
@@ -12,16 +12,16 @@ interface Props {
 	description: string;
 }
 const { slug, title, description } = Astro.props;
-const at = explainers.findIndex((e) => e.slug === slug);
-const entry = explainers[at];
-const previous = explainers[at - 1];
-const next = explainers[at + 1];
+const at = chapters.findIndex((e) => e.slug === slug);
+const entry = chapters[at];
+const previous = at >= 0 ? chapters[at - 1] : undefined;
+const next = at >= 0 ? chapters[at + 1] : undefined;
 ---
 
 <StarlightPage frontmatter={{ title, description, template: 'splash' }} hasSidebar={false}>
 	<div class="page learn not-content" style={`--role: var(--sx-${entry?.role ?? 'spike'})`}>
 		<header class="intro">
-			<p class="crumb"><a href="/learn/">Learn</a><span aria-hidden="true">/</span>{at + 1} of {explainers.length}</p>
+			<p class="crumb"><a href="/learn/">Learn</a>{entry && <><span aria-hidden="true">/</span>Chapter {entry.number}</>}</p>
 			<h1>{title}</h1>
 			<p class="lede">{description}</p>
 		</header>

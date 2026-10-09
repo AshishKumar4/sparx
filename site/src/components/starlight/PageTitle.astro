@@ -1,0 +1,22 @@
+---
+// The page title, with a chapter's number and part above it on the course's pages.
+import Default from '@astrojs/starlight/components/PageTitle.astro';
+import { chapters } from '../../data/learn.mjs';
+
+const slug = Astro.url.pathname.startsWith('/learn/') ? Astro.url.pathname.split('/').filter(Boolean).at(-1) : undefined;
+const chapter = chapters.find((c) => c.slug === slug);
+---
+
+{chapter && <p class="chapter-number" style={`--role: var(--sx-${chapter.role})`}>Chapter {chapter.number} · {chapter.part}</p>}
+<Default />
+
+<style>
+	.chapter-number {
+		margin: 1rem 0 -0.25rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+		color: var(--role);
+	}
+</style>

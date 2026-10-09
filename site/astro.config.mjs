@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import mdx from '@astrojs/mdx';
 import starlight from '@astrojs/starlight';
 import { defineConfig, fontProviders } from 'astro/config';
 import rehypeKatex from 'rehype-katex';
@@ -75,6 +76,7 @@ export default defineConfig({
 			components: {
 				Head: './src/components/starlight/Head.astro',
 				Header: './src/components/starlight/Header.astro',
+				PageTitle: './src/components/starlight/PageTitle.astro',
 			},
 			head: [
 				{ tag: 'meta', attrs: { name: 'theme-color', content: '#0b0d10', media: '(prefers-color-scheme: dark)' } },
@@ -93,5 +95,6 @@ export default defineConfig({
 				}),
 			],
 		}),
+		mdx(),
 	],
 });

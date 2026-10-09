@@ -1,0 +1,68 @@
+---
+// Three inputs onto one neuron: the reader fires them and watches current, membrane and output.
+import { INPUTS } from '../../widgets/synapse';
+import Figure from './Figure.astro';
+---
+
+<div data-synapse>
+	<Figure engine="Serial(LICell, LIFCell)" height="19rem">
+		<canvas role="img" aria-label="Spikes from three input neurons, the synaptic current they cause, the membrane potential of the neuron they drive, and its output spikes"></canvas>
+		<div slot="controls" class="pads">
+			{
+				INPUTS.map((input, k) => (
+					<button type="button" data-input={k} class:list={[{ inhibitory: input.weight < 0 }]}>
+						Fire {input.name} <span>{input.weight > 0 ? '+' : '−'}{Math.abs(input.weight)}</span>
+					</button>
+				))
+			}
+		</div>
+		<p slot="after" class="readout">1 ms a step, shown 7 times slower than real time. Synaptic current decays in 5 ms, the membrane in 10 ms; threshold 1.</p>
+	</Figure>
+</div>
+
+<script>
+	import { synapse } from '../../widgets/synapse';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-synapse]')) synapse(root);
+</script>
+
+<style>
+	.pads {
+		display: flex;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+		grid-column: 1 / -1;
+	}
+	button {
+		font: inherit;
+		font-size: 0.875rem;
+		font-weight: 600;
+		height: 2.75rem;
+		padding-inline: 1.125rem;
+		border-radius: 0.5rem;
+		border: 1px solid var(--sx-line-strong);
+		background: var(--sx-page);
+		color: var(--sx-ink);
+		cursor: pointer;
+		touch-action: manipulation;
+	}
+	button span {
+		font-family: var(--sx-mono);
+		font-weight: 400;
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+		margin-left: 0.25rem;
+	}
+	button.inhibitory {
+		border-color: color-mix(in srgb, var(--sx-membrane) 55%, var(--sx-line));
+	}
+	button:active {
+		background: var(--sx-raised);
+	}
+	.readout {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-size: 0.8125rem;
+		color: var(--sx-muted);
+	}
+</style>

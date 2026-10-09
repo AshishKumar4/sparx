@@ -1,0 +1,113 @@
+---
+layout: ../../layouts/Chapter.astro
+title: What a neuron does
+description: A neuron adds up what arrives at its synapses, keeps a little of it for a while, and sends a pulse when the total gets high enough. This chapter builds that idea into the model every later chapter uses.
+---
+
+import CodeBlock from '../../components/CodeBlock.astro';
+import SynapseDemo from '../../components/live/SynapseDemo.astro';
+import { colab, source } from '../../data/site.mjs';
+import synapse from '../../../snippets/synapse.py?raw';
+import layer from '../../../snippets/synaptic_layer.py?raw';
+
+## Three parts
+
+Look at a neuron under a microscope and you see three parts. The dendrites branch out like roots and collect signals from other neurons. The cell body, the soma, adds those signals up. The axon carries the result away, sometimes for millimetres, to the next neurons. Where an axon touches another neuron's dendrite there is a small gap, the synapse. One neuron in a vertebrate cortex often connects to more than 10,000 others.
+
+The signal on the axon is a voltage pulse called an action potential, or spike. It is about 100 mV tall and lasts 1 to 2 ms. Every spike from a given neuron looks the same. A neuron cannot send a big spike or a small one, only a spike or nothing, so whatever it has to say it says with *when* it fires and *how often*.
+
+## What happens at a synapse
+
+The inside of a neuron sits at about −65 mV relative to the outside. When a spike reaches a synapse, the axon releases a chemical transmitter. The transmitter opens ion channels in the receiving neuron's membrane, and for a few milliseconds a current flows in or out. That current nudges the receiving neuron's voltage, its membrane potential, up or down by about a millivolt. A synapse that pushes the voltage up is excitatory; one that pushes it down is inhibitory.
+
+A nudge of a millivolt fades. The membrane leaks, and the voltage drifts back to rest over tens of milliseconds. But nudges that arrive close together add up. The neuron fires once its voltage climbs about 20 to 30 mV above rest, which takes 20 to 50 excitatory inputs within a short window. After firing, the voltage drops back down and the neuron starts over.
+
+So a neuron does three things. It sums its inputs, forgets them slowly, and fires when the sum crosses a threshold.
+
+## From an artificial neuron to a spiking one
+
+The neuron in a conventional network computes one number from its inputs and stops:
+
+$$
+y = f\Big(\sum_j w_j x_j + b\Big)
+$$
+
+There is no time in it. Each input $x_j$ is a real number, and so is the output.
+
+A spiking neuron has state that carries over from one moment to the next. Split time into steps of 1 ms and give each input neuron a spike train $s_j[t]$, which is 1 at the steps where it fired and 0 elsewhere. Each arriving spike adds its weight to a synaptic current $i$, and the current decays:
+
+$$
+i[t] = \alpha\, i[t-1] + \sum_j w_j\, s_j[t]
+$$
+
+The membrane potential $v$ integrates that current and leaks:
+
+$$
+v[t] = \beta\, v[t-1] + i[t]
+$$
+
+Both $\alpha$ and $\beta$ are between 0 and 1: they are the fractions of the current and the voltage that survive one step. A synapse whose current lasts about 5 ms has $\alpha = e^{-1/5} \approx 0.82$, and a membrane that forgets over about 10 ms has $\beta = e^{-1/10} \approx 0.90$. Chapter 2 explains where these exponentials come from.
+
+When the membrane reaches the threshold $\theta$, the neuron fires and the threshold is taken away:
+
+$$
+s[t] = \begin{cases} 1 & v[t] \geq \theta \\ 0 & \text{otherwise} \end{cases}
+\qquad
+v[t] \leftarrow v[t] - \theta\, s[t]
+$$
+
+That is the whole model. Voltages here have no unit: the threshold is 1, rest is 0, and a weight of 0.2 means an input pushes the current up by a fifth of the threshold. It is called a current-based leaky integrate-and-fire neuron, and it is the workhorse of spiking networks in machine learning.
+
+## Try it
+
+The neuron below listens to three inputs. A and B are excitatory, with a weight of 0.2 each; C is inhibitory, with −0.3. Press the buttons to fire them. Until you do, a short demonstration plays.
+
+<SynapseDemo />
+
+The rows at the top are the three inputs' spikes. Below them, the violet trace is the synaptic current $i$ and the blue trace is the membrane $v$, with the threshold dashed. Orange ticks at the bottom are the neuron's own spikes.
+
+The demonstration shows four cases. A alone raises the membrane to about 0.58, well short of the threshold. A and B 20 ms apart reach 0.74: by the time B arrives, most of A has leaked away. A and B 2 ms apart reach the threshold and the neuron fires. And the same pair fired 4 ms after C does nothing, because C's negative current is still flowing.
+
+This neuron is a coincidence detector. It fires for two inputs that arrive together and ignores the same two inputs spread out. A conventional neuron fed the spike counts of A and B would see the same numbers in both cases.
+
+## The sparx way
+
+Every neuron model in sparx is a small JAX dataclass with an `init_state` and a `step`, and `sparx.run` scans one over time. The current-based neuron is two models in series: an `LICell` for the synaptic current and an `LIFCell` for the membrane. `decay(tau)` gives the fraction that survives a step, $e^{-1/\tau}$.
+
+<CodeBlock code={synapse} colab={colab('neuron')} source={source('src/sparx/dynamics/ml.py')} />
+
+`sparx.run` returns the output of every step and the final state, so the run can continue later from where it stopped. `record` collects anything from the state after each step; here, the membrane.
+
+In a network, the same neuron is a Flax layer. `sparx.nn.Synaptic` builds the `Serial` model for every feature of its input, and a `Dense` layer supplies the weights:
+
+<CodeBlock code={layer} colab={colab('neuron')} source={source('src/sparx/nn/neurons.py')} />
+
+Arrays are time-major, `[T, B, features]`. The `Dense` layer applies to all 300 steps at once, as one matrix product, and only the neuron steps through time.
+
+## Try this
+
+1. Fire A, then B, with a gap you choose. What is the longest gap that still makes the neuron fire?
+2. Fire A three times as fast as you can. How many spikes come out?
+3. In the code, set `tau=20.0` in the synapse's `decay` and give A alone. Does it fire? Find the shortest synaptic time constant at which one input of 0.2 is enough.
+4. Can C make the neuron fire? Can you think of a neuron model in which an inhibitory input could?
+
+<details>
+<summary>Answers</summary>
+
+1. With these time constants, a gap of up to 8 ms fires the neuron and a gap of 9 ms does not.
+2. It depends on your speed. Three inputs 3 ms apart give two output spikes, and four give three.
+3. At a synaptic time constant of 20 steps, A alone fires it. The current then lasts long enough for the membrane to collect a full threshold's worth. The crossover is between 16 and 16.5 steps.
+4. Not in this model: C only ever pulls the current down. Some real neurons fire when an inhibition ends, a rebound spike. Izhikevich's model produces one; chapter 11 shows it beside his own code's run.
+
+</details>
+
+## Summary
+
+A neuron sums the currents its synapses deliver, leaks back toward rest, and fires an identical pulse when its voltage crosses a threshold. In discrete time that is two decays, a sum and a comparison, and it already makes the neuron sensitive to timing as well as to totals. The next chapter asks where the decays come from, and what goes wrong if you get the step wrong.
+
+## References
+
+<ul class="references">
+<li>W. Gerstner, W. M. Kistler, R. Naud and L. Paninski, <a href="https://neuronaldynamics.epfl.ch/online/Ch1.html"><em>Neuronal Dynamics</em>, chapter 1</a>, Cambridge University Press, 2014. The source of this chapter's numbers on spikes, synapses and thresholds.</li>
+<li>F. Zenke and T. P. Vogels, "The remarkable robustness of surrogate gradient learning for instilling complex function in spiking neural networks", <em>Neural Computation</em> 33(4), 2021. The current-based neuron as used in machine learning.</li>
+</ul>

@@ -1,13 +1,13 @@
 ---
 // Cards for the Learn pages.
-import { explainers } from '../data/learn.mjs';
+import { chapters } from '../data/learn.mjs';
 
 interface Props {
 	current?: string;
 	title?: string;
 }
 const { current, title = 'Learn by changing things' } = Astro.props;
-const shown = explainers.filter((e) => e.slug !== current);
+const shown = chapters.filter((e) => e.slug !== current);
 ---
 
 <section class="explainers" aria-labelledby="explainers-title">

@@ -1,0 +1,146 @@
+---
+layout: ../../layouts/Chapter.astro
+title: Why spikes?
+description: Spiking networks are often sold as brain-like and energy-efficient. Sometimes they are. This chapter puts numbers on when, and ends with a rule for deciding whether to use one.
+---
+
+import CodeBlock from '../../components/CodeBlock.astro';
+import Energy from '../../components/live/Energy.astro';
+import { colab, source } from '../../data/site.mjs';
+import sparsity from '../../../snippets/sparsity.py?raw';
+
+## Two kinds of neural network
+
+A conventional network passes real numbers between its units. Every unit computes on every input: a layer with 256 inputs and 256 outputs does 65,536 multiply-adds per example, whether the input is a busy street or a blank wall.
+
+A spiking network passes spikes, events that are either there or not. A unit does nothing until a spike reaches it, and when one does, the work is to add one weight to a running total. A spike carries the value 1, so there is nothing to multiply. If nothing changes, nothing fires and nothing is computed. Time is part of the model too: a neuron's state carries from one moment to the next, so the network can respond to *when* things happen.
+
+Those are the three things spiking networks promise: additions in place of multiplications, no work when nothing happens, and time built in. Whether the first two save anything depends on how many spikes the network sends and what the hardware does with silence.
+
+## What a synapse costs
+
+Horowitz's ISSCC 2014 keynote gave rough energies for basic operations on a 45 nm chip at 0.9 V. A few of them:
+
+| Operation | Energy |
+| --- | --- |
+| 8-bit integer add | 0.03 pJ |
+| 8-bit integer multiply | 0.2 pJ |
+| 32-bit float add | 0.9 pJ |
+| 32-bit float multiply | 3.7 pJ |
+| Read 64 bits from an 8 KB cache | 10 pJ |
+| Read 64 bits from a 1 MB cache | 100 pJ |
+| Read 64 bits from DRAM | 1.3 to 2.6 nJ |
+
+A conventional synapse does one multiply and one add per example: 4.6 pJ in 32-bit float. A spiking synapse does one add per spike: 0.9 pJ, five times less. That ratio is where the energy claims start.
+
+The table's other rows matter more. Reading the weight from a small cache costs 10 pJ, more than the multiply and add together, and a spiking synapse has to read its weight each time a spike crosses it. Count the reads and the energy per synapse per example is
+
+$$
+E_\text{conventional} = E_\text{read} + E_\text{mult} + E_\text{add}
+\qquad
+E_\text{spiking} = n\,(E_\text{read} + E_\text{add})
+$$
+
+where $n$ is the number of spikes that cross the synapse in one example. The spiking network wins when
+
+$$
+n < \frac{E_\text{read} + E_\text{mult} + E_\text{add}}{E_\text{read} + E_\text{add}}
+$$
+
+With 32-bit floats and weights in an 8 KB cache, the right side is $(10 + 4.6) / (10 + 0.9) \approx 1.34$. A spiking network saves energy only if each synapse carries fewer than about 1.3 spikes per example. When memory dominates, the cheaper add hardly matters.
+
+<Energy />
+
+The flat line is the conventional synapse; the rising line is the spiking one, which costs more with every spike. The dashed line is where they cross. The green band comes from a more careful, hardware-aware study by Dampfhoffer et al.: integrate-and-fire networks compete with efficient conventional ones only when each synapse carries fewer spikes per inference than a threshold between 0.15 and 1.38, depending on how the conventional network is built.
+
+The model leaves out costs on both sides. A spiking neuron also updates its membrane every step, which this ignores, and a conventional network can skip zeros too. Treat it as a way to see which terms matter, not as a prediction for your chip.
+
+## Spikes add up over time
+
+A spiking network does not see an example once. It runs for $T$ steps, and a neuron that fires on a fraction $r$ of them sends $rT$ spikes. A network run for 8 steps with neurons firing 10% of the time sends 0.8 spikes per synapse per example, near the break-even. Run it for 100 steps and the same rate costs ten times more.
+
+This is how spiking networks lose their advantage in practice. NeuroBench, a community benchmark, reports a keyword-spotting task where a spiking network ran 200 steps per second of audio. Each step was sparse: 92% of its activations were zero, against 78% for the conventional network. But over one second it performed $7.3 \times 10^7$ additions, while the conventional network performed $7.85 \times 10^6$ multiply-adds, once. The spiking network did nine times as many operations. Each was cheaper, but not nine times cheaper.
+
+## What a GPU does with spikes
+
+A GPU does not skip zeros. It multiplies whole matrices, and a spike train is a matrix of 0s and 1s, so a spiking layer run for $T$ steps costs a GPU at least $T$ times what one conventional layer costs. sparx computes this way on every device: its layers apply their weights to all $T$ steps as one dense matrix product. That suits training on GPUs and TPUs, but it saves no energy.
+
+The savings need hardware that does work only when a spike arrives. Intel's Loihi is one. Its designers report 23.6 pJ per synaptic spike operation and 52 to 81 pJ per neuron update on a 14 nm chip, from measurements made before the silicon was finished. Loihi 2 holds up to a million neurons per chip.
+
+## Where spiking networks win
+
+### Event sensors
+
+An event camera does not take frames. Each pixel reports, on its own, when its brightness changes. Gallego et al.'s survey gives latencies of about 10 µs on a lab bench and under a millisecond in real scenes, a dynamic range above 120 dB against about 60 dB for frame cameras, and around 10 mW per die. Its output is already a stream of spikes. A spiking network can process each event as it arrives, with no frames to assemble and no work while the scene is still.
+
+### Low power at the edge
+
+On event-driven chips, a sparse network that sits idle most of the time costs little when nothing happens. That suits always-on sensing: keyword spotting, gesture detection, monitoring.
+
+### Time
+
+A spiking neuron keeps state, so timing is part of what it computes. Chapter 1's neuron fired for two inputs 2 ms apart and ignored the same two 20 ms apart. Chapter 8's learned delays use this to recognize spoken digits.
+
+### Brains
+
+If you want to model a brain, spikes are what neurons send. The second half of this course covers circuits in millivolts and milliseconds, up to sparx's model of a whole fly brain.
+
+## Where they lose
+
+### Accuracy
+
+On ImageNet, the spiking SEW ResNet-152 of Fang et al. reaches 69.3% top-1 with 4 steps. A conventional ResNet-152 from torchvision reaches 78.3%. The training recipes differ, but the gap is typical of the field. On the Spiking Heidelberg Digits, a spoken-digit dataset recorded as spikes, the dataset's authors found a conventional CNN at 92.4% and their best spiking network at 83.2%. Learned delays have since taken a spiking network to 95.1%, which shows the gap can close on temporal data.
+
+### Training cost
+
+Training through time stores every step, so memory grows with $T$, and gradients through spikes need a workaround (chapters 5 and 6). Each training step runs the network for all $T$ steps, so on a GPU it costs about $T$ times a conventional network's of the same size.
+
+### Tooling
+
+Optimizers, kernels, compilers and pretrained models are built for dense networks. Most neuromorphic chips are research hardware, each with its own toolchain. NIR, in chapter 12, is one effort to move networks between them.
+
+## Measuring your own network
+
+The count that decides the energy question is spikes per synapse per inference, and sparx can measure it. Spiking layers report their firing rates when the `spike_rates` collection is mutable:
+
+<CodeBlock code={sparsity} colab={colab('why-spikes')} source={source('src/sparx/rates.py')} />
+
+The input layer comes out at 1.0 spikes per synapse: an image with a mean intensity of 0.125, rate-coded over 8 steps, sends one spike per pixel on average. That is already near the break-even. Chapter 4 shows codes that use fewer spikes.
+
+## Try this
+
+1. In the figure, switch to 8-bit integers with weights in an 8 KB cache. Where is the break-even now? What does that say about how much the cheaper add matters?
+2. Set the memory to "Free". This is the best case for spiking networks, with every weight in a register. How many spikes per synapse can a spiking network afford?
+3. The drone on the front page runs one inference every 10 ms, and its 128 neurons fire on 14% of steps on average. Roughly how many spikes per synapse per inference do the weights after its spiking layers receive? Is that inside the green band?
+4. In the code, raise `steps` to 32. How do the counts change?
+
+<details>
+<summary>Answers</summary>
+
+1. About 1.02: with 8-bit integers the multiply-add costs 0.23 pJ against a 10 pJ read, so the arithmetic barely moves the result. Memory traffic decides it.
+2. About 5 in 32-bit float (4.6 pJ against 0.9 pJ) and about 8 in 8-bit integers (0.23 pJ against 0.03 pJ). That ratio is the ceiling on what spikes can save on arithmetic alone.
+3. About 0.14, if both layers fire near the average, since each step is one inference. That is inside the band. The drone's first layer is different: its seven readings are real numbers, not spikes, so that layer does multiply-adds.
+4. They grow fourfold, to about 4 spikes per synapse at the input. The rate stayed the same; the time grew.
+
+</details>
+
+## When to choose a spiking network
+
+Choose one when your input is events, from an event camera, a silicon cochlea or a stream of timestamps; when you can run it on event-driven hardware, or need to deploy to some; and when it will stay below about one spike per synapse per inference. Choose one too when timing is the signal, or when you are modeling neurons. Otherwise, on a GPU, with frames or tabular data, and with accuracy as the goal, a conventional network will train faster and score higher, and today it will usually use less energy too.
+
+## Summary
+
+A spike replaces a multiply-add with an add, but the weight still has to be read, and reading it costs more than the arithmetic. Spiking networks save energy only on event-driven hardware and only when each synapse carries less than about one spike per inference; they lose on accuracy and tooling on GPUs. The next chapter starts with one neuron and asks what it computes.
+
+## References
+
+<ul class="references">
+<li>M. Horowitz, "Computing's energy problem (and what we can do about it)", ISSCC 2014, pp. 10–14, <a href="https://doi.org/10.1109/ISSCC.2014.6757323">doi:10.1109/ISSCC.2014.6757323</a>. Figure 1.1.9 is the table above.</li>
+<li>M. Dampfhoffer, T. Mesquida, A. Valentian and L. Anghel, "Are SNNs really more energy-efficient than ANNs? An in-depth hardware-aware study", <em>IEEE Transactions on Emerging Topics in Computational Intelligence</em> 7(3), 2023, <a href="https://doi.org/10.1109/TETCI.2022.3214509">doi:10.1109/TETCI.2022.3214509</a>.</li>
+<li>J. Yik et al., "The neurobench framework for benchmarking neuromorphic computing algorithms and systems", <em>Nature Communications</em> 16, 1545, 2025, <a href="https://doi.org/10.1038/s41467-025-56739-4">doi:10.1038/s41467-025-56739-4</a>. Table 2 is the keyword-spotting comparison.</li>
+<li>M. Davies et al., "Loihi: a neuromorphic manycore processor with on-chip learning", <em>IEEE Micro</em> 38(1), 2018, <a href="https://doi.org/10.1109/MM.2018.112130359">doi:10.1109/MM.2018.112130359</a>. Table 2 has the energies. Intel, <a href="https://www.intel.com/content/dam/www/central-libraries/us/en/documents/neuromorphic-computing-loihi-2-brief.pdf"><em>Taking neuromorphic computing to the next level with Loihi 2</em></a>, 2021.</li>
+<li>G. Gallego et al., "Event-based vision: a survey", <em>IEEE TPAMI</em> 44(1), 2022, <a href="https://doi.org/10.1109/TPAMI.2020.3008413">doi:10.1109/TPAMI.2020.3008413</a>.</li>
+<li>W. Fang et al., "Deep residual learning in spiking neural networks", NeurIPS 2021, <a href="https://arxiv.org/abs/2102.04159">arXiv:2102.04159</a>. Table 3. The ResNet-152 figure is torchvision's <a href="https://docs.pytorch.org/vision/stable/models/generated/torchvision.models.resnet152.html">IMAGENET1K_V1 weights</a>.</li>
+<li>B. Cramer, Y. Stradmann, J. Schemmel and F. Zenke, "The Heidelberg spiking data sets for the systematic evaluation of spiking neural networks", <em>IEEE TNNLS</em> 33(7), 2022, <a href="https://doi.org/10.1109/TNNLS.2020.3044364">doi:10.1109/TNNLS.2020.3044364</a>. Table 1.</li>
+<li>I. Hammouamri, I. Khalfaoui-Hassani and T. Masquelier, "Learning delays in spiking neural networks using dilated convolutions with learnable spacings", ICLR 2024, <a href="https://arxiv.org/abs/2306.17670">arXiv:2306.17670</a>. Table 2; they selected models on the test set, as SHD has no validation split.</li>
+</ul>

@@ -10,7 +10,7 @@ interface Props {
 const { engine, caption, class: className, height = '16rem' } = Astro.props;
 ---
 
-<figure class:list={['live-figure', className]} style={`--figure-height: ${height}`}>
+<figure class:list={['live-figure', 'not-content', className]} style={`--figure-height: ${height}`}>
 	<div class="stage">
 		<slot />
 		{engine && <span class="engine"><span class="dot" aria-hidden="true"></span>{engine}</span>}

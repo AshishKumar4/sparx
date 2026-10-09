@@ -1,0 +1,31 @@
+---
+// A chapter of the course: Starlight's page with the course as its sidebar, the chapter's headings as its
+// table of contents, and its number above the title.
+import type { MarkdownHeading } from 'astro';
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { chapters, parts } from '../data/learn.mjs';
+import '../styles/chapter.css';
+
+interface Props {
+	frontmatter: { title: string; description: string };
+	headings: MarkdownHeading[];
+}
+const { frontmatter, headings } = Astro.props;
+const slug = Astro.url.pathname.split('/').filter(Boolean).at(-1);
+const chapter = chapters.find((c) => c.slug === slug);
+if (!chapter) throw new Error(`${Astro.url.pathname} is not a chapter in src/data/learn.mjs`);
+const sidebar = [
+	{ label: 'The course', link: '/learn/' },
+	...parts
+		.map((part) => ({
+			label: part.title,
+			items: chapters.filter((c) => c.part === part.title).map((c) => ({ label: `${c.number}. ${c.title}`, link: `/learn/${c.slug}/` })),
+		}))
+		.filter((group) => group.items.length),
+];
+---
+
+<StarlightPage frontmatter={{ title: frontmatter.title, description: frontmatter.description, editUrl: false }} {sidebar} {headings}>
+	<p class="chapter-lede">{frontmatter.description}</p>
+	<slot />
+</StarlightPage>

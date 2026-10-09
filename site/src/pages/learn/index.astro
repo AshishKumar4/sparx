@@ -1,91 +1,180 @@
 ---
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
-import { explainers } from '../../data/learn.mjs';
+import { chapters, parts } from '../../data/learn.mjs';
 import '../../styles/page.css';
+
+const numbered = new Map(chapters.map((c) => [c.slug, c]));
+const paths = [
+	{
+		who: 'New to neural networks',
+		start: 'neuron',
+		route: 'Read in order from chapter 1. The math uses sums and exponentials, and each chapter builds what it needs.',
+	},
+	{
+		who: 'You train deep networks',
+		start: 'why-spikes',
+		route: 'Read chapter 0 for when spiking networks pay off. Skim 1 to 3, then read 4 to 8, where the training differs from what you know.',
+	},
+	{
+		who: 'You study or simulate brains',
+		start: 'networks',
+		route: 'Skim 1 to 3 for this course\'s notation, then read 9 to 11 for circuits in physical units and how sparx checks itself against NEST and Brian2.',
+	},
+].filter((p) => numbered.has(p.start));
 ---
 
 <StarlightPage
 	frontmatter={{
-		title: 'Learn',
-		description: 'Spiking networks, learning rules and simulation, explained with sparx running live in your browser.',
+		title: 'Spiking networks, from the neuron up',
+		description: 'A course on spiking neural networks: how neurons compute, how spiking networks learn, how circuits behave, and what runs them. Each chapter runs live in your browser.',
 		template: 'splash',
 	}}
 	hasSidebar={false}
 >
-	<div class="page index not-content">
+	<div class="page course not-content">
 		<header>
-			<h1>Learn by changing things</h1>
-			<p>
-				Each page runs a piece of sparx in your browser and shows the Python that does the same in sparx. The browser's engines are
-				held to sparx's own runs by tests: the same spikes, and gradients equal to rounding.
+			<p class="eyebrow">The course</p>
+			<h1>Spiking networks, from the neuron up</h1>
+			<p class="lede">
+				After a short opening on when spiking networks are worth using, fourteen chapters go from one neuron to a network that drives a car
+				from events. Each starts with the idea, builds the math, gives you a live model to change in your browser, and ends with the sparx
+				code that runs the same model.
 			</p>
 		</header>
-		<ol>
-			{
-				explainers.map((e, k) => (
-					<li style={`--role: var(--sx-${e.role})`}>
-						<a href={`/learn/${e.slug}/`}>
-							<span class="number">{String(k + 1).padStart(2, '0')}</span>
-							<span class="title">{e.title}</span>
-							<span class="summary">{e.summary}</span>
-						</a>
-					</li>
-				))
-			}
-		</ol>
+
+		<section class="paths" aria-labelledby="paths-title">
+			<h2 id="paths-title">Where to start</h2>
+			<ul>
+				{
+					paths.map((p) => (
+						<li>
+							<strong>{p.who}</strong>
+							<span>{p.route}</span>
+							<a href={`/learn/${p.start}/`}>Start with chapter {numbered.get(p.start)?.number}</a>
+						</li>
+					))
+				}
+			</ul>
+		</section>
+
+		{
+			parts.map((part) => {
+				const listed = part.chapters.map((c) => numbered.get(c.slug)).filter((c) => c !== undefined);
+				return (
+					listed.length > 0 && (
+						<section class="part" aria-label={part.title}>
+							<h2>{part.title}</h2>
+							<ol>
+								{listed.map((c) => (
+									<li style={`--role: var(--sx-${c.role})`}>
+										<a href={`/learn/${c.slug}/`}>
+											<span class="number">{c.number}</span>
+											<span class="title">{c.title}</span>
+											<span class="summary">{c.summary}</span>
+										</a>
+									</li>
+								))}
+							</ol>
+						</section>
+					)
+				);
+			})
+		}
 	</div>
 </StarlightPage>
 
 <style>
-	.index {
-		max-width: 68rem;
+	.course {
+		max-width: 64rem;
 		margin-inline: auto;
 		padding: 3rem var(--sl-content-pad-x, 1rem) 5rem;
 	}
+	.eyebrow {
+		margin: 0 0 0.75rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--sx-spike);
+	}
 	h1 {
 		margin: 0;
-		font-size: clamp(2.2rem, 1.5rem + 3vw, 3.75rem);
+		font-size: clamp(2.2rem, 1.5rem + 3vw, 3.6rem);
 		letter-spacing: -0.04em;
 		line-height: 1.02;
 		font-weight: 700;
 		color: var(--sx-ink);
+		max-width: 16ch;
 	}
-	header p {
-		margin: 1rem 0 0;
+	.lede {
+		margin: 1.125rem 0 0;
 		max-width: 40rem;
 		font-size: 1.1875rem;
 		line-height: 1.55;
 		color: var(--sx-ink-2);
 	}
-	ol {
+	h2 {
+		margin: 3rem 0 1rem;
+		font-size: 0.8125rem;
+		font-family: var(--sx-mono);
+		font-weight: 500;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--sx-muted);
+	}
+	.paths ul {
 		list-style: none;
 		padding: 0;
-		margin: 3rem 0 0;
+		margin: 0;
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+		grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
 		gap: 0.75rem;
 	}
-	a {
+	.paths li {
 		display: grid;
-		grid-template-columns: auto 1fr;
+		gap: 0.5rem;
 		align-content: start;
-		gap: 0.5rem 0.875rem;
-		height: 100%;
-		padding: 1.25rem 1.375rem 1.375rem;
+		padding: 1.125rem 1.25rem;
 		border: 1px solid var(--sx-line);
 		border-radius: 0.75rem;
-		background: var(--sx-panel);
+	}
+	.paths strong {
+		color: var(--sx-ink);
+		font-weight: 600;
+	}
+	.paths span {
+		font-size: 0.9375rem;
+		line-height: 1.5;
+		color: var(--sx-ink-2);
+	}
+	.paths a {
+		margin-top: 0.25rem;
+		font-size: 0.875rem;
+		font-weight: 550;
+		color: var(--sx-ink);
+	}
+	.part ol {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+		border-top: 1px solid var(--sx-line);
+	}
+	.part a {
+		display: grid;
+		grid-template-columns: 2.5rem 1fr;
+		gap: 0.25rem 0.75rem;
+		padding: 1rem 0.25rem;
+		border-bottom: 1px solid var(--sx-line);
 		text-decoration: none;
 	}
-	a:hover {
-		border-color: var(--sx-faint);
+	.part a:hover .title {
+		color: var(--role);
 	}
 	.number {
 		grid-row: span 2;
 		font-family: var(--sx-mono);
-		font-size: 0.8125rem;
+		font-size: 1.125rem;
 		color: var(--role);
-		padding-top: 0.2rem;
 	}
 	.title {
 		font-weight: 600;

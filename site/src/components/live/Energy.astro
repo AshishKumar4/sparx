@@ -1,0 +1,118 @@
+---
+// Energy per synapse per inference, conventional against spiking (src/engines/energy.ts).
+import { MEMORY, OPS } from '../../engines/energy';
+import Choice from './Choice.astro';
+import Figure from './Figure.astro';
+import Slider from './Slider.astro';
+---
+
+<div data-energy>
+	<Figure engine="Horowitz 2014, 45 nm" height="15rem">
+		<canvas role="img" aria-label="Energy per synapse per inference: a flat line for a conventional network, a rising line for a spiking one as spikes per synapse grow, and where they cross"></canvas>
+		<Fragment slot="controls">
+			<Choice name="precision" label="Arithmetic" value="fp32" options={Object.entries(OPS).map(([value, o]) => ({ value, label: o.label }))} />
+			<Choice name="memory" label="Where the weights live" value="sram8k" options={Object.entries(MEMORY).map(([value, m]) => ({ value, label: m.label }))} />
+			<Slider name="spikes" label="Spikes per synapse per inference" min={-2} max={1} step={0.01} value={-0.7} digits={2} />
+		</Fragment>
+		<p slot="after" class="readout" data-status aria-live="polite"></p>
+	</Figure>
+</div>
+
+<script>
+	import { energy, type Memory, type Precision } from '../../engines/energy';
+	import { controls } from '../../widgets/controls';
+	import { alpha, fit, onTheme, type Palette } from '../../widgets/theme';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-energy]')) {
+		const canvas = root.querySelector('canvas') as HTMLCanvasElement;
+		const status = root.querySelector<HTMLElement>('[data-status]');
+		const output = root.querySelector<HTMLOutputElement>('output[data-for="spikes"]');
+		let colors: Palette;
+		let view = fit(canvas);
+		const draw = () => {
+			if (!colors) return;
+			const precision = ui.choice('precision') as Precision;
+			const memory = ui.choice('memory') as Memory;
+			const n = 10 ** ui.read('spikes');
+			if (output) output.textContent = n < 0.1 ? n.toFixed(3) : n.toFixed(2);
+			const now = energy(precision, memory, n);
+			const { ctx, width, height } = view;
+			ctx.clearRect(0, 0, width, height);
+			const left = 56;
+			const right = width - 14;
+			const top = 14;
+			const bottom = height - 30;
+			const x = (s: number) => left + ((Math.log10(s) + 2) / 3) * (right - left);
+			const lo = Math.log10(Math.max(1e-3, energy(precision, memory, 0.01).snn));
+			const hi = Math.log10(energy(precision, memory, 10).snn);
+			const y = (e: number) => bottom - ((Math.log10(e) - lo) / (hi - lo)) * (bottom - top);
+			ctx.fillStyle = alpha(colors.bio, 0.12);
+			ctx.fillRect(x(0.15), top, x(1.38) - x(0.15), bottom - top);
+			ctx.font = `11px ${getComputedStyle(canvas).getPropertyValue('--sx-mono')}`;
+			ctx.fillStyle = colors.bio;
+			ctx.fillText('Dampfhoffer et al.', x(0.15) + 4, top + 12);
+			ctx.strokeStyle = alpha(colors.ink, 0.12);
+			ctx.lineWidth = 1;
+			ctx.fillStyle = colors.muted;
+			ctx.textAlign = 'center';
+			for (const s of [0.01, 0.1, 1, 10]) {
+				ctx.beginPath();
+				ctx.moveTo(Math.round(x(s)) + 0.5, top);
+				ctx.lineTo(Math.round(x(s)) + 0.5, bottom);
+				ctx.stroke();
+				ctx.fillText(String(s), x(s), bottom + 14);
+			}
+			ctx.fillText('spikes per synapse per inference', (left + right) / 2, height - 3);
+			ctx.textAlign = 'right';
+			for (let p = Math.ceil(lo); p <= hi; p++) ctx.fillText(`${10 ** p >= 1 ? 10 ** p : (10 ** p).toFixed(-p)} pJ`, left - 6, y(10 ** p) + 4);
+			ctx.textAlign = 'left';
+			ctx.strokeStyle = colors.ink2;
+			ctx.lineWidth = 2;
+			ctx.beginPath();
+			ctx.moveTo(left, y(now.ann));
+			ctx.lineTo(right, y(now.ann));
+			ctx.stroke();
+			ctx.fillStyle = colors.ink2;
+			ctx.fillText('conventional', left + 6, y(now.ann) - 6);
+			ctx.strokeStyle = colors.spike;
+			ctx.beginPath();
+			ctx.moveTo(x(0.01), y(energy(precision, memory, 0.01).snn));
+			ctx.lineTo(x(10), y(energy(precision, memory, 10).snn));
+			ctx.stroke();
+			ctx.fillStyle = colors.spike;
+			ctx.beginPath();
+			ctx.arc(x(n), y(now.snn), 5, 0, 2 * Math.PI);
+			ctx.fill();
+			ctx.setLineDash([3, 4]);
+			ctx.strokeStyle = alpha(colors.ink, 0.5);
+			ctx.lineWidth = 1;
+			ctx.beginPath();
+			ctx.moveTo(x(now.breakEven), top);
+			ctx.lineTo(x(now.breakEven), bottom);
+			ctx.stroke();
+			ctx.setLineDash([]);
+			const ratio = now.snn / now.ann;
+			if (status)
+				status.textContent = `conventional ${now.ann.toFixed(2)} pJ, spiking ${now.snn.toFixed(2)} pJ per synapse per inference: the spiking network uses ${ratio < 1 ? `${(1 / ratio).toFixed(1)} times less` : `${ratio.toFixed(1)} times more`}. They break even at ${now.breakEven.toFixed(2)} spikes per synapse.`;
+		};
+		const ui = controls(root, draw);
+		new ResizeObserver(() => {
+			view = fit(canvas);
+			draw();
+		}).observe(canvas);
+		onTheme((p) => {
+			colors = p;
+			draw();
+		});
+	}
+</script>
+
+<style>
+	.readout {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-size: 0.875rem;
+		line-height: 1.5;
+		color: var(--sx-ink-2);
+	}
+</style>

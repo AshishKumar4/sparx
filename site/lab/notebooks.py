@@ -21,7 +21,8 @@ SNIPPETS = SITE / "snippets"
 INSTALL = "%pip install -q 'sparxml[nir] @ git+https://github.com/AshishKumar4/sparx'"
 
 NOTEBOOKS = {
-    "neuron": ("Neurons", "neuron", ["neuron", "physical", "izhikevich"]),
+    "why-spikes": ("Spikes per synapse", "why-spikes", ["sparsity"]),
+    "neuron": ("What a neuron does", "neuron", ["synapse", "synaptic_layer"]),
     "train": ("A first spiking network", "surrogate-gradients", ["train"]),
     "teach": ("Teach a neuron when to fire", "surrogate-gradients", ["teach"]),
     "delays": ("Learned delays", "delays", ["delays"]),

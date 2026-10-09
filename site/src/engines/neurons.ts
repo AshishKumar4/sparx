@@ -23,6 +23,26 @@ export class LIF {
 	}
 }
 
+/** `sparx.dynamics.Serial(LICell(synapse), LIFCell(decay))`, the current-based LIF: each input jumps a
+ * synaptic current that decays by `synapse` a step, and the membrane integrates the current. */
+export class CurrentLIF {
+	i = 0;
+	readonly cell: LIF;
+	constructor(
+		public synapse: number,
+		decay: number,
+		threshold = 1,
+		reset: Reset = 'subtract',
+	) {
+		this.cell = new LIF(decay, threshold, reset);
+	}
+
+	step(x: number): number {
+		this.i = this.synapse * this.i + x;
+		return this.cell.step(this.i);
+	}
+}
+
 /** `sparx.dynamics.LeakyIntegrateAndFire` on a current `i` (pA) held over the step and a voltage `jump`
  * (mV) that lands before the threshold test: the exact solution of the membrane, then the reset held
  * for `t_ref`. */

@@ -1,0 +1,50 @@
+/* The course's chapters: Starlight's markdown, with a lede, live figures, exercises and references. */
+
+.chapter-lede {
+	font-size: 1.1875rem;
+	line-height: 1.55;
+	color: var(--sx-ink-2);
+}
+
+.sl-markdown-content h2 {
+	margin-top: 2.75rem;
+}
+
+.sl-markdown-content .live-figure,
+.sl-markdown-content .chart {
+	margin-block: 1.75rem;
+}
+
+.sl-markdown-content .katex-display {
+	overflow-x: auto;
+	overflow-y: hidden;
+	padding-block: 0.25rem;
+}
+
+.sl-markdown-content details {
+	margin-top: 0.5rem;
+	padding: 0.5rem 0.875rem;
+	border: 1px solid var(--sx-line);
+	border-radius: 0.5rem;
+	background: var(--sx-panel);
+}
+
+.sl-markdown-content details summary {
+	cursor: pointer;
+	font-weight: 550;
+	color: var(--sx-ink);
+}
+
+.sl-markdown-content details[open] summary {
+	margin-bottom: 0.5rem;
+}
+
+.sl-markdown-content .references li {
+	font-size: 0.875rem;
+	line-height: 1.5;
+}
+
+.sl-markdown-content table td,
+.sl-markdown-content table th {
+	font-size: 0.875rem;
+}
