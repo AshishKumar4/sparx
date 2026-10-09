@@ -31,7 +31,8 @@ NOTEBOOKS = {
     "local-rules": ("Local learning rules", "local-rules", ["stdp", "eprop"]),
     "delays": ("Delays", "delays", ["delays"]),
     "train": ("A first spiking network", "surrogate-gradients", ["train"]),
-    "networks": ("Networks and dynamics", "networks", ["regimes"]),
+    "networks": ("Networks and dynamics", "networks", ["brunel", "regimes"]),
+    "biology": ("Physical units and biology", "biology", ["conductance", "hodgkin"]),
     "nir": ("NIR export", "nir", ["export"]),
 }
 

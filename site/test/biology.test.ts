@@ -69,3 +69,21 @@ test('HodgkinHuxley through its onset of firing', () => {
 	expect(error).toBeLessThan(1e-8);
 	expect(gates).toBeLessThan(1e-10);
 });
+
+test('a background GABA-A conductance shrinks every input, the chapter figure at -60 mV', () => {
+	const peak = (name: string, kind: Receptor['kind'], weight: number, background: number) => {
+		const point = new PointNeuron(new LeakyIntegrateAndFire(20, 200, -60, Number.POSITIVE_INFINITY), { [name]: { tau: 5, kind } });
+		const held: [string, number][] = [['gaba_a', background]];
+		const current = 10 * (-60 + 60) + background * (-60 + 80);
+		point.cell.v = -60;
+		let most = 0;
+		for (let t = 0; t < 2000; t++) {
+			point.step(current, t === 0 ? { [name]: weight } : {}, 0.1, held);
+			if (Math.abs(point.cell.v + 60) > Math.abs(most)) most = point.cell.v + 60;
+		}
+		return most;
+	};
+	const shown = [0, 40].map((g) => [peak('ex', 'current', 180, g), peak('ampa', 'conductance', 3, g), peak('gaba_a', 'conductance', 3, g)]);
+	console.log(`peaks at -60 mV, background 0 nS: ${shown[0].map((x) => x.toFixed(2)).join(', ')} mV; 40 nS: ${shown[1].map((x) => x.toFixed(2)).join(', ')} mV`);
+	for (let k = 0; k < 3; k++) expect(Math.abs(shown[1][k])).toBeLessThan(Math.abs(shown[0][k]) / 2);
+});

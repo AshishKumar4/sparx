@@ -10,6 +10,7 @@ import Slider from './Slider.astro';
 		<canvas role="img" aria-label="A Hodgkin-Huxley neuron's membrane potential firing on a constant current, and below it the sodium conductance rising at each spike's start and the potassium conductance rising after it"></canvas>
 		<Fragment slot="controls">
 			<Slider name="current" label="Current" min={0} max={1500} step={10} value={800} unit="pA" digits={0} />
+			<button type="button" data-rest>Start from rest</button>
 		</Fragment>
 		<p slot="after" class="readout">
 			<span class="na">sodium</span> · <span class="k">potassium</span> conductance · 100 pF · dt 0.1 ms in substeps of 0.01 ms · <b data-rate>…</b>
@@ -23,12 +24,18 @@ import Slider from './Slider.astro';
 	import { traces } from '../../widgets/traces';
 
 	for (const root of document.querySelectorAll<HTMLElement>('[data-hodgkin]')) {
-		const cell = new HodgkinHuxley();
 		const rate = root.querySelector<HTMLElement>('[data-rate]') as HTMLElement;
+		let cell = new HodgkinHuxley();
 		let t = 0;
 		let last = Number.NEGATIVE_INFINITY;
 		let interval = Number.NaN;
 		const ui = controls(root, () => view.redraw());
+		root.querySelector('[data-rest]')?.addEventListener('click', () => {
+			cell = new HodgkinHuxley();
+			last = Number.NEGATIVE_INFINITY;
+			interval = Number.NaN;
+			view.redraw();
+		});
 		const view = traces(
 			root.querySelector('canvas') as HTMLCanvasElement,
 			[
@@ -42,7 +49,7 @@ import Slider from './Slider.astro';
 						{ at: -77, label: 'potassium reversal −77 mV', role: 'learn' },
 					],
 				},
-				{ weight: 2, range: [0, 4000], lines: ['spike', 'learn'], guides: [{ at: 4000, label: '4,000 nS' }] },
+				{ weight: 2, range: [0, 2500], lines: ['spike', 'learn'], guides: [{ at: 2000, label: '2,000 nS' }] },
 			],
 			() => {
 				const fired = cell.step(ui.read('current'), 0.1);
@@ -70,6 +77,19 @@ import Slider from './Slider.astro';
 	.readout b {
 		font-weight: 500;
 		color: var(--sx-ink-2);
+	}
+	button {
+		align-self: end;
+		font: inherit;
+		font-size: 0.875rem;
+		font-weight: 550;
+		height: 2.25rem;
+		padding-inline: 1rem;
+		border-radius: 0.5rem;
+		border: 1px solid var(--sx-line-strong);
+		background: var(--sx-page);
+		color: var(--sx-ink);
+		cursor: pointer;
 	}
 	.na {
 		color: var(--sx-spike);
