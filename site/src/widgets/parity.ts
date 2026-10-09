@@ -8,6 +8,7 @@ interface Trace {
 }
 
 export interface Case {
+	difference: number[];
 	name: string;
 	title: string;
 	reference: string;
@@ -90,10 +91,18 @@ export function overlay(canvas: HTMLCanvasElement) {
 		ctx.fillStyle = colors.muted;
 		for (const [e, label] of [[1e-12, '1e-12'], [1e-8, '1e-8'], [1e-4, '1e-4'], [1, '1 mV']] as const) ctx.fillText(label, left - 6, ly(e) + 3);
 		ctx.fillStyle = colors.learn;
+		let exact = 0;
 		for (let t = from; t < to; t++) {
-			const e = Math.abs(c.sparx.v[t] - c.theirs.v[t]);
-			if (e === 0) continue;
+			const e = c.difference[t];
+			if (e === 0) {
+				exact++;
+				continue;
+			}
 			ctx.fillRect(x(t) - 0.75, ly(e) - 0.75, 1.5, 1.5);
+		}
+		if (exact === to - from) {
+			ctx.fillStyle = colors.bio;
+			ctx.fillText('identical at every step: a difference of exactly 0', left + 8, ly(1e-8) + 3);
 		}
 		ctx.textAlign = 'left';
 		ctx.fillStyle = colors.muted;
@@ -125,6 +134,7 @@ export function panels(root: HTMLElement, data: Panel[]) {
 	const draw = () => {
 		if (!colors) return;
 		for (const canvas of canvases) {
+			if (!canvas.getBoundingClientRect().width) continue;
 			const p = data[Number(canvas.dataset.panel)];
 			const { ctx, width, height } = fit(canvas);
 			ctx.clearRect(0, 0, width, height);

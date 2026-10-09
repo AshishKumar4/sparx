@@ -33,7 +33,8 @@ def case(
     fired, their_fired = np.asarray(fired) > 0, np.asarray(their_fired) > 0
     differ = np.flatnonzero(fired != their_fired)
     until = differ[0] if len(differ) else len(fired)
-    error = float(np.abs(np.asarray(v)[:until] - np.asarray(their_v)[:until]).max())
+    difference = np.abs(np.asarray(v) - np.asarray(their_v))
+    error = float(difference[:until].max())
     return {
         "name": name,
         "title": title,
@@ -42,8 +43,9 @@ def case(
         "dt": dt,
         "note": note,
         "test": test,
-        "sparx": {"v": np.round(v, 6).tolist(), "spikes": np.flatnonzero(fired).tolist()},
-        "theirs": {"v": np.round(their_v, 6).tolist(), "spikes": np.flatnonzero(their_fired).tolist()},
+        "sparx": {"v": np.round(v, 4).tolist(), "spikes": np.flatnonzero(fired).tolist()},
+        "difference": [float(f"{d:.2e}") for d in difference],
+        "theirs": {"v": np.round(their_v, 4).tolist(), "spikes": np.flatnonzero(their_fired).tolist()},
         "error": error,
         "same_spikes": not len(differ),
     }
