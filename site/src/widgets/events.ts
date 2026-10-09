@@ -112,23 +112,29 @@ export function eventFigure(canvas: HTMLCanvasElement, settings: () => Settings,
 		ctx.imageSmoothingEnabled = false;
 		const gap = 12;
 		const label = 22;
-		const scale = Math.min((width - gap - 24) / (2 * WIDTH), (height - label - 12) / HEIGHT);
+		// Side by side where they fit at a useful size, else one above the other.
+		const stacked = width < 520;
+		const scale = stacked
+			? Math.min((width - 24) / WIDTH, (height - 2 * label - gap - 12) / (2 * HEIGHT))
+			: Math.min((width - gap - 24) / (2 * WIDTH), (height - label - 12) / HEIGHT);
 		const w = WIDTH * scale;
 		const h = HEIGHT * scale;
-		const left = (width - 2 * w - gap) / 2;
-		const top = label + (height - label - h) / 2;
+		const left = stacked ? (width - w) / 2 : (width - 2 * w - gap) / 2;
+		const top = stacked ? label + (height - 2 * (h + label) - gap) / 2 + 6 : label + (height - label - h) / 2;
+		const second = stacked ? { x: left, y: top + h + gap + label } : { x: left + w + gap, y: top };
 		ctx.font = `11px ${getComputedStyle(canvas).getPropertyValue('--sx-mono')}`;
 		ctx.fillStyle = colors.muted;
 		ctx.fillText('every pixel, every frame', left, top - 8);
-		ctx.fillText('events: ON and OFF', left + w + gap, top - 8);
+		ctx.fillText('events: ON and OFF', second.x, second.y - 8);
 		ctx.drawImage(frame, left, top, w, h);
-		ctx.drawImage(events, left + w + gap, top, w, h);
+		ctx.drawImage(events, second.x, second.y, w, h);
 		ctx.strokeStyle = colors.line;
-		ctx.strokeRect(left + w + gap + 0.5, top + 0.5, w - 1, h - 1);
+		ctx.strokeRect(second.x + 0.5, second.y + 0.5, w - 1, h - 1);
 	}
 
 	new ResizeObserver(() => draw()).observe(canvas);
-	advance(reduced ? 300 : 1);
+	// 300 ms before the first paint, so the figure shows events before it moves.
+	advance(300);
 	draw();
 	animate(canvas, (dt) => {
 		if (reduced) return;

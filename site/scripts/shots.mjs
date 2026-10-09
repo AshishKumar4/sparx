@@ -44,6 +44,14 @@ for (const size of widths) {
 		page.on('console', (message) => message.type() === 'error' && notes.push(message.text()));
 		for (const path of pages) {
 			await page.goto(base + path, { waitUntil: 'networkidle' });
+			// Figures start when they near the screen, as a reader scrolls to them; scroll through so each has.
+			await page.evaluate(async () => {
+				for (let y = 0; y < document.documentElement.scrollHeight; y += innerHeight * 0.8) {
+					scrollTo(0, y);
+					await new Promise((done) => setTimeout(done, 100));
+				}
+				scrollTo(0, 0);
+			});
 			await page.waitForTimeout(Number(process.env.SETTLE ?? 2500));
 			const name = `${path.replace(/^\/|\/$/g, '').replace(/\//g, '_') || 'home'}-${size.name}-${theme}`;
 			await page.screenshot({ path: `${out}/${name}.png`, fullPage: process.env.FULL !== '0' });

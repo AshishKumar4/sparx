@@ -20,7 +20,10 @@ Chapter 0 counted what a synapse costs: in a spiking network, work is needed onl
 A frame camera sends the brightness of every pixel, every frame, whether anything changed or not. An event camera's pixels work independently. Each remembers the logarithm of the brightness at its last event, and when the brightness it sees has moved by a threshold $C$ from there, it sends an event: its position, the time, and whether the brightness rose (ON) or fell (OFF).
 
 $$
-\log I(t) - \log I(t_\text{last}) \ge C \;\Rightarrow\; \text{ON}, \qquad \log I(t_\text{last}) - \log I(t) \ge C \;\Rightarrow\; \text{OFF}
+\begin{aligned}
+\log I(t) - \log I(t_\text{last}) &\ge C \;\Rightarrow\; \text{ON} \\
+\log I(t_\text{last}) - \log I(t) &\ge C \;\Rightarrow\; \text{OFF}
+\end{aligned}
 $$
 
 This is chapter 4's send-on-delta, at every pixel, on the logarithm of the brightness. The logarithm makes the threshold a fraction of the brightness rather than an amount, so the pixel responds to contrast in shadow and in sunlight alike. Gallego et al.'s survey puts the resulting sensors at a time resolution of microseconds and a dynamic range of 140 dB, against 60 dB for frame cameras.

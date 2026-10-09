@@ -29,7 +29,10 @@ $$
 Collect the terms in $v$ and the equation is chapter 2's again:
 
 $$
-C \frac{\mathrm{d}v}{\mathrm{d}t} = -g_\text{tot}\,(v - v_\infty), \qquad g_\text{tot} = g_L + \sum_k g_k, \qquad v_\infty = \frac{g_L E_L + \sum_k g_k E_k + I}{g_\text{tot}}
+\begin{gathered}
+C \frac{\mathrm{d}v}{\mathrm{d}t} = -g_\text{tot}\,(v - v_\infty) \\
+g_\text{tot} = g_L + \sum_k g_k, \qquad v_\infty = \frac{g_L E_L + \sum_k g_k E_k + I}{g_\text{tot}}
+\end{gathered}
 $$
 
 The membrane still relaxes exponentially, with two differences. Its target $v_\infty$ is an average of the reversal potentials, weighted by how open each channel is. And its time constant is $C / g_\text{tot}$, so the more channels are open, the faster it forgets. sparx holds each conductance at its exact average over the step and then solves the membrane exactly, as chapter 2 did with a held current.

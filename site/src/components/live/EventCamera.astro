@@ -38,6 +38,11 @@ import Slider from './Slider.astro';
 </script>
 
 <style>
+	@media (max-width: 520px) {
+		[data-events] :global(.live-figure) {
+			--figure-height: 22rem !important;
+		}
+	}
 	.readout {
 		margin: 0;
 		padding: 0 1rem 0.875rem;

@@ -42,13 +42,13 @@ so a membrane of zero holds the drone in a hover. Nothing else carries memory: t
 
 ## Learning through the physics
 
-The physics is written in JAX, like the network, so a whole flight is one differentiable function. Each training step flies {model.meta.trained.batch} drones for {model.meta.trained.horizon / 100} s from random states, 40% of them at any angle, in boxes from a phone's shape to an ultrawide's, chasing targets that jump every 1.2 s on average, through gusts. The loss averages over drones and steps:
+The physics is written in JAX, like the network, so a whole flight is one differentiable function. Each training step flies {model.meta.trained.batch} drones for {model.meta.trained.horizon / 100} s from random states, 40% of them at any angle, in boxes from a phone's shape to an ultrawide's, chasing targets that jump every 1.2 s on average, through gusts. The loss is
 
 $$
-L = \overline{\lVert \mathbf p_t - \mathbf p^\ast_t \rVert} + 0.05\, \overline{1 - \cos\theta_t} + 0.002\, \overline{\omega_t^2} + 10\, \overline{(r_i - 0.3)_+^2 + (0.02 - r_i)_+^2}
+L = \big\langle \lVert \mathbf p_t - \mathbf p^\ast_t \rVert \big\rangle + 0.05\, \big\langle 1 - \cos\theta_t \big\rangle + 0.002\, \big\langle \omega_t^2 \big\rangle + 10\, \big\langle (r_i - 0.3)_+^2 + (0.02 - r_i)_+^2 \big\rangle
 $$
 
-The first term is the distance to the target. The next two discourage tilt and spin. The last averages over neurons, with $r_i$ the share of steps on which neuron $i$ fired: it penalizes a rate outside 2% to 30% of steps, which keeps every neuron in use and none saturated. JAX differentiates $L$ through all 200 steps: through the drone's equations, and through the spikes by their surrogate, chapter 5's stand-in for the threshold's missing derivative. This is chapter 6's backpropagation through time with the world inside the loop. Adam follows the gradient, clipped to a norm of 1, which keeps an occasional exploding one from undoing the rest.
+Each $\langle \cdot \rangle$ is an average, over drones and steps in the first three terms and over neurons in the last. The first term is the distance to the target. The next two discourage tilt and spin. In the last, $r_i$ is the share of steps on which neuron $i$ fired: it penalizes a rate outside 2% to 30% of steps, which keeps every neuron in use and none saturated. JAX differentiates $L$ through all 200 steps: through the drone's equations, and through the spikes by their surrogate, chapter 5's stand-in for the threshold's missing derivative. This is chapter 6's backpropagation through time with the world inside the loop. Adam follows the gradient, clipped to a norm of 1, which keeps an occasional exploding one from undoing the rest.
 
 <DroneCharts show="training" />
 

@@ -22,5 +22,5 @@ const percent = (v: number) => `${(100 * mgBlock(v)).toFixed(1)}%`;
 >
 	The grey line is the receptor without magnesium: the current falls in proportion to the distance from 0 mV. The blue curve is with
 	1 mM of magnesium outside the cell. At −80 mV only {percent(-80)} of the channels conduct, at −40 mV {percent(-40)}, and the current
-	grows as the membrane depolarizes until {most.toFixed(1)} pA at {top.toFixed(1)} mV.
+	grows as the membrane depolarizes until {most.toFixed(1)} pA at {top.toFixed(1).replace('-', '−')} mV.
 </Chart>

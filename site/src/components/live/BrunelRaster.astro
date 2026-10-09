@@ -60,7 +60,7 @@ const synapses = [
 			const [g, eta] = hasSliders ? [ui.read('g'), ui.read('eta')] : ui.choice('regime').split(',').map(Number);
 			// Brunel's neurons each receive 1,000 excitatory synapses of 0.1 mV; scaled, C_E j stays 100 mV.
 			const j = ui.choice('synapses') === 'paper' ? 0.1 : 250 / order;
-			if (size) size.textContent = `${(5 * order).toLocaleString('en-US')} neurons, ${(order / 2).toLocaleString('en-US')} inputs of ${j.toFixed(2)} mV each`;
+			if (size) size.textContent = `${(5 * order).toLocaleString('en-US')} neurons, ${((2 * order) / 5).toLocaleString('en-US')} excitatory inputs of ${j.toFixed(2)} mV each`;
 			return { order, g, eta, j };
 		};
 		let started: Raster | null = null;
