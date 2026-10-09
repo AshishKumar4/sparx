@@ -12,12 +12,11 @@ const rgb = (hex: string) => {
 	return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 };
 
-/** The brightness each pixel sees at `t` seconds: a three-bladed fan turning `speed` times a second in front of
- * a still, striped wall. */
-export function scene(t: number, speed: number, out: Float64Array): Float64Array {
+/** The log brightness each pixel sees: a three-bladed fan turned `turn` radians, in front of a still, striped
+ * wall. */
+export function scene(turn: number, out: Float64Array): Float64Array {
 	const cx = WIDTH / 2;
 	const cy = HEIGHT / 2;
-	const turn = 2 * Math.PI * speed * t;
 	for (let j = 0; j < HEIGHT; j++) {
 		for (let i = 0; i < WIDTH; i++) {
 			const x = i + 0.5 - cx;
@@ -47,8 +46,8 @@ export function eventFigure(canvas: HTMLCanvasElement, settings: () => Settings,
 	const sign = new Int8Array(pixels);
 	const counts = new Uint32Array(1000);
 	let ms = 0;
-	let t = 0;
-	camera.reset(scene(0, settings().speed, seen));
+	let turn = 0;
+	camera.reset(scene(0, seen));
 	const frame = document.createElement('canvas');
 	frame.width = WIDTH;
 	frame.height = HEIGHT;
@@ -66,8 +65,8 @@ export function eventFigure(canvas: HTMLCanvasElement, settings: () => Settings,
 		const { speed, threshold } = settings();
 		camera.threshold = threshold;
 		for (let k = 0; k < steps; k++) {
-			t += 0.001;
-			const sent = camera.step(scene(t, speed, seen));
+			turn += 2 * Math.PI * speed * 0.001;
+			const sent = camera.step(scene(turn, seen));
 			counts[ms % 1000] = sent;
 			ms++;
 			for (let p = 0; p < pixels; p++) {

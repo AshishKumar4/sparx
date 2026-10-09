@@ -105,13 +105,21 @@ test('one nudged neuron makes two identical Brunel networks part within 50 ms', 
 	twins.nudge();
 	let differ = 0;
 	let total = 0;
+	let early = 0;
+	let earlyTotal = 0;
 	for (let t = 0; t < 1000; t++) {
 		const d = twins.step();
+		let fired = 0;
+		for (let i = 0; i < twins.size; i++) fired += twins.a.network.fired[i] + twins.b.network.fired[i];
+		if (t < 100) {
+			early += d;
+			earlyTotal += fired;
+		}
 		if (t >= 500) {
 			differ += d;
-			for (let i = 0; i < twins.size; i++) total += twins.a.network.fired[i] + twins.b.network.fired[i];
+			total += fired;
 		}
 	}
-	console.log(`after a nudge, 50 to 100 ms later: ${differ} of ${total} spikes differ`);
+	console.log(`after a nudge, in the first 10 ms: ${early} of ${earlyTotal} spikes differ; 50 to 100 ms later: ${differ} of ${total}`);
 	expect(differ / total).toBeGreaterThan(0.85);
 });

@@ -67,7 +67,7 @@ Here are two copies of one network of 1,250 neurons with 1 mV synapses: the same
 
 <TwinNetworks />
 
-Nudge one neuron of the second copy over threshold, once. Within 20 ms the coloured spikes have spread through the raster, and after about 50 ms almost no spike is shared, while the two copies' population rates, shown below the figure, stay about the same. In the synchronous regular state the population rhythm survives, but 50 ms after the nudge two spikes in five still differ: which neuron fires on which cycle is lost.
+Nudge one neuron of the second copy over threshold, once. In the first 10 ms after the nudge, 1,026 spikes already differ between the copies, and 50 to 100 ms after it, 6,358 of their 6,450 spikes do, while the two copies' population rates, shown below the figure, stay about the same. In the synchronous regular state the population rhythm survives, but 50 ms after the nudge two spikes in five still differ: which neuron fires on which cycle is lost.
 
 For a simulator this means two runs of a chaotic network cannot agree spike for spike, unless every operation rounds identically. The meaningful comparison is the one this chapter used to tell the states apart: rates, CVs and Fano factors over many runs. Chapter 11 returns to this.
 
@@ -98,7 +98,7 @@ The same machinery runs Shiu et al.'s model of the whole fly brain, built from t
 
 ## Summary
 
-In a network where inhibition balances excitation, each neuron sits below threshold and fires on fluctuations, irregularly, as cortical neurons do. Brunel's network moves between four states as inhibition and drive change, told apart by the CV and the Fano factor, and a small copy shows them only if its synapses are scaled up to his total input. Balanced networks are chaotic: one nudged neuron makes two identical copies part within tens of milliseconds while their statistics stay the same. The next chapter puts the units back and looks at what real synapses and neurons add.
+With inhibition balancing excitation, each neuron sits below threshold and fires irregularly on fluctuations, and Brunel's network moves between four states as inhibition and drive change, though a small copy shows them only with its synapses scaled up to his total input. Balanced networks are chaotic: one nudged neuron makes two identical copies part within tens of milliseconds while their statistics stay the same. The next chapter puts the units back and looks at what real synapses and neurons add.
 
 ## References
 

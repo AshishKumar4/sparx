@@ -31,7 +31,7 @@ None of these is a bug in anyone's code. Each is a choice, and a model's results
 
 For a linear membrane with current input, chapter 2 found the step's exact solution, so the step size changes nothing at the instants the steps share. NEST's `iaf_psc_exp` integrates the same way, following Rotter and Diesmann, and sparx agrees with it to $10^{-13}$ mV.
 
-Conductances break this. Within a step a synaptic conductance decays, so the membrane's time constant changes during the step, and the equation has no simple exact solution. Every fixed-step simulator holds the conductance constant over the step and solves the membrane exactly for that value. Brian2's `exponential_euler` holds the value at the start of the step. sparx, by default, holds its exact average over the step. The difference is the order of the scheme: the error of the first falls in proportion to $\mathrm{d}t$, that of the second in proportion to $\mathrm{d}t^2$.
+Conductances break this. Within a step a synaptic conductance decays, so the membrane's time constant changes during the step, and the equation has no simple exact solution. NEST integrates it adaptively, in as many small steps as its error bound needs. Brian2's `exponential_euler` and sparx both hold the conductance constant over the step and solve the membrane exactly for that value, and differ in the value they hold: Brian2 holds the conductance at the start of the step, sparx, by default, its exact average over the step. The difference is the order of the scheme: the error of the first falls in proportion to $\mathrm{d}t$, that of the second in proportion to $\mathrm{d}t^2$.
 
 <ConvergenceChart />
 

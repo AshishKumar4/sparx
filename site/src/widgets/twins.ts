@@ -17,7 +17,7 @@ export function twins(root: HTMLElement, read: () => { g: number; eta: number })
 	let sim = new Twins({ order: 250, j: 1, ...read() });
 	const a = new Uint8Array(WINDOW * ROWS);
 	const b = new Uint8Array(WINDOW * ROWS);
-	const share = new Float32Array(WINDOW);
+	const differs = new Uint16Array(WINDOW);
 	const counts = new Uint16Array(WINDOW * 2);
 	let t = 0;
 	let nudgedAt = -1;
@@ -33,14 +33,13 @@ export function twins(root: HTMLElement, read: () => { g: number; eta: number })
 			inA += sim.a.network.fired[i];
 			inB += sim.b.network.fired[i];
 		}
-		const fired = inA + inB;
 		counts[at * 2] = inA;
 		counts[at * 2 + 1] = inB;
 		for (let r = 0; r < ROWS; r++) {
 			a[at * ROWS + r] = sim.a.network.fired[r];
 			b[at * ROWS + r] = sim.b.network.fired[r];
 		}
-		share[at] = fired ? differ / fired : 0;
+		differs[at] = differ;
 		t++;
 	};
 	for (let k = 0; k < 2000; k++) step();
@@ -89,9 +88,14 @@ export function twins(root: HTMLElement, read: () => { g: number; eta: number })
 		ctx.beginPath();
 		const bin = 20;
 		for (let s = Math.max(first, bin); s < t; s += bin) {
-			let sum = 0;
-			for (let k = 0; k < bin; k++) sum += share[(s - k) % WINDOW];
-			const y = bottom - (sum / bin) * (bottom - top);
+			let differ = 0;
+			let fired = 0;
+			for (let k = 0; k < bin; k++) {
+				const at = (s - k) % WINDOW;
+				differ += differs[at];
+				fired += counts[at * 2] + counts[at * 2 + 1];
+			}
+			const y = bottom - (fired ? differ / fired : 0) * (bottom - top);
 			if (s === Math.max(first, bin)) ctx.moveTo(x(s), y);
 			else ctx.lineTo(x(s), y);
 		}
@@ -106,7 +110,7 @@ export function twins(root: HTMLElement, read: () => { g: number; eta: number })
 			let rb = 0;
 			for (let k = 1; k <= 200; k++) {
 				const at = (t - k + WINDOW) % WINDOW;
-				recent += share[at];
+				recent += differs[at];
 				ra += counts[at * 2];
 				rb += counts[at * 2 + 1];
 			}
@@ -114,7 +118,7 @@ export function twins(root: HTMLElement, read: () => { g: number; eta: number })
 			status.textContent =
 				since === null
 					? `The two copies fire identically, at ${hz(ra)} Hz. Nudge one neuron in the second copy.`
-					: `${since} ms since the nudge · ${Math.round((recent / 200) * 100)}% of the last 20 ms of spikes differ · rates ${hz(ra)} and ${hz(rb)} Hz`;
+					: `${since} ms since the nudge · ${ra + rb ? Math.round((100 * recent) / (ra + rb)) : 0}% of the last 20 ms of spikes differ · rates ${hz(ra)} and ${hz(rb)} Hz`;
 		}
 	};
 
@@ -126,8 +130,10 @@ export function twins(root: HTMLElement, read: () => { g: number; eta: number })
 		colors = p;
 		draw();
 	});
+	const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 	let carry = 0;
 	animate(canvas, (seconds) => {
+		if (reduced) return;
 		carry += seconds * 500;
 		let n = 0;
 		while (carry >= 1 && n < 200) {
@@ -142,12 +148,14 @@ export function twins(root: HTMLElement, read: () => { g: number; eta: number })
 		nudge() {
 			sim.nudge();
 			nudgedAt = t;
+			if (reduced) for (let k = 0; k < 1000; k++) step();
+			draw();
 		},
 		restart() {
 			sim = new Twins({ order: 250, j: 1, ...read() });
 			a.fill(0);
 			b.fill(0);
-			share.fill(0);
+			differs.fill(0);
 			counts.fill(0);
 			nudgedAt = -1;
 			for (let k = 0; k < 2000; k++) step();

@@ -49,7 +49,7 @@ Now add background inhibition: a steady GABA-A conductance, like the one that on
 `PointNeuron` puts a neuron model together with the synapses onto it, by receptor name. `Receptor(Exponential(5.0), "conductance")` makes a synapse that decays in 5 ms and acts as a conductance, read against the reversal potential the neuron keeps for that name. The run prints the numbers above:
 
 ```
-held at -80 mV: 180 pA +2.83 mV, AMPA +3.67 mV, GABA-A -0.00 mV
+held at -80 mV: 180 pA +2.83 mV, AMPA +3.67 mV, GABA-A +0.00 mV
 held at -60 mV: 180 pA +2.83 mV, AMPA +2.75 mV, GABA-A -0.92 mV
 held at -40 mV: 180 pA +2.83 mV, AMPA +1.84 mV, GABA-A -1.84 mV
 held at -20 mV: 180 pA +2.83 mV, AMPA +0.92 mV, GABA-A -2.75 mV
@@ -129,7 +129,7 @@ Chapter 9 wired neurons at random. Real circuits are wired by measurement. Potja
 
 ## Summary
 
-A synapse opens channels, and the current through them depends on how far the membrane is from their reversal potential. Excitation weakens as the membrane depolarizes, inhibition near its reversal potential divides rather than subtracts, and NMDA receptors conduct only when the membrane is already depolarized. The spike itself is two voltage-gated conductances, sodium then potassium, and AdEx keeps their effect at a fraction of the cost. The next chapter asks how a simulator steps all of this through time, and how to tell whether two simulators agree.
+A synapse opens channels, and its current depends on how far the membrane is from their reversal potential: excitation weakens as the membrane depolarizes, inhibition near its reversal potential divides rather than subtracts, and NMDA receptors conduct only on a depolarized membrane. The spike itself is two voltage-gated conductances, sodium then potassium, which AdEx reduces to an exponential term and one adaptation current. The next chapter asks how a simulator steps all of this through time, and how to tell whether two simulators agree.
 
 ## References
 

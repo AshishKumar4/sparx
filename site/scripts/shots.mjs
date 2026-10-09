@@ -51,7 +51,9 @@ for (const size of widths) {
 				const width = document.documentElement.clientWidth;
 				const wide = [...document.querySelectorAll('main *')].filter((el) => {
 					const r = el.getBoundingClientRect();
-					return r.width > 0 && r.right > width + 1 && !el.closest('.expressive-code, .katex-display, table, .sl-markdown-content pre');
+					// KaTeX hides its MathML in a 1 px box and clips its stretchy SVGs, so neither shows past its formula.
+					const hidden = el.closest('.katex-mathml') || (el.closest('.katex') && el.closest('svg'));
+					return r.width > 0 && r.right > width + 1 && !hidden && !el.closest('.expressive-code, .katex-display, table, .sl-markdown-content pre');
 				});
 				return wide.slice(0, 5).map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')}`);
 			});

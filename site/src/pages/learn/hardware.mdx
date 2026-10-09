@@ -13,7 +13,7 @@ import exported from '../../../snippets/export.py?raw';
 
 ## Where spikes pay off
 
-Chapter 0 counted what a synapse costs: in a spiking network, work happens only when a spike arrives. A GPU does not exploit that. It computes every synapse at every step, and a silent neuron costs as much as a busy one. The saving is real only on hardware built around events, from the sensor that produces them to the chip that computes with them.
+Chapter 0 counted what a synapse costs: in a spiking network, work is needed only when a spike arrives. The usual way to run one on a GPU does not use that: it multiplies whole matrices of 0s and 1s, so a silent neuron costs as much as a busy one, and sparx's layers train this way. Software can skip silent neurons, as sparx's network simulator does when it delivers spikes as events. Hardware built around events goes further, from the sensor that produces them to the chip that computes with them.
 
 ## A camera that sends changes
 
@@ -82,7 +82,7 @@ What exports: `nn.Sequential` stacks of dense, convolution and flatten layers, h
 
 ## Summary
 
-Spikes save energy only on hardware that is idle when nothing happens. Event cameras send a pixel only when its log brightness changes, so a still scene costs nothing, and neuromorphic chips such as TrueNorth and Loihi compute only where spikes arrive. NIR describes a trained network in continuous time, so sparx can hand it to their tools; exporting fixes how sparx's discrete steps map to time constants. The next chapter follows one network from training to flight: the drone on the front page.
+Event cameras send a pixel only when its log brightness changes, so a still scene costs nothing, and neuromorphic chips such as TrueNorth and Loihi pay for a synapse when a spike crosses it. NIR describes a trained network in continuous time for their tools, and exporting it fixes how sparx's discrete steps map to time constants. The next chapter follows one network from training to flight: the drone on the front page.
 
 ## References
 

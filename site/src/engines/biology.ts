@@ -49,7 +49,9 @@ export interface Input {
 	jump: number;
 }
 
-/** `sparx.dynamics.LeakyIntegrateAndFire`: each step solved exactly with the conductances held, NMDA gated. */
+/** `sparx.dynamics.LeakyIntegrateAndFire`: each step solved exactly with the current and conductances held, NMDA
+ * gated, current waveforms integrated exactly, and a voltage jump landing before the threshold test; then the
+ * reset, held for `t_ref`. */
 export class LeakyIntegrateAndFire {
 	v: number;
 	refractory = 0;
@@ -66,7 +68,13 @@ export class LeakyIntegrateAndFire {
 		this.v = e_l;
 	}
 
-	step(input: Input, dt: number): number {
+	/** One step on a held current `i` (pA) and a voltage `jump` (mV). */
+	step(i: number, dt: number, jump = 0): number {
+		return this.receive({ current: i, currents: [], conductance: [], jump }, dt);
+	}
+
+	/** One step on everything a `SynapticInput` carries. */
+	receive(input: Input, dt: number): number {
 		const g_l = this.c_m / this.tau_m;
 		let g_syn = 0;
 		let syn_drive = 0;
@@ -119,7 +127,7 @@ export class PointNeuron {
 			if (kind === 'current') currents.push(term);
 			else conductance.push([name, 0 + (this.hold === 'start' ? term.amplitude : mean(term, dt))]);
 		}
-		const fired = this.cell.step({ current, currents, conductance: [...conductance, ...held], jump: 0 }, dt);
+		const fired = this.cell.receive({ current, currents, conductance: [...conductance, ...held], jump: 0 }, dt);
 		for (const [name, { tau }] of Object.entries(this.receptors))
 			this.synapses[name] = this.synapses[name] * Math.exp(-dt / tau) + (arriving[name] ?? 0);
 		return fired;

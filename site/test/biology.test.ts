@@ -40,7 +40,7 @@ test('LeakyIntegrateAndFire on held AMPA, GABA-A and NMDA conductances', () => {
 	const names = Object.keys(conductance);
 	const v: number[] = [];
 	const fired = current.map((pA: number, t: number) => {
-		const s = cell.step({ current: pA, currents: [], conductance: names.map((name) => [name, conductance[name][t]]), jump: 0 }, dt);
+		const s = cell.receive({ current: pA, currents: [], conductance: names.map((name) => [name, conductance[name][t]]), jump: 0 }, dt);
 		v.push(cell.v);
 		return s;
 	});

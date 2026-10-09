@@ -23,7 +23,8 @@ def psp(receptor, kind, weight, held):
     (_, v), _ = sparx.run(cell, Arrivals(current, {receptor: spikes}),
                           dt=dt, record=lambda s: s.neuron.v)
     change = v[arrive:] - v[arrive - 1]
-    return float(change[jnp.argmax(jnp.abs(change))])
+    peak = float(change[jnp.argmax(jnp.abs(change))])
+    return round(peak, 2) + 0.0                  # no -0.00
 
 
 # 3 nS of AMPA at rest, 60 mV from its reversal, passes 180 pA.

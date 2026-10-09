@@ -150,15 +150,22 @@ export function recovery(canvas: HTMLCanvasElement, model: PilotModel, report: (
 		ctx.fillText(`${(now / 100).toFixed(2)} s`, right.x + right.w - 44, top + 12);
 	}
 
+	// Steps of 10 ms not yet shown, so the replay runs in real time at any frame rate.
+	let owed = 0;
 	animate(canvas, (dt) => {
 		if (reduced || cursor >= STEPS) return;
-		cursor = Math.min(STEPS, cursor + Math.max(1, Math.round(dt * 100)));
+		owed += dt * 100;
+		const steps = Math.floor(owed);
+		if (!steps) return;
+		owed -= steps;
+		cursor = Math.min(STEPS, cursor + steps);
 		draw();
 	});
 	return {
 		start(name: string) {
 			flight = fly(model, STARTS[name]);
 			cursor = reduced ? STEPS : 0;
+			owed = 0;
 			report(flight);
 			draw();
 		},

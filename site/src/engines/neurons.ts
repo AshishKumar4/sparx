@@ -67,36 +67,7 @@ export class CurrentLIF {
 	}
 }
 
-/** `sparx.dynamics.LeakyIntegrateAndFire` on a current `i` (pA) held over the step and a voltage `jump`
- * (mV) that lands before the threshold test: the exact solution of the membrane, then the reset held
- * for `t_ref`. */
-export class LeakyIntegrateAndFire {
-	v: number;
-	refractory = 0;
-	constructor(
-		public tau_m = 20,
-		public c_m = 200,
-		public e_l = -60,
-		public v_th = -50,
-		public v_reset = -60,
-		public t_ref = 5,
-		public i_e = 0,
-	) {
-		this.v = e_l;
-	}
-
-	step(i: number, dt: number, jump = 0): number {
-		const g = this.c_m / this.tau_m;
-		const target = (g * this.e_l + this.i_e + i) / g;
-		const integrated = target + (this.v - target) * Math.exp(-dt / (this.c_m / g)) + jump;
-		const held = this.refractory > dt / 2;
-		const v = held ? this.v_reset : integrated;
-		const fired = !held && v >= this.v_th;
-		this.v = fired ? this.v_reset : v;
-		this.refractory = fired ? this.t_ref : Math.max(this.refractory - dt, 0);
-		return fired ? 1 : 0;
-	}
-}
+export { LeakyIntegrateAndFire } from './biology';
 
 /** `sparx.dynamics.Izhikevich` with `scheme="published"`: two half-steps of `v`, then `u` from the new
  * `v`; a spike at 30 mV sets `v` to `c` and adds `d` to `u`. */
