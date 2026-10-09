@@ -5,7 +5,7 @@
 #
 # The script's stdout comes back; a script that writes --out <file> gets armada's {out}.
 set -eu
-commit=$1; label=$2; shift 2
+commit=$(git rev-parse "$1"); label=$2; shift 2
 here=$(dirname "$0")
 exec bun "$HOME/armada/src/cli.ts" map --connection="$HOME/.config/armada/armada-dew.json" \
   --env="$here/recipe.json" --size=small --pool=1 --times=1 --output --json --label="$label" -- \

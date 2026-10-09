@@ -7,6 +7,7 @@ where it should be, summed over each flight.
 
     python site/lab/pilot.py train --out site/public/pilot      # writes pilot.json and pilot.nir
     python site/lab/pilot.py evaluate --model site/public/pilot/pilot.json
+    python site/lab/pilot.py record --out site/test/fixtures/pilot.json
 
 The browser steps the same network and the same physics from pilot.json
 (site/src/engines/pilot.ts); `record` writes the flights the browser's
@@ -290,6 +291,26 @@ def evaluate(args: argparse.Namespace) -> None:
     print(json.dumps(evaluation(net, params, drone, args.seed)))
 
 
+def record(args: argparse.Namespace) -> None:
+    """Flights in float64 for the browser's stepper to match: a desktop's box and a phone's, from any
+    attitude, after moving targets, with gusts."""
+    with jax.enable_x64(new_val=True):
+        net, params, drone = from_json(json.loads(Path(args.model).read_text()))
+        params = jax.tree.map(lambda p: jnp.asarray(p, jnp.float64), params)
+        flights = []
+        for k, (width, steps) in enumerate([(3.0, 800), (1.0, 600)]):
+            s0, targets, kicks, box = Flights(steps=steps, inverted=1.0, gust=1.0).draw(
+                drone, jax.random.key(args.seed + k), 1)
+            box = box.at[:, 0].set(width)
+            states, us, spikes = fly(net, params, drone, s0, targets, kicks, box)
+            flights.append({"box": box[0].tolist(), "start": s0[0].tolist(),
+                            "targets": targets[:, 0].tolist(), "kicks": kicks[:, 0].tolist(),
+                            "states": states[:, 0].tolist(), "readout": us[:, 0].tolist(),
+                            "spikes": [np.flatnonzero(row).tolist() for row in np.asarray(spikes[:, 0])]})
+    Path(args.out).write_text(json.dumps({"dtype": "float64", "jax": jax.__version__,
+                                          "sparx": sparx.__version__, "flights": flights}))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -312,6 +333,11 @@ def main() -> None:
     e.add_argument("--model", default="site/public/pilot/pilot.json")
     e.add_argument("--seed", type=int, default=7)
     e.set_defaults(func=evaluate)
+    r = commands.add_parser("record")
+    r.add_argument("--model", default="site/public/pilot/pilot.json")
+    r.add_argument("--out", default="site/test/fixtures/pilot.json")
+    r.add_argument("--seed", type=int, default=11)
+    r.set_defaults(func=record)
     args = parser.parse_args()
     args.func(args)
 
