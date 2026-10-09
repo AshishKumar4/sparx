@@ -86,3 +86,9 @@ jobs:
         name: shots
         path: site/shots
         retention-days: 14
+    # What `wrangler deploy` uploads, so a deploy ships the commit these checks passed on.
+    - uses: actions/upload-artifact@v4
+      with:
+        name: dist
+        path: site/dist
+        retention-days: 14
