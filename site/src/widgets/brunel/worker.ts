@@ -13,6 +13,8 @@ export interface Setup {
 	shown: number[];
 	/** Simulated milliseconds per second of wall time. */
 	speed: number;
+	/** Simulated milliseconds sent in the first batch, so the figure starts full. */
+	ahead: number;
 }
 
 export interface Batch {
@@ -63,7 +65,7 @@ self.onmessage = (event: MessageEvent<Setup | 'pause' | 'resume'>) => {
 	isiCount = new Uint32Array(ne);
 	windowCount = windows = countSum = countSquares = 0;
 	clearTimeout(timer);
-	tick(performance.now());
+	tick(performance.now(), setup.ahead);
 };
 
 function statistics(): { cv: number; fano: number } {
@@ -81,11 +83,11 @@ function statistics(): { cv: number; fano: number } {
 	};
 }
 
-function tick(previous: number) {
+function tick(previous: number, ahead = 0) {
 	if (!run || !setup) return;
 	const now = performance.now();
 	const dt = run.network.spec.dt;
-	const steps = Math.max(1, Math.min(400, Math.round((((now - previous) / 1000) * setup.speed) / dt)));
+	const steps = ahead ? Math.round(ahead / dt) : Math.max(1, Math.min(400, Math.round((((now - previous) / 1000) * setup.speed) / dt)));
 	const spikes: number[] = [];
 	const excitatory = new Int32Array(steps);
 	const inhibitory = new Int32Array(steps);

@@ -48,7 +48,7 @@ export function raster(canvas: HTMLCanvasElement, initial: Settings, { window = 
 		rate.fill(0);
 		now = 0;
 		cv = fano = Number.NaN;
-		const setup: Setup = { ...settings, seed: 7, shown: shownOf(), speed };
+		const setup: Setup = { ...settings, seed: 7, shown: shownOf(), speed, ahead: window };
 		worker.postMessage(setup);
 	};
 	worker.onmessage = (event: MessageEvent<Batch>) => {
