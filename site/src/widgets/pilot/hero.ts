@@ -5,6 +5,7 @@ import { INPUTS, Pilot, type PilotModel } from '../../engines/pilot';
 import { alpha, animate, fit, onTheme, type Palette } from '../theme';
 
 const HEIGHT = 1.5;
+const SHORT = ['Δx', 'Δy', 'vx', 'vy', 'sin', 'cos', 'ω'];
 const WIDTHS = [0.9, 4.0];
 
 interface Spark {
@@ -74,6 +75,7 @@ export function hero(root: HTMLElement, model: PilotModel): void {
 	let origin = [0, 0];
 	let net = { x: 0, y: 0, w: 0, h: 0 };
 	let cell = 10;
+	let narrow = false;
 
 	const layout = () => {
 		view = fit(canvas);
@@ -84,7 +86,8 @@ export function hero(root: HTMLElement, model: PilotModel): void {
 		scale = worldHeight / (2 * HEIGHT);
 		box = [Math.min(Math.max(view.width / (2 * scale), WIDTHS[0]), WIDTHS[1]), HEIGHT];
 		origin = [view.width / 2, worldHeight / 2];
-		const labelW = Math.min(86, net.w * 0.2);
+		narrow = net.w < 480;
+		const labelW = narrow ? 54 : Math.min(86, net.w * 0.2);
 		const outW = Math.min(64, net.w * 0.14);
 		const grid = Math.min((net.w - labelW - outW - 3 * 18) / 2, net.h - 30);
 		cell = grid / 8;
@@ -104,7 +107,8 @@ export function hero(root: HTMLElement, model: PilotModel): void {
 	desk.addEventListener('change', layout);
 	onTheme((p) => (colors = p));
 
-	const home = (): [number, number] => (desk.matches ? [0.42 * box[0], 0.35] : [0, 0]);
+	// Wide, the drone idles right of the copy and above the panel; narrow, below the copy.
+	const home = (): [number, number] => (desk.matches ? [0.42 * box[0], 0.35] : [0, -0.95]);
 	pilot.state.set([home()[0], home()[1], 0, 0, 0, 0]);
 	let target = home();
 	let pointer: [number, number] | null = null;
@@ -248,7 +252,7 @@ export function hero(root: HTMLElement, model: PilotModel): void {
 		if (!idle && pointer) target = clampTarget(pointer[0], pointer[1]);
 		else if (idle) {
 			const [hx, hy] = home();
-			const reach = desk.matches ? [0.3 * box[0], 0.55] : [0.6 * box[0], 0.75];
+			const reach = desk.matches ? [0.3 * box[0], 0.55] : [0.55 * box[0], 0.3];
 			target = clampTarget(hx + reach[0] * Math.sin(0.23 * clock), hy + reach[1] * Math.sin(0.41 * clock + 0.7));
 		}
 		if (grabbed) {
@@ -461,7 +465,7 @@ export function hero(root: HTMLElement, model: PilotModel): void {
 			const n = nodes[i];
 			const value = Math.max(-1, Math.min(1, pilot.obs[i]));
 			ctx.fillStyle = colors.muted;
-			ctx.fillText(INPUTS[i], n.x - 30, n.y);
+			ctx.fillText(narrow ? SHORT[i] : INPUTS[i], n.x - 30, n.y);
 			ctx.fillStyle = alpha(colors.ink, 0.12);
 			ctx.fillRect(n.x - 24, n.y - 2, 20, 4);
 			ctx.fillStyle = colors.membrane;
@@ -517,11 +521,11 @@ export function hero(root: HTMLElement, model: PilotModel): void {
 		const grid = cell * 8;
 		const top = nodes[H0].y - cell / 2 - 10;
 		ctx.fillStyle = colors.muted;
-		ctx.fillText('layer 1 · 64 LIF', nodes[H0].x - cell / 2 + grid / 2, top);
-		ctx.fillText('layer 2 · 64 LIF', nodes[H0 + half].x - cell / 2 + grid / 2, top);
+		ctx.fillText(narrow ? '64 LIF' : 'layer 1 · 64 LIF', nodes[H0].x - cell / 2 + grid / 2, top);
+		ctx.fillText(narrow ? '64 LIF' : 'layer 2 · 64 LIF', nodes[H0 + half].x - cell / 2 + grid / 2, top);
 		ctx.fillText('rotors', nodes[O0].x, top);
 		ctx.textAlign = 'right';
-		ctx.fillText('readings', nodes[0].x - 4, top);
+		ctx.fillText(narrow ? 'in' : 'readings', nodes[0].x - 4, top);
 	}
 
 	const frame = (seconds: number) => {
@@ -542,7 +546,7 @@ export function hero(root: HTMLElement, model: PilotModel): void {
 				p.life -= seconds;
 			}
 			for (let k = sparks.length - 1; k >= 0; k--) if (sparks[k].life <= 0) sparks.splice(k, 1);
-			const fade = Math.exp(-seconds / 0.045);
+			const fade = Math.exp(-seconds / 0.03);
 			for (let k = 0; k < flash.length; k++) flash[k] *= fade;
 			if (rate) rate.textContent = `${Math.round(recent / hidden / dt)} Hz`;
 		}

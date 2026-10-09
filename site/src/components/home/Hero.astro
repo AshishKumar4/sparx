@@ -66,15 +66,15 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 		position: relative;
 		display: grid;
 		grid-template-columns: minmax(0, 1fr);
-		grid-template-areas: 'copy' 'stage' 'panel';
+		grid-template-areas: 'stage' 'panel';
 		margin-inline: calc(-1 * var(--sl-content-pad-x, 1rem));
 		border-bottom: 1px solid var(--sx-line);
 	}
 	.stage {
 		grid-area: stage;
 		position: relative;
-		height: max(34rem, 88svh);
-		border-block: 1px solid var(--sx-line);
+		height: max(36rem, calc(100svh - var(--sl-nav-height, 3.5rem)));
+		border-bottom: 1px solid var(--sx-line);
 		background: radial-gradient(ellipse at 50% 100%, var(--sx-membrane-soft), transparent 65%), var(--sx-page);
 		touch-action: pan-y;
 	}
@@ -94,14 +94,25 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 		left: var(--sl-content-pad-x, 1rem);
 		right: var(--sl-content-pad-x, 1rem);
 		bottom: 1rem;
-		height: 38%;
+		height: min(16rem, 32%);
 		pointer-events: none;
 	}
 	.copy {
-		grid-area: copy;
+		grid-area: stage;
+		align-self: start;
 		position: relative;
 		z-index: 1;
-		padding: 2.25rem var(--sl-content-pad-x, 1rem) 1.75rem;
+		padding: 1.75rem var(--sl-content-pad-x, 1rem) 0;
+		pointer-events: none;
+	}
+	.copy a,
+	.copy :global(.install) {
+		pointer-events: auto;
+	}
+	@media (max-width: 63.99rem) {
+		.copy :global(.install) {
+			display: none;
+		}
 	}
 	h1 {
 		font-size: clamp(2.4rem, 1.3rem + 4.2vw, 4.75rem);
@@ -114,8 +125,8 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 		text-wrap: balance;
 	}
 	.lede {
-		margin: 1.125rem 0 0;
-		font-size: clamp(1.05rem, 0.95rem + 0.35vw, 1.2rem);
+		margin: 1rem 0 0;
+		font-size: clamp(1rem, 0.92rem + 0.35vw, 1.2rem);
 		line-height: 1.5;
 		color: var(--sx-ink-2);
 		max-width: 31rem;
@@ -264,11 +275,6 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 			top: clamp(2rem, 7svh, 5rem);
 			left: max(2.5rem, calc((100vw - 84rem) / 2));
 			padding: 0;
-			pointer-events: none;
-		}
-		.copy a,
-		.copy :global(.install) {
-			pointer-events: auto;
 		}
 		.panel {
 			position: absolute;

@@ -91,17 +91,23 @@ def advance(drone: Drone, s: jax.Array, force: jax.Array, box: jax.Array) -> jax
 
 
 def network(hidden: int = 64, tau: float = 3.0, readout_tau: float = 5.0) -> nn.Sequential:
-    return nn.Sequential([
-        nn.Dense(hidden), LIF(tau=tau, reset="zero"),
-        nn.Dense(hidden), LIF(tau=tau, reset="zero"),
-        nn.Dense(2), LI(tau=readout_tau),
-    ])
+    return nn.Sequential(
+        [
+            nn.Dense(hidden),
+            LIF(tau=tau, reset="zero"),
+            nn.Dense(hidden),
+            LIF(tau=tau, reset="zero"),
+            nn.Dense(2),
+            LI(tau=readout_tau),
+        ]
+    )
 
 
 def at_rest(net: nn.Sequential, params: dict, batch: int, inputs: int = 7) -> dict:
     """The network's `state` collection with every neuron at rest, for `batch` drones."""
-    shapes = jax.eval_shape(lambda: net.apply({"params": params}, jnp.zeros((1, batch, inputs)),
-                                              mutable=["state"])[1]["state"])
+    shapes = jax.eval_shape(
+        lambda: net.apply({"params": params}, jnp.zeros((1, batch, inputs)), mutable=["state"])[1]["state"]
+    )
     return jax.tree.map(lambda leaf: jnp.zeros(leaf.shape, leaf.dtype), shapes)
 
 
@@ -115,6 +121,7 @@ def act(net: nn.Sequential, params: dict, carried: dict, obs: jax.Array):
 
 def fly(net, params, drone, s0, targets, kicks, box):
     """Fly from `s0` after `targets` `[T, B, 2]`, with velocity kicks `[T, B, 6]` added before each step."""
+
     def step(carry, inputs):
         s, carried = carry
         target, kick = inputs
@@ -161,13 +168,15 @@ class Flights:
         targets = jnp.take_along_axis(spots, index[..., None], axis=0)
         gusts = jax.random.uniform(ks[9], (self.steps, batch)) < drone.dt / self.gust
         size = jax.random.normal(jax.random.fold_in(ks[9], 1), (self.steps, batch, 6)) * jnp.array(
-            [0, 0, self.gust_speed, self.gust_speed, 0, self.gust_spin])
+            [0, 0, self.gust_speed, self.gust_speed, 0, self.gust_spin]
+        )
         kicks = jnp.where(gusts[..., None], size, 0.0).at[0].set(0.0)
         return s0, targets, kicks, box
 
 
-def flight_cost(states: jax.Array, targets: jax.Array, spikes: jax.Array,
-                rates: tuple[float, float]) -> tuple[jax.Array, dict]:
+def flight_cost(
+    states: jax.Array, targets: jax.Array, spikes: jax.Array, rates: tuple[float, float]
+) -> tuple[jax.Array, dict]:
     distance = jnp.sqrt(jnp.sum((states[..., :2] - targets) ** 2, -1) + 1e-4)
     tilt = 1 - jnp.cos(states[..., 4])
     spin = states[..., 5] ** 2
@@ -183,16 +192,31 @@ def to_json(net: nn.Sequential, params: dict, drone: Drone, meta: dict) -> dict:
     for k, layer in enumerate(net.layers):
         if isinstance(layer, nn.Dense):
             p = params[f"layers_{k}"]
-            layers.append({"kind": "dense",
-                           "kernel": _b64(p["kernel"]), "bias": _b64(p["bias"]),
-                           "inputs": int(p["kernel"].shape[0]), "outputs": int(p["kernel"].shape[1])})
+            layers.append(
+                {
+                    "kind": "dense",
+                    "kernel": _b64(p["kernel"]),
+                    "bias": _b64(p["bias"]),
+                    "inputs": int(p["kernel"].shape[0]),
+                    "outputs": int(p["kernel"].shape[1]),
+                }
+            )
         elif isinstance(layer, LIF):
-            layers.append({"kind": "lif", "decay": sparx.dynamics.decay(layer.tau),
-                           "threshold": layer.threshold, "reset": layer.reset})
+            layers.append(
+                {
+                    "kind": "lif",
+                    "decay": sparx.dynamics.decay(layer.tau),
+                    "threshold": layer.threshold,
+                    "reset": layer.reset,
+                }
+            )
         elif isinstance(layer, LI):
             layers.append({"kind": "li", "decay": sparx.dynamics.decay(layer.tau)})
-    return {"drone": dataclasses.asdict(drone) | {"hover_logit": drone.hover_logit},
-            "layers": layers, "meta": meta}
+    return {
+        "drone": dataclasses.asdict(drone) | {"hover_logit": drone.hover_logit},
+        "layers": layers,
+        "meta": meta,
+    }
 
 
 def from_json(model: dict) -> tuple[nn.Sequential, dict, Drone]:
@@ -203,8 +227,10 @@ def from_json(model: dict) -> tuple[nn.Sequential, dict, Drone]:
     for k, layer in enumerate(model["layers"]):
         if layer["kind"] == "dense":
             shape = (layer["inputs"], layer["outputs"])
-            params[f"layers_{k}"] = {"kernel": _unb64(layer["kernel"]).reshape(shape),
-                                     "bias": _unb64(layer["bias"])}
+            params[f"layers_{k}"] = {
+                "kernel": _unb64(layer["kernel"]).reshape(shape),
+                "bias": _unb64(layer["bias"]),
+            }
     fields = {f.name for f in dataclasses.fields(Drone)}
     return net, params, Drone(**{k: v for k, v in model["drone"].items() if k in fields})
 
@@ -219,8 +245,13 @@ def _unb64(s: str) -> np.ndarray:
 
 def train(args: argparse.Namespace) -> None:
     drone = Drone()
-    flights = Flights(steps=args.horizon, speed=args.speed, spin=args.spin, gust_speed=args.gust_speed,
-                      gust_spin=args.gust_spin)
+    flights = Flights(
+        steps=args.horizon,
+        speed=args.speed,
+        spin=args.spin,
+        gust_speed=args.gust_speed,
+        gust_spin=args.gust_spin,
+    )
     net = network(args.hidden, args.tau, args.readout_tau)
     params = net.init(jax.random.key(args.seed), jnp.zeros((1, 1, 7)))["params"]
     warmup = min(100, args.steps // 10)
@@ -245,17 +276,27 @@ def train(args: argparse.Namespace) -> None:
         key, sub = jax.random.split(key)
         params, opt_state, loss, aux, norm = update(params, opt_state, sub)
         if step % args.log_every == 0 or step == 1:
-            row = {"step": step, "loss": float(loss), "distance": float(aux["distance"]),
-                   "rate": float(aux["rate"]), "grad_norm": float(norm),
-                   "seconds": round(time.time() - start, 1)}
+            row = {
+                "step": step,
+                "loss": float(loss),
+                "distance": float(aux["distance"]),
+                "rate": float(aux["rate"]),
+                "grad_norm": float(norm),
+                "seconds": round(time.time() - start, 1),
+            }
             history.append(row)
             print(json.dumps(row), flush=True)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    meta = {"trained": {k: v for k, v in vars(args).items() if k not in ("func", "out")},
-            "history": history, "backend": jax.default_backend(), "devices": str(jax.devices()[0]),
-            "jax": jax.__version__, "sparx": sparx.__version__}
+    meta = {
+        "trained": {k: v for k, v in vars(args).items() if k not in ("func", "out")},
+        "history": history,
+        "backend": jax.default_backend(),
+        "devices": str(jax.devices()[0]),
+        "jax": jax.__version__,
+        "sparx": sparx.__version__,
+    }
     model = to_json(net, params, drone, meta)
     model["evaluation"] = evaluation(net, params, drone, args.seed + 2)
     (out / "pilot.json").write_text(json.dumps(model))
@@ -267,6 +308,7 @@ def export_nir(net: nn.Sequential, params: dict, drone: Drone, path: Path) -> No
     import nir
 
     from sparx.nir import to_nir
+
     nir.write(str(path), to_nir(net, {"params": params}, dt=drone.dt))
 
 
@@ -288,16 +330,20 @@ def evaluation(net, params, drone: Drone, seed: int, flights: int = 1000) -> dic
     still = Flights(steps=steps, inverted=0.5, gust=1e9, retarget=1e9)
     s0, arrived, first, distance, spikes = arrivals(still, seed)
     inverted = np.cos(np.asarray(s0[:, 4])) < 0
-    _, thrown, _, _, _ = arrivals(Flights(steps=steps, inverted=0.5, speed=4.0, spin=15.0, gust=1e9,
-                                          retarget=1e9), seed + 1)
-    return {"flights": flights, "seconds": steps * drone.dt,
-            "arrived": float(arrived.mean()),
-            "arrived_from_inverted": float(arrived[inverted].mean()),
-            "inverted_starts": int(inverted.sum()),
-            "arrived_thrown": float(thrown.mean()),
-            "median_time_s": float(np.median(first[arrived])) if arrived.any() else None,
-            "final_distance_median_m": float(np.median(distance[-1])),
-            "rate_per_step": float(jnp.mean(spikes))}
+    _, thrown, _, _, _ = arrivals(
+        Flights(steps=steps, inverted=0.5, speed=4.0, spin=15.0, gust=1e9, retarget=1e9), seed + 1
+    )
+    return {
+        "flights": flights,
+        "seconds": steps * drone.dt,
+        "arrived": float(arrived.mean()),
+        "arrived_from_inverted": float(arrived[inverted].mean()),
+        "inverted_starts": int(inverted.sum()),
+        "arrived_thrown": float(thrown.mean()),
+        "median_time_s": float(np.median(first[arrived])) if arrived.any() else None,
+        "final_distance_median_m": float(np.median(distance[-1])),
+        "rate_per_step": float(jnp.mean(spikes)),
+    }
 
 
 def evaluate(args: argparse.Namespace) -> None:
@@ -314,20 +360,96 @@ def record(args: argparse.Namespace) -> None:
         flights = []
         for k, (width, steps) in enumerate([(3.0, 800), (1.0, 600)]):
             s0, targets, kicks, box = Flights(steps=steps, inverted=1.0, gust=1.0).draw(
-                drone, jax.random.key(args.seed + k), 1)
+                drone, jax.random.key(args.seed + k), 1
+            )
             box = box.at[:, 0].set(width)
             states, us, spikes = fly(net, params, drone, s0, targets, kicks, box)
-            flights.append({"box": box[0].tolist(), "start": s0[0].tolist(),
-                            "targets": targets[:, 0].tolist(), "kicks": kicks[:, 0].tolist(),
-                            "states": states[:, 0].tolist(), "readout": us[:, 0].tolist(),
-                            "spikes": [np.flatnonzero(row).tolist() for row in np.asarray(spikes[:, 0])]})
-    Path(args.out).write_text(json.dumps({"dtype": "float64", "jax": jax.__version__,
-                                          "sparx": sparx.__version__, "flights": flights}))
+            flights.append(
+                {
+                    "box": box[0].tolist(),
+                    "start": s0[0].tolist(),
+                    "targets": targets[:, 0].tolist(),
+                    "kicks": kicks[:, 0].tolist(),
+                    "states": states[:, 0].tolist(),
+                    "readout": us[:, 0].tolist(),
+                    "spikes": [np.flatnonzero(row).tolist() for row in np.asarray(spikes[:, 0])],
+                }
+            )
+    Path(args.out).write_text(
+        json.dumps(
+            {"dtype": "float64", "jax": jax.__version__, "sparx": sparx.__version__, "flights": flights}
+        )
+    )
+
+
+def lesions(args: argparse.Namespace) -> None:
+    """How often the pilot still arrives with neurons silenced: each count of silenced neurons, drawn five
+    times from both layers. Silencing a neuron zeroes its outgoing weights, which leaves the rest of the
+    network as the browser's silenced neuron does, sending nothing."""
+    net, params, drone = from_json(json.loads(Path(args.model).read_text()))
+    rng = np.random.default_rng(args.seed)
+    rows = []
+    for count in (0, 8, 16, 24, 32, 48, 64, 80, 96, 112):
+        arrived = []
+        for draw in range(5):
+            cut = rng.choice(128, count, replace=False)
+            silenced = jax.tree.map(np.array, params)
+            for neuron in cut:
+                layer = "layers_2" if neuron < 64 else "layers_4"
+                silenced[layer]["kernel"][neuron % 64] = 0.0
+            arrived.append(evaluation(net, silenced, drone, args.seed + draw, flights=500)["arrived"])
+        rows.append({"silenced": int(count), "arrived": arrived})
+        print(json.dumps(rows[-1]), flush=True)
+    Path(args.out).write_text(json.dumps({"flights": 500, "draws": 5, "rows": rows}))
+
+
+def describe_nir(args: argparse.Namespace) -> None:
+    """The pilot's NIR graph node by node, and the network sparx reads back from it, run beside ours."""
+    import nir
+
+    from sparx.nir import from_nir
+
+    model = json.loads(Path(args.model).read_text())
+    net, params, drone = from_json(model)
+    graph = nir.read(args.nir)
+    nodes = []
+    for name, node in graph.nodes.items():
+        fields = {}
+        for key, value in vars(node).items():
+            if isinstance(value, np.ndarray) and value.size and key not in ("input_type", "output_type"):
+                fields[key] = {
+                    "shape": list(value.shape),
+                    "mean": float(np.mean(value)),
+                    "min": float(np.min(value)),
+                    "max": float(np.max(value)),
+                }
+        nodes.append({"name": name, "type": type(node).__name__, "fields": fields})
+    imported, variables = from_nir(graph, dt=drone.dt)
+    x = jax.random.normal(jax.random.key(args.seed), (200, 8, 7))
+    ours = net.apply({"params": params}, x)
+    theirs = imported.apply(variables, x)
+    Path(args.out).write_text(
+        json.dumps(
+            {
+                "nodes": nodes,
+                "edges": [list(e) for e in graph.edges],
+                "metadata": {k: str(v) for k, v in graph.metadata.items()},
+                "bytes": Path(args.nir).stat().st_size,
+                "nir": nir.__version__ if hasattr(nir, "__version__") else None,
+                "round_trip": {
+                    "steps": 200,
+                    "batch": 8,
+                    "largest_difference": float(jnp.max(jnp.abs(ours - theirs))),
+                },
+            }
+        )
+    )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     commands = parser.add_subparsers(required=True)
     t = commands.add_parser("train")
     t.add_argument("--out", default="site/public/pilot")
@@ -356,6 +478,17 @@ def main() -> None:
     r.add_argument("--out", default="site/test/fixtures/pilot.json")
     r.add_argument("--seed", type=int, default=11)
     r.set_defaults(func=record)
+    les = commands.add_parser("lesions")
+    les.add_argument("--model", default="site/public/pilot/pilot.json")
+    les.add_argument("--out", default="site/public/pilot/lesions.json")
+    les.add_argument("--seed", type=int, default=21)
+    les.set_defaults(func=lesions)
+    n = commands.add_parser("nir")
+    n.add_argument("--model", default="site/public/pilot/pilot.json")
+    n.add_argument("--nir", default="site/public/pilot/pilot.nir")
+    n.add_argument("--out", default="site/public/pilot/nir.json")
+    n.add_argument("--seed", type=int, default=5)
+    n.set_defaults(func=describe_nir)
     args = parser.parse_args()
     args.func(args)
 

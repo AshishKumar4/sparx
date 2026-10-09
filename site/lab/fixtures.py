@@ -46,13 +46,16 @@ def neurons(rng: np.random.Generator) -> dict:
     for reset in ("subtract", "zero", "none"):
         cell = LIFCell(decay=decay(tau=12.0), threshold=1.0, reset=reset)
         (out, v), _ = run(cell, jnp.asarray(drive), record=lambda s: s.v)
-        lif[reset] = {"spikes": np.flatnonzero(np.asarray(out.value)).tolist(),
-                      "v": np.asarray(v).tolist()}
+        lif[reset] = {"spikes": np.flatnonzero(np.asarray(out.value)).tolist(), "v": np.asarray(v).tolist()}
     current = 300.0 + 250.0 * rng.random(3000)
     cell = LeakyIntegrateAndFire()
     (out, v), _ = run(cell, SynapticInput(current=jnp.asarray(current)), dt=0.1, record=lambda s: s.v)
-    physical = {"current": current.tolist(), "dt": 0.1, "v": np.asarray(v).tolist(),
-                "spikes": np.flatnonzero(np.asarray(out.value)).tolist()}
+    physical = {
+        "current": current.tolist(),
+        "dt": 0.1,
+        "v": np.asarray(v).tolist(),
+        "spikes": np.flatnonzero(np.asarray(out.value)).tolist(),
+    }
     izhikevich = {}
     # Compiled, XLA fuses the quadratic membrane's arithmetic and rounds its last bit differently, which
     # the membrane amplifies into a step's difference in a spike (docs/fidelity.md); run op by op.
@@ -61,12 +64,20 @@ def neurons(rng: np.random.Generator) -> dict:
         current_i = np.where(np.arange(steps_i) > 200, 10.0, 0.0)
         cell = Izhikevich(a=a, b=b, c=c, d=d)
         with jax.disable_jit():
-            (out, v), _ = run(cell, SynapticInput(current=jnp.asarray(current_i)), dt=0.1,
-                              record=lambda s: s.v)
-        izhikevich[name] = {"spikes": np.flatnonzero(np.asarray(out.value)).tolist(),
-                            "v": np.asarray(v).tolist()}
-    return {"drive": drive.tolist(), "lif": lif, "physical": physical, "izhikevich": izhikevich,
-            "izhikevich_current": {"after": 200, "amplitude": 10.0, "dt": 0.1, "steps": 2000}}
+            (out, v), _ = run(
+                cell, SynapticInput(current=jnp.asarray(current_i)), dt=0.1, record=lambda s: s.v
+            )
+        izhikevich[name] = {
+            "spikes": np.flatnonzero(np.asarray(out.value)).tolist(),
+            "v": np.asarray(v).tolist(),
+        }
+    return {
+        "drive": drive.tolist(),
+        "lif": lif,
+        "physical": physical,
+        "izhikevich": izhikevich,
+        "izhikevich_current": {"after": 200, "amplitude": 10.0, "dt": 0.1, "steps": 2000},
+    }
 
 
 def filtered(x: jax.Array, keep: float) -> jax.Array:
@@ -83,8 +94,11 @@ def teach(rng: np.random.Generator) -> dict:
     target[[40, 90, 150]] = 1.0
     keep = math.exp(-1 / 10)
     cases = {}
-    for name, made in (("ATan", surrogates.ATan()), ("FastSigmoid", surrogates.FastSigmoid()),
-                       ("Triangle", surrogates.Triangle())):
+    for name, made in (
+        ("ATan", surrogates.ATan()),
+        ("FastSigmoid", surrogates.FastSigmoid()),
+        ("Triangle", surrogates.Triangle()),
+    ):
         cell = LIFCell(decay=decay(tau=10.0), threshold=1.0, reset="subtract", surrogate=made)
 
         def loss(w, cell=cell):
@@ -93,8 +107,14 @@ def teach(rng: np.random.Generator) -> dict:
 
         value, grad = jax.value_and_grad(loss)(jnp.asarray(w))
         cases[name] = {"loss": float(value), "grad": np.asarray(grad).tolist()}
-    return {"trains": trains.astype(int).tolist(), "w": w.tolist(), "target": [40, 90, 150], "tau": 10.0,
-            "filter_tau": 10.0, "cases": cases}
+    return {
+        "trains": trains.astype(int).tolist(),
+        "w": w.tolist(),
+        "target": [40, 90, 150],
+        "tau": 10.0,
+        "filter_tau": 10.0,
+        "cases": cases,
+    }
 
 
 def delays(rng: np.random.Generator) -> dict:
@@ -107,9 +127,17 @@ def delays(rng: np.random.Generator) -> dict:
     weight = np.full((3, 1), 0.6)
     layer = DelayedDense(1, max_delay, use_bias=False)
     readout = LI(tau=4.0)
-    out = {"x_times": [5, 18, 30], "max_delay": max_delay, "steps": steps, "delay": delay[:, 0].tolist(),
-           "weight": 0.6, "tau": 4.0, "cases": []}
+    out = {
+        "x_times": [5, 18, 30],
+        "max_delay": max_delay,
+        "steps": steps,
+        "delay": delay[:, 0].tolist(),
+        "weight": 0.6,
+        "tau": 4.0,
+        "cases": [],
+    }
     for sigma in (6.0, 1.5, 0.4):
+
         def loss(delay, sigma=sigma):
             params = {"kernel": jnp.asarray(weight), "delay": delay}
             y = layer.apply({"params": params}, jnp.asarray(x), sigma)
@@ -117,8 +145,14 @@ def delays(rng: np.random.Generator) -> dict:
 
         value, grad = jax.value_and_grad(loss)(jnp.asarray(delay))
         kernel = delay_kernel(jnp.asarray(delay[:, 0]), max_delay, sigma)
-        out["cases"].append({"sigma": sigma, "loss": float(value), "grad": np.asarray(grad)[:, 0].tolist(),
-                             "kernel": np.asarray(kernel).T.tolist()})
+        out["cases"].append(
+            {
+                "sigma": sigma,
+                "loss": float(value),
+                "grad": np.asarray(grad)[:, 0].tolist(),
+                "kernel": np.asarray(kernel).T.tolist(),
+            }
+        )
     return out
 
 
@@ -130,25 +164,34 @@ def stdp(rng: np.random.Generator) -> dict:
     post = np.tile(np.arange(post_n), pre_n)
     cases = {}
     for name, mu in (("additive", 0.0), ("multiplicative", 1.0)):
-        rule = PairSTDP(tau_plus=16.8, tau_minus=33.7, lambda_=0.03, alpha=0.6, mu_plus=mu, mu_minus=mu,
-                        w_max=1.0)
+        rule = PairSTDP(
+            tau_plus=16.8, tau_minus=33.7, lambda_=0.03, alpha=0.6, mu_plus=mu, mu_minus=mu, w_max=1.0
+        )
         traces = rule.init_state(pre_n, post_n, len(pre), jnp.float64)
         w = jnp.full(len(pre), 0.5)
 
         def step(carry, spikes, rule=rule):
             traces, w = carry
-            traces, w = rule.step(traces, w, spikes[0], spikes[1], jnp.asarray(pre), jnp.asarray(post), 0.1,
-                                  modulators={})
+            traces, w = rule.step(
+                traces, w, spikes[0], spikes[1], jnp.asarray(pre), jnp.asarray(post), 0.1, modulators={}
+            )
             return (traces, w), w
 
         _, ws = jax.lax.scan(step, (traces, w), (jnp.asarray(pre_spikes), jnp.asarray(post_spikes)))
-        cases[name] = {"mu": mu, "weights": np.asarray(ws)[::50].tolist(),
-                       "final": np.asarray(ws)[-1].tolist()}
-    return {"pre_spikes": [np.flatnonzero(r).tolist() for r in pre_spikes],
-            "post_spikes": [np.flatnonzero(r).tolist() for r in post_spikes],
-            "pre": pre.tolist(), "post": post.tolist(), "dt": 0.1,
-            "rule": {"tau_plus": 16.8, "tau_minus": 33.7, "lambda": 0.03, "alpha": 0.6, "w_max": 1.0},
-            "cases": cases}
+        cases[name] = {
+            "mu": mu,
+            "weights": np.asarray(ws)[::50].tolist(),
+            "final": np.asarray(ws)[-1].tolist(),
+        }
+    return {
+        "pre_spikes": [np.flatnonzero(r).tolist() for r in pre_spikes],
+        "post_spikes": [np.flatnonzero(r).tolist() for r in post_spikes],
+        "pre": pre.tolist(),
+        "post": post.tolist(),
+        "dt": 0.1,
+        "rule": {"tau_plus": 16.8, "tau_minus": 33.7, "lambda": 0.03, "alpha": 0.6, "w_max": 1.0},
+        "cases": cases,
+    }
 
 
 def brunel(rng: np.random.Generator) -> dict:
@@ -158,18 +201,26 @@ def brunel(rng: np.random.Generator) -> dict:
 
     order, g, eta = 50, 5.0, 2.0
     made = build(order, g=g, eta=eta)
-    network = Network(made.populations, made.projections,
-                      tuple(ArrivalInput(p.name, f"external_{p.name}", "ampa") for p in made.populations),
-                      dt=made.dt, dtype=jnp.float64)
+    network = Network(
+        made.populations,
+        made.projections,
+        tuple(ArrivalInput(p.name, f"external_{p.name}", "ampa") for p in made.populations),
+        dt=made.dt,
+        dtype=jnp.float64,
+    )
     duration, dt = 200.0, made.dt
     steps = round(duration / dt)
     ce = round(0.1 * 4 * order)
     mean = eta * (20.0 / (0.1 * ce * 20.0)) * 1000.0 * ce * dt / 1000.0
     external = {p.name: 0.1 * rng.poisson(mean, (steps, p.size)) for p in made.populations}
     variables = network.init(jax.random.key(3))
-    result = simulate(network, variables, duration=duration, drive={f"external_{k}": jnp.asarray(v)
-                                                                   for k, v in external.items()},
-                      monitors={"e": SpikeRaster("e"), "i": SpikeRaster("i")})
+    result = simulate(
+        network,
+        variables,
+        duration=duration,
+        drive={f"external_{k}": jnp.asarray(v) for k, v in external.items()},
+        monitors={"e": SpikeRaster("e"), "i": SpikeRaster("i")},
+    )
     connections = network.connections(variables)
     sizes = {p.name: p.size for p in made.populations}
     offset = {"e": 0, "i": sizes["e"]}
@@ -181,21 +232,33 @@ def brunel(rng: np.random.Generator) -> dict:
         edges["weight"] += np.broadcast_to(np.asarray(c.weight), np.shape(c.pre)).tolist()
         edges["delay"] += np.broadcast_to(np.asarray(c.delay), np.shape(c.pre)).tolist()
     spikes = np.concatenate([np.asarray(result.records["e"]), np.asarray(result.records["i"])], axis=1)
-    return {"order": order, "g": g, "eta": eta, "dt": dt, "steps": steps, "sizes": sizes, "edges": edges,
-            "external": np.concatenate([external["e"], external["i"]], axis=1).round(12).tolist(),
-            "spikes": [np.flatnonzero(row).tolist() for row in spikes]}
+    return {
+        "order": order,
+        "g": g,
+        "eta": eta,
+        "dt": dt,
+        "steps": steps,
+        "sizes": sizes,
+        "edges": edges,
+        "external": np.concatenate([external["e"], external["i"]], axis=1).round(12).tolist(),
+        "spikes": [np.flatnonzero(row).tolist() for row in spikes],
+    }
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--out", default="site/test/fixtures/sparx.json")
     parser.add_argument("--only", nargs="*", default=None)
     args = parser.parse_args()
     makers = {"neurons": neurons, "teach": teach, "delays": delays, "stdp": stdp, "brunel": brunel}
     with jax.enable_x64(new_val=True):
-        data = {name: make(np.random.default_rng(k)) for k, (name, make) in enumerate(makers.items())
-                if args.only is None or name in args.only}
+        data = {
+            name: make(np.random.default_rng(k))
+            for k, (name, make) in enumerate(makers.items())
+            if args.only is None or name in args.only
+        }
     data["versions"] = {"jax": jax.__version__, "sparx": sparx.__version__}
     Path(args.out).write_text(json.dumps(data))
 
