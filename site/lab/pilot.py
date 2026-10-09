@@ -135,19 +135,23 @@ class Flights:
     height: float = 1.5
     widths: tuple[float, float] = (0.9, 4.0)
     inverted: float = 0.4
+    speed: float = 1.5
+    spin: float = 3.0
     retarget: float = 1.2
     gust: float = 2.0
+    gust_speed: float = 2.0
+    gust_spin: float = 8.0
 
     def draw(self, drone: Drone, key: jax.Array, batch: int):
         ks = jax.random.split(key, 10)
         w = jax.random.uniform(ks[0], (batch,), minval=self.widths[0], maxval=self.widths[1])
         box = jnp.stack([w, jnp.full_like(w, self.height)], -1)
         pos = jax.random.uniform(ks[1], (batch, 2), minval=-0.9, maxval=0.9) * box
-        vel = jax.random.normal(ks[2], (batch, 2)) * 1.5
+        vel = jax.random.normal(ks[2], (batch, 2)) * self.speed
         upright = jax.random.normal(ks[3], (batch,)) * 0.4
         anywhere = jax.random.uniform(ks[4], (batch,), minval=-math.pi, maxval=math.pi)
         theta = jnp.where(jax.random.uniform(ks[5], (batch,)) < self.inverted, anywhere, upright)
-        omega = jax.random.normal(ks[6], (batch,)) * 3.0
+        omega = jax.random.normal(ks[6], (batch,)) * self.spin
         s0 = jnp.concatenate([pos, vel, theta[:, None], omega[:, None]], -1)
         # Targets hold for exponential times, as a cursor rests and moves on.
         spots = jax.random.uniform(ks[7], (self.steps, batch, 2), minval=-0.85, maxval=0.85) * box
@@ -157,7 +161,7 @@ class Flights:
         targets = jnp.take_along_axis(spots, index[..., None], axis=0)
         gusts = jax.random.uniform(ks[9], (self.steps, batch)) < drone.dt / self.gust
         size = jax.random.normal(jax.random.fold_in(ks[9], 1), (self.steps, batch, 6)) * jnp.array(
-            [0, 0, 2.0, 2.0, 0, 8.0])
+            [0, 0, self.gust_speed, self.gust_speed, 0, self.gust_spin])
         kicks = jnp.where(gusts[..., None], size, 0.0).at[0].set(0.0)
         return s0, targets, kicks, box
 
@@ -214,7 +218,9 @@ def _unb64(s: str) -> np.ndarray:
 
 
 def train(args: argparse.Namespace) -> None:
-    drone, flights = Drone(), Flights(steps=args.horizon)
+    drone = Drone()
+    flights = Flights(steps=args.horizon, speed=args.speed, spin=args.spin, gust_speed=args.gust_speed,
+                      gust_spin=args.gust_spin)
     net = network(args.hidden, args.tau, args.readout_tau)
     params = net.init(jax.random.key(args.seed), jnp.zeros((1, 1, 7)))["params"]
     warmup = min(100, args.steps // 10)
@@ -266,22 +272,29 @@ def export_nir(net: nn.Sequential, params: dict, drone: Drone, path: Path) -> No
 
 def evaluation(net, params, drone: Drone, seed: int, flights: int = 1000) -> dict:
     """Flights of 6 s to one fixed target from random starts, half of them from any attitude: how many
-    arrive within 15 cm and stay, and how long it takes."""
+    arrive within 15 cm and stay, and how long it takes; and as many thrown, at speeds of about 4 m/s
+    and spins of about 15 rad/s."""
     steps = 600
-    draw = Flights(steps=steps, inverted=0.5, gust=1e9, retarget=1e9)
-    s0, targets, kicks, box = draw.draw(drone, jax.random.key(seed), flights)
     run = jax.jit(lambda p, *flight: fly(net, p, drone, *flight))
-    states, _, spikes = run(params, s0, targets, kicks, box)
-    distance = np.asarray(jnp.sqrt(jnp.sum((states[..., :2] - targets) ** 2, -1)))
-    close = distance < 0.15
-    settled = np.flip(np.cumprod(np.flip(close, 0), 0), 0).astype(bool)   # close from here to the end
-    arrived = settled[-1]
-    first = np.where(arrived, np.argmax(settled, 0), steps) * drone.dt
+
+    def arrivals(draw: Flights, key: int):
+        s0, targets, kicks, box = draw.draw(drone, jax.random.key(key), flights)
+        states, _, spikes = run(params, s0, targets, kicks, box)
+        distance = np.asarray(jnp.sqrt(jnp.sum((states[..., :2] - targets) ** 2, -1)))
+        settled = np.flip(np.cumprod(np.flip(distance < 0.15, 0), 0), 0).astype(bool)  # close from then on
+        first = np.where(settled[-1], np.argmax(settled, 0), steps) * drone.dt
+        return s0, settled[-1], first, distance, spikes
+
+    still = Flights(steps=steps, inverted=0.5, gust=1e9, retarget=1e9)
+    s0, arrived, first, distance, spikes = arrivals(still, seed)
     inverted = np.cos(np.asarray(s0[:, 4])) < 0
+    _, thrown, _, _, _ = arrivals(Flights(steps=steps, inverted=0.5, speed=4.0, spin=15.0, gust=1e9,
+                                          retarget=1e9), seed + 1)
     return {"flights": flights, "seconds": steps * drone.dt,
             "arrived": float(arrived.mean()),
-            "arrived_from_inverted": float(arrived[inverted].mean()) if inverted.any() else None,
+            "arrived_from_inverted": float(arrived[inverted].mean()),
             "inverted_starts": int(inverted.sum()),
+            "arrived_thrown": float(thrown.mean()),
             "median_time_s": float(np.median(first[arrived])) if arrived.any() else None,
             "final_distance_median_m": float(np.median(distance[-1])),
             "rate_per_step": float(jnp.mean(spikes))}
@@ -327,6 +340,10 @@ def main() -> None:
     t.add_argument("--lr", type=float, default=2e-3)
     t.add_argument("--rate-low", type=float, default=0.02)
     t.add_argument("--rate-high", type=float, default=0.3)
+    t.add_argument("--speed", type=float, default=1.5, help="initial speeds' spread (m/s)")
+    t.add_argument("--spin", type=float, default=3.0, help="initial spins' spread (rad/s)")
+    t.add_argument("--gust-speed", type=float, default=2.0, help="gusts' spread of speed (m/s)")
+    t.add_argument("--gust-spin", type=float, default=8.0, help="gusts' spread of spin (rad/s)")
     t.add_argument("--seed", type=int, default=0)
     t.add_argument("--log-every", type=int, default=50)
     t.set_defaults(func=train)
