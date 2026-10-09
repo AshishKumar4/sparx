@@ -73,3 +73,15 @@ jobs:
       run: |
         pnpm install --frozen-lockfile
         pnpm build
+    - name: Every page at 1440 and 390, dark and light
+      working-directory: site
+      run: |
+        pnpm exec astro preview --port 4329 --host 127.0.0.1 &
+        for _ in $(seq 30); do curl -sf http://127.0.0.1:4329/ > /dev/null && break; sleep 1; done
+        CHROME=$(command -v google-chrome) node scripts/shots.mjs shots
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: shots
+        path: site/shots
+        retention-days: 14
