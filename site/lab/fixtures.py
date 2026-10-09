@@ -28,6 +28,7 @@ import sparx
 from sparx import surrogate as surrogates
 from sparx.dynamics import (
     IZHIKEVICH_2003,
+    ALIFCell,
     Izhikevich,
     LeakyIntegrateAndFire,
     LIFCell,
@@ -47,6 +48,9 @@ def neurons(rng: np.random.Generator) -> dict:
         cell = LIFCell(decay=decay(tau=12.0), threshold=1.0, reset=reset)
         (out, v), _ = run(cell, jnp.asarray(drive), record=lambda s: s.v)
         lif[reset] = {"spikes": np.flatnonzero(np.asarray(out.value)).tolist(), "v": np.asarray(v).tolist()}
+    cell = ALIFCell(decay=decay(tau=12.0), adapt_decay=decay(tau=200.0), beta=0.3)
+    (out, v), _ = run(cell, jnp.asarray(drive), record=lambda s: s.v)
+    lif["alif"] = {"spikes": np.flatnonzero(np.asarray(out.value)).tolist(), "v": np.asarray(v).tolist()}
     current = 300.0 + 250.0 * rng.random(3000)
     cell = LeakyIntegrateAndFire()
     (out, v), _ = run(cell, SynapticInput(current=jnp.asarray(current)), dt=0.1, record=lambda s: s.v)

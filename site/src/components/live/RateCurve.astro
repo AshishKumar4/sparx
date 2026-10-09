@@ -1,0 +1,70 @@
+---
+// A neuron on a constant input, beside its f-I curve (src/widgets/rate.ts).
+import Choice from './Choice.astro';
+import Figure from './Figure.astro';
+import Slider from './Slider.astro';
+---
+
+<div data-rate-curve>
+	<Figure height="var(--rate-height, 15rem)">
+		<div class="pair">
+			<canvas data-scope role="img" aria-label="The chosen neuron's membrane on a constant input, with its spikes"></canvas>
+			<canvas data-curve role="img" aria-label="Firing rate against input for neurons that subtract the threshold, reset to zero, or adapt, with the current input marked"></canvas>
+		</div>
+		<Fragment slot="controls">
+			<Slider name="x" label="Input per step" min={0} max={1.2} step={0.005} value={0.3} digits={3} />
+			<Choice name="kind" label="Neuron" value="subtract" options={[{ value: 'subtract', label: 'Subtract' }, { value: 'zero', label: 'Reset to zero' }, { value: 'alif', label: 'Adaptive' }]} />
+		</Fragment>
+		<p slot="after" class="readout" data-status aria-live="polite"></p>
+	</Figure>
+</div>
+
+<script>
+	import { controls } from '../../widgets/controls';
+	import { type Kind, rateFigure } from '../../widgets/rate';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-rate-curve]')) {
+		const ui = controls(root, () => update());
+		const update = rateFigure(root, () => ({ kind: ui.choice('kind') as Kind, x: ui.read('x') }));
+	}
+</script>
+
+<style>
+	.pair {
+		position: absolute;
+		inset: 0;
+		display: grid;
+		grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+		grid-template-rows: minmax(0, 1fr);
+	}
+	.pair canvas {
+		position: relative;
+		width: 100%;
+		height: 100%;
+		min-width: 0;
+		min-height: 0;
+	}
+	.pair canvas + canvas {
+		border-left: 1px solid var(--sx-line);
+	}
+	@media (max-width: 40rem) {
+		[data-rate-curve] {
+			--rate-height: 26rem;
+		}
+		.pair {
+			grid-template-columns: minmax(0, 1fr);
+			grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+		}
+		.pair canvas + canvas {
+			border-left: 0;
+			border-top: 1px solid var(--sx-line);
+		}
+	}
+	.readout {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+	}
+</style>

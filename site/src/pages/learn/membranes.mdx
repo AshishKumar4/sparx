@@ -79,7 +79,7 @@ which is chapter 1's membrane. The factor $1 - \beta$ that scaled the input is g
 
 <CodeBlock code={membrane} colab={colab('membranes')} source={source('src/sparx/dynamics/neurons.py')} />
 
-The two runs agree to within about $10^{-13}$ mV, rounding error in float64, because the current switches on and off exactly on a 5 ms boundary. Fifty steps of 0.1 ms land where one step of 5 ms does. The value at 70 ms is the exact solution's, $-60 + 15(1 - e^{-3}) \approx -45.75$ mV.
+The two runs agree to within $3 \times 10^{-14}$ mV, rounding error in float64, because the current switches on and off exactly on a 5 ms boundary. Fifty steps of 0.1 ms land where one step of 5 ms does. The value at 70 ms is the exact solution's, $-60 + 15(1 - e^{-3}) \approx -45.75$ mV.
 
 ## Try this
 

@@ -1,0 +1,139 @@
+---
+layout: ../../layouts/Chapter.astro
+title: Spikes and thresholds
+description: A membrane that only leaks just relaxes toward its input. Add a threshold and a reset and it fires, at a rate that depends on its input in a specific way. This chapter works out that dependence, then adds the two features real neurons have that the simple model lacks, refractoriness and adaptation.
+---
+
+import CodeBlock from '../../components/CodeBlock.astro';
+import FiChart from '../../components/live/FiChart.astro';
+import IzhikevichScope from '../../components/live/IzhikevichScope.astro';
+import RateCurve from '../../components/live/RateCurve.astro';
+import { colab, source } from '../../data/site.mjs';
+import fi from '../../../snippets/fi.py?raw';
+import izhikevich from '../../../snippets/izhikevich.py?raw';
+
+## Threshold and reset
+
+Take chapter 2's membrane in steps, $v \leftarrow \beta v + x$, with $\beta = e^{-1/\tau}$. On a constant input $x$ it settles where the leak takes away exactly what the input adds, $v = \beta v + x$, at
+
+$$
+v_\infty = \frac{x}{1 - \beta}
+$$
+
+Now add a threshold $\theta$: when $v$ reaches it, the neuron emits a spike and resets. If $v_\infty$ is below $\theta$ the membrane never gets there and the neuron never fires, however long it waits. So there is a smallest input that fires the neuron at all, the rheobase:
+
+$$
+x_\text{rheo} = (1 - \beta)\,\theta
+$$
+
+With $\tau = 12$ steps, $\beta \approx 0.920$ and the rheobase is 0.080 of the threshold per step.
+
+What happens after a spike matters as much as the threshold. Two resets are common. Reset to zero forgets the membrane. Reset by subtraction takes away $\theta$ and keeps whatever overshoot there was, so a large input that pushes the membrane well past threshold carries the excess into the next spike.
+
+## How fast it fires
+
+With reset to zero, the membrane starts from 0 after every spike and climbs the same curve each time. After $n$ steps it holds $x(1 + \beta + \dots + \beta^{n-1})$, a geometric sum:
+
+$$
+v_n = x\,\frac{1 - \beta^n}{1 - \beta}
+$$
+
+It fires at the first $n$ for which $v_n \geq \theta$:
+
+$$
+n = \left\lceil \frac{\ln\!\big(1 - (1 - \beta)\,\theta / x\big)}{\ln \beta} \right\rceil
+$$
+
+and fires every $n$ steps, a rate of $1/n$. The ceiling makes the curve a staircase. Near rheobase the logarithm blows up and the rate falls to 0. Far above it, $n$ reaches 1 and the neuron fires every step.
+
+Subtraction has no tidy formula, but it has a tidy limit. Without a leak, every spike removes exactly $\theta$ and every step adds exactly $x$, so in the long run the neuron fires $x/\theta$ times per step: the rate is proportional to the input. The leak makes it fire somewhat less, most of all near rheobase.
+
+<RateCurve />
+
+The scope shows the membrane of the neuron you pick; the right panel shows its firing rate for every input, with yours marked. The dashed line is the rheobase. The grey curve, reset to zero, is the staircase of the formula, computed here by running the neuron. Subtraction's blue curve rises almost in a straight line toward a rate equal to the input.
+
+## Continuous time and refractoriness
+
+In physical units, chapter 2's membrane relaxes toward $E_L + R I$ with time constant $\tau$. Start it at the reset voltage $u_r$ and solve for the time it takes to reach threshold $\vartheta$:
+
+$$
+T = \tau \ln \frac{E_L + R I - u_r}{E_L + R I - \vartheta}
+$$
+
+which is Gerstner et al.'s equation 8.34. Real neurons cannot fire again immediately after a spike. For a millisecond or more their sodium channels are inactivated and no input can trigger a second spike. The model captures this with an absolute refractory period $t_\text{ref}$ during which the membrane is held at reset. With reset to rest, $u_r = E_L$, the interval between spikes and the rate become
+
+$$
+T = t_\text{ref} + \tau \ln \frac{R I}{R I - (\vartheta - E_L)}, \qquad f = \frac{1}{T}
+$$
+
+The rheobase is now a current, $(\vartheta - E_L)/R$, and the rate can never exceed $1/t_\text{ref}$. For the neuron of the earlier chapters, with $\tau = 20$ ms, $C = 200$ pF (so $R = 100\ \text{M}\Omega$), a threshold 10 mV above rest and $t_\text{ref} = 5$ ms, the rheobase is 100 pA and the ceiling is 200 Hz.
+
+<FiChart />
+
+The formula is for continuous time. A simulation steps time, and a neuron that crosses threshold between two steps fires at the later one. Chapter 2's lesson returns: the step size changes the answer, here by up to a tenth. sparx's `LeakyIntegrateAndFire` lets you compute the same curve:
+
+<CodeBlock code={fi} colab={colab('spikes')} source={source('src/sparx/dynamics/neurons.py')} />
+
+`jax.vmap` runs the neuron at all five currents at once. At 0.1 ms the stepped rates sit within about 1 Hz of the formula.
+
+## Adaptation
+
+Hold a real cortical neuron at a constant current and it fires fast at first, then slows down. This is spike-frequency adaptation: each spike opens slow potassium channels, or leaves some other trace, that makes the next spike harder.
+
+The adaptive LIF neuron models that trace directly. It keeps a second variable $a$ that jumps by 1 at each spike and decays with its own, much longer time constant. Its threshold rises with $a$:
+
+$$
+\theta_t = \theta + b\,a_{t-1}, \qquad a_t = \rho\,a_{t-1} + s_t
+$$
+
+with $\rho = e^{-1/\tau_a}$. Choose "Adaptive" in the figure above: $b = 0.3$ and $\tau_a = 100$ steps. The first spikes come at the plain neuron's rate, then each one raises the threshold a little and the intervals stretch until adaptation and input balance. Its rate curve lies below the others and grows more slowly.
+
+Adaptation also gives a network memory. A neuron's adaptation variable holds a trace of its recent firing for about $\tau_a$ steps, far longer than its membrane remembers anything. Bellec et al. used adaptation time constants of hundreds of milliseconds and more this way, in recurrent networks that had to hold cues for seconds. In sparx this is `sparx.nn.ALIF`.
+
+## Many behaviours from two variables
+
+Real neurons do much more than fire regularly. Some fire bursts of spikes, some chatter, some fire once and stop, some only fire when released from inhibition. Izhikevich (2003) found a model with two variables that reproduces most of these patterns. The membrane $v$ in mV follows a quadratic, and a recovery variable $u$ follows $v$ and pulls it down:
+
+$$
+\frac{\mathrm{d}v}{\mathrm{d}t} = 0.04\,v^2 + 5v + 140 - u + I, \qquad \frac{\mathrm{d}u}{\mathrm{d}t} = a\,(b v - u)
+$$
+
+When $v$ reaches 30 mV the neuron fires, $v$ resets to $c$ and $u$ jumps by $d$. The four numbers $a$, $b$, $c$ and $d$ select the behaviour. The quadratic term is what lets $v$ run away upward once past a point, so there is no fixed threshold: the spike starts wherever $v$'s rise outruns $u$.
+
+<IzhikevichScope />
+
+Try each class. Regular spiking slows down, like the adaptive LIF, because each spike adds $d = 8$ to $u$. Bursting and chattering reset $v$ to a higher $c$, close enough to the runaway region that one spike can lead straight into the next. Fast-spiking interneurons recover quickly, with a large $a$, and keep a steady fast rate.
+
+<CodeBlock code={izhikevich} colab={colab('spikes')} source={source('src/sparx/dynamics/neurons.py')} />
+
+Izhikevich estimated the model's cost at about 13 floating-point operations per millisecond of simulated time, against about 1,200 for Hodgkin and Huxley's equations, each with the step size its accuracy needs. sparx runs both, and chapter 11 compares them with NEST and with Izhikevich's own code.
+
+## Try this
+
+1. In the figure, with reset to zero, find the input at which the neuron fires every other step. Check it against the formula.
+2. With reset by subtraction, set the input to 1.2. The rate is not 1.2 spikes per step. Why, and what is it?
+3. Using the formula, what rate does 260 pA give the physical neuron? How many spikes should it fire in its first 300 ms, starting from rest?
+4. Why does the adaptive neuron's rate curve keep rising past the point where the plain neuron's does not?
+
+<details>
+<summary>Answers</summary>
+
+1. Every other step means $n = 2$, so $v_2 = x(1 + \beta) \geq 1$ while $v_1 = x < 1$: from $x = 1/(1 + \beta) \approx 0.521$ up to 1.
+2. A neuron sends at most one spike per step, so its rate tops out at 1. At 1.2 it fires every step, and the extra 0.2 a step piles up in the membrane until the leak removes it as fast as it arrives, at $0.2/(1 - \beta) \approx 2.5$ after each reset.
+3. $T = 5 + 20 \ln(26/16) \approx 14.7$ ms, about 68 Hz. Starting from rest, the first spike takes 9.7 ms, with no refractory period before it, and then one comes every 14.7 ms: at 9.7, 24.4, 39.1 ms and so on, 20 of them before 300 ms. sparx's neuron, stepped at 0.1 ms, fires 20.
+4. The plain neurons reach the ceiling of one spike per step near an input of 1. The adaptive neuron's threshold rises with its own recent firing: at a steady rate $r$, $a$ settles at $r/(1 - \rho) \approx 100\,r$, so the threshold sits near $1 + 30\,r$. Firing every step would need a threshold of about 31 crossed every step, so its rate is still climbing at the largest inputs shown.
+
+</details>
+
+## Summary
+
+A threshold turns a leaky membrane into a neuron with a rheobase, below which it never fires, and a rate that grows with the input: a staircase with reset to zero, nearly proportional with subtraction, capped by a refractory period. Adaptation slows a neuron under constant drive and gives it a memory of its recent firing; Izhikevich's two variables produce bursting, chattering and more. The next chapter turns the question around: given a number, how should a neuron put it into spikes?
+
+## References
+
+<ul class="references">
+<li>W. Gerstner, W. M. Kistler, R. Naud and L. Paninski, <a href="https://neuronaldynamics.epfl.ch/online/Ch8.S3.html"><em>Neuronal Dynamics</em>, section 8.3</a>, Cambridge University Press, 2014, <a href="https://doi.org/10.1017/CBO9781107447615">doi:10.1017/CBO9781107447615</a>. Equation 8.34; the refractory period is added here.</li>
+<li>G. Bellec, F. Scherr, A. Subramoney, E. Hajek, D. Salaj, R. Legenstein and W. Maass, "A solution to the learning dilemma for recurrent networks of spiking neurons", <em>Nature Communications</em> 11, 3625, 2020, <a href="https://doi.org/10.1038/s41467-020-17236-y">doi:10.1038/s41467-020-17236-y</a>. The adaptive LIF neuron.</li>
+<li>E. M. Izhikevich, "Simple model of spiking neurons", <em>IEEE Transactions on Neural Networks</em> 14(6), 2003, <a href="https://doi.org/10.1109/TNN.2003.820440">doi:10.1109/TNN.2003.820440</a>.</li>
+<li>E. M. Izhikevich, "Which model to use for cortical spiking neurons?", <em>IEEE Transactions on Neural Networks</em> 15(5), 2004, <a href="https://doi.org/10.1109/TNN.2004.832719">doi:10.1109/TNN.2004.832719</a>. Figure 2: the cost estimates, with first-order Euler steps chosen per model.</li>
+</ul>

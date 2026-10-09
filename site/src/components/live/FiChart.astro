@@ -1,0 +1,36 @@
+---
+// The physical LIF's firing rate against current: the closed form, and the stepped neuron (src/engines/neurons.ts,
+// held to sparx) at two step sizes, computed when the site is built.
+import { LeakyIntegrateAndFire } from '../../engines/neurons';
+import Chart from '../Chart.astro';
+
+const currents = Array.from({ length: 33 }, (_, k) => 100 + 15 * k);
+const formula = (pA: number) => {
+	const RI = pA * 0.1;
+	return RI > 10 ? 1000 / (5 + 20 * Math.log(RI / (RI - 10))) : 0;
+};
+const stepped = (dt: number) =>
+	currents.filter((_, k) => k % 2 === 0).map((pA) => {
+		const cell = new LeakyIntegrateAndFire(20, 200, -60, -50, -60, 5);
+		const steps = Math.round(2000 / dt);
+		let n = 0;
+		for (let t = 0; t < steps; t++) n += t >= steps / 2 ? cell.step(pA, dt) : (cell.step(pA, dt), 0);
+		return [pA, n] as [number, number];
+	});
+const smooth = Array.from({ length: 200 }, (_, k) => 100.5 + 2.5 * k).map((pA) => [pA, formula(pA)] as [number, number]);
+---
+
+<Chart
+	title="Firing rate against input current for a leaky integrate-and-fire neuron: the exact formula, and the stepped neuron at 0.1 ms and 1 ms steps"
+	series={[
+		{ points: smooth, role: 'ink' },
+		{ points: stepped(0.1), role: 'membrane', dots: true },
+		{ points: stepped(1), role: 'spike', dots: true },
+	]}
+	x={{ label: 'current (pA)', ticks: [100, 200, 300, 400, 500, 600], min: 80, max: 600 }}
+	y={{ label: 'rate (Hz)', ticks: [0, 50, 100, 150], min: 0, max: 150 }}
+>
+	The line is the formula; blue dots are sparx's stepped neuron at 0.1 ms, orange at 1 ms, each counting spikes over a second of
+	constant current. At 1 ms every interval rounds up to a whole number of steps, so the coarse neuron fires slower, by up to 10% here,
+	and in a staircase: from 460 to 550 pA it fires exactly every 10 ms.
+</Chart>

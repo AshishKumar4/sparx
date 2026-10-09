@@ -24,6 +24,7 @@ NOTEBOOKS = {
     "why-spikes": ("Spikes per synapse", "why-spikes", ["sparsity"]),
     "neuron": ("What a neuron does", "neuron", ["synapse", "synaptic_layer"]),
     "membranes": ("Membranes and time constants", "membranes", ["membrane"]),
+    "spikes": ("Spikes and thresholds", "spikes", ["physical", "fi", "izhikevich"]),
     "train": ("A first spiking network", "surrogate-gradients", ["train"]),
     "teach": ("Teach a neuron when to fire", "surrogate-gradients", ["teach"]),
     "delays": ("Learned delays", "delays", ["delays"]),

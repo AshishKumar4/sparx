@@ -1,7 +1,7 @@
 // The browser's neurons and Brunel network against sparx's float64 runs (site/lab/fixtures.py).
 import { expect, test } from 'bun:test';
 import { DeltaNetwork } from '../src/engines/brunel';
-import { IZHIKEVICH_2003, Izhikevich, LeakyIntegrateAndFire, LIF, type Reset } from '../src/engines/neurons';
+import { ALIF, IZHIKEVICH_2003, Izhikevich, LeakyIntegrateAndFire, LIF, type Reset } from '../src/engines/neurons';
 
 const fixtures = await Bun.file(new URL('fixtures/sparx.json', import.meta.url)).json();
 
@@ -25,6 +25,19 @@ for (const reset of ['subtract', 'zero', 'none'] as Reset[]) {
 		expect(worst).toBeLessThan(1e-12);
 	});
 }
+
+test('ALIFCell', () => {
+	const cell = new ALIF(Math.exp(-1 / 12), Math.exp(-1 / 200), 0.3);
+	const v: number[] = [];
+	const fired = fixtures.neurons.drive.map((x: number) => {
+		const s = cell.step(x);
+		v.push(cell.v);
+		return s;
+	});
+	const worst = compare(v, fired, fixtures.neurons.lif.alif);
+	console.log(`ALIFCell: ${fixtures.neurons.lif.alif.spikes.length} spikes matched, membrane within ${worst.toExponential(1)}`);
+	expect(worst).toBeLessThan(1e-12);
+});
 
 test('LeakyIntegrateAndFire on a current', () => {
 	const { current, dt } = fixtures.neurons.physical;

@@ -23,6 +23,30 @@ export class LIF {
 	}
 }
 
+/** `sparx.dynamics.ALIFCell` without refractoriness: the threshold is `threshold + beta * a`, a spike
+ * subtracts the baseline `threshold`, and `a` decays by `adaptDecay` a step and gains 1 per spike. */
+export class ALIF {
+	v = 0;
+	a = 0;
+	peak = 0;
+	constructor(
+		public decay: number,
+		public adaptDecay: number,
+		public beta = 1.8,
+		public threshold = 1,
+	) {}
+
+	step(x: number): number {
+		const theta = this.threshold + this.beta * this.a;
+		const v = this.decay * this.v + x;
+		const s = v >= theta ? 1 : 0;
+		this.peak = v;
+		this.v = v - s * this.threshold;
+		this.a = this.adaptDecay * this.a + s;
+		return s;
+	}
+}
+
 /** `sparx.dynamics.Serial(LICell(synapse), LIFCell(decay))`, the current-based LIF: each input jumps a
  * synaptic current that decays by `synapse` a step, and the membrane integrates the current. */
 export class CurrentLIF {
