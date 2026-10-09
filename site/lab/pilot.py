@@ -17,7 +17,6 @@ stepper is checked against (site/test/pilot.test.ts).
 from __future__ import annotations
 
 import argparse
-import base64
 import dataclasses
 import json
 import math
@@ -29,9 +28,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+from stack import act, at_rest, from_layers, stack, to_layers
 
 import sparx
-from sparx.nn import LI, LIF
 
 
 @dataclasses.dataclass(frozen=True)
@@ -91,32 +90,7 @@ def advance(drone: Drone, s: jax.Array, force: jax.Array, box: jax.Array) -> jax
 
 
 def network(hidden: int = 64, tau: float = 3.0, readout_tau: float = 5.0) -> nn.Sequential:
-    return nn.Sequential(
-        [
-            nn.Dense(hidden),
-            LIF(tau=tau, reset="zero"),
-            nn.Dense(hidden),
-            LIF(tau=tau, reset="zero"),
-            nn.Dense(2),
-            LI(tau=readout_tau),
-        ]
-    )
-
-
-def at_rest(net: nn.Sequential, params: dict, batch: int, inputs: int = 7) -> dict:
-    """The network's `state` collection with every neuron at rest, for `batch` drones."""
-    shapes = jax.eval_shape(
-        lambda: net.apply({"params": params}, jnp.zeros((1, batch, inputs)), mutable=["state"])[1]["state"]
-    )
-    return jax.tree.map(lambda leaf: jnp.zeros(leaf.shape, leaf.dtype), shapes)
-
-
-def act(net: nn.Sequential, params: dict, carried: dict, obs: jax.Array):
-    """One step, carried in the `state` collection: the readout membranes, the new state, all spikes."""
-    variables = {"params": params, "state": carried}
-    u, mutated = net.apply(variables, obs[None], mutable=["state", "spike_rates"])
-    spikes = jnp.concatenate(jax.tree.leaves(mutated["spike_rates"]), axis=-1)
-    return u[0], mutated["state"], spikes
+    return stack((hidden, hidden, 2), tau, readout_tau)
 
 
 def fly(net, params, drone, s0, targets, kicks, box):
@@ -130,7 +104,7 @@ def fly(net, params, drone, s0, targets, kicks, box):
         s = advance(drone, s, thrust(drone, u), box)
         return (s, carried), (s, u, spikes)
 
-    _, (states, us, spikes) = jax.lax.scan(step, (s0, at_rest(net, params, s0.shape[0])), (targets, kicks))
+    _, (states, us, spikes) = jax.lax.scan(step, (s0, at_rest(net, params, s0.shape[0], 7)), (targets, kicks))
     return states, us, spikes
 
 
@@ -187,60 +161,18 @@ def flight_cost(
 
 
 def to_json(net: nn.Sequential, params: dict, drone: Drone, meta: dict) -> dict:
-    """The network and the drone for the browser: every layer's weights as base64 float32."""
-    layers = []
-    for k, layer in enumerate(net.layers):
-        if isinstance(layer, nn.Dense):
-            p = params[f"layers_{k}"]
-            layers.append(
-                {
-                    "kind": "dense",
-                    "kernel": _b64(p["kernel"]),
-                    "bias": _b64(p["bias"]),
-                    "inputs": int(p["kernel"].shape[0]),
-                    "outputs": int(p["kernel"].shape[1]),
-                }
-            )
-        elif isinstance(layer, LIF):
-            layers.append(
-                {
-                    "kind": "lif",
-                    "decay": sparx.dynamics.decay(layer.tau),
-                    "threshold": layer.threshold,
-                    "reset": layer.reset,
-                }
-            )
-        elif isinstance(layer, LI):
-            layers.append({"kind": "li", "decay": sparx.dynamics.decay(layer.tau)})
+    """The network and the drone for the browser."""
     return {
         "drone": dataclasses.asdict(drone) | {"hover_logit": drone.hover_logit},
-        "layers": layers,
+        "layers": to_layers(net, params),
         "meta": meta,
     }
 
 
 def from_json(model: dict) -> tuple[nn.Sequential, dict, Drone]:
-    taus = [-1 / math.log(layer["decay"]) for layer in model["layers"] if layer["kind"] != "dense"]
-    dense = [layer for layer in model["layers"] if layer["kind"] == "dense"]
-    net = network(dense[0]["outputs"], tau=taus[0], readout_tau=taus[-1])
-    params = {}
-    for k, layer in enumerate(model["layers"]):
-        if layer["kind"] == "dense":
-            shape = (layer["inputs"], layer["outputs"])
-            params[f"layers_{k}"] = {
-                "kernel": _unb64(layer["kernel"]).reshape(shape),
-                "bias": _unb64(layer["bias"]),
-            }
+    net, params = from_layers(model["layers"])
     fields = {f.name for f in dataclasses.fields(Drone)}
     return net, params, Drone(**{k: v for k, v in model["drone"].items() if k in fields})
-
-
-def _b64(x: jax.Array) -> str:
-    return base64.b64encode(np.asarray(x, np.float32).tobytes()).decode()
-
-
-def _unb64(s: str) -> np.ndarray:
-    return np.frombuffer(base64.b64decode(s), np.float32).copy()
 
 
 def train(args: argparse.Namespace) -> None:
