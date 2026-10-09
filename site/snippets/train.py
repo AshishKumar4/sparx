@@ -8,9 +8,9 @@ import sparx
 
 class Net(nn.Module):
     @nn.compact
-    def __call__(self, spikes):                         # [T, B, 784]
+    def __call__(self, spikes):                  # [T, B, 784]
         x = sparx.nn.LIF(tau=2.0)(nn.Dense(256)(spikes))
-        return sparx.nn.LI(tau=2.0)(nn.Dense(10)(x))    # membrane [T, B, 10]
+        return sparx.nn.LI(tau=2.0)(nn.Dense(10)(x))   # [T, B, 10]
 
 
 net = Net()
@@ -22,7 +22,9 @@ params = net.init(jax.random.key(2), spikes)
 
 def loss(params):
     logits = jnp.mean(net.apply(params, spikes), axis=0)
-    return optax.softmax_cross_entropy_with_integer_labels(logits, labels).mean()
+    xent = optax.softmax_cross_entropy_with_integer_labels
+    return xent(logits, labels).mean()
 
 
-grads = jax.grad(loss)(params)                          # through the spikes, by their surrogate
+# Through the spikes, by their surrogate
+grads = jax.grad(loss)(params)

@@ -44,7 +44,7 @@ const kinds = { exact: 'Same numbers', tolerance: 'Within a tolerance', statisti
 				Every sparx neuron is a small JAX dataclass with a <code>step</code>, and <code>sparx.run</code> scans one over time.
 				The figure is that step, in your browser.
 			</p>
-			<CodeBlock code={neuron} colab={colab('neuron')} source={source('src/sparx/dynamics/ml.py')} />
+			<CodeBlock fold code={neuron} colab={colab('neuron')} source={source('src/sparx/dynamics/ml.py')} />
 			<a class="more" href="/learn/neuron/">Neurons, from LIF to Izhikevich</a>
 			<LifScope slot="figure" />
 		</Section>
@@ -56,7 +56,7 @@ const kinds = { exact: 'Same numbers', tolerance: 'Within a tolerance', statisti
 				<code>[T, B, ...]</code>, so <code>jit</code>, <code>grad</code>, <code>vmap</code>, optax and sharding work as they do for any
 				network.
 			</p>
-			<CodeBlock code={train} colab={colab('train')} source={source('README.md')} />
+			<CodeBlock fold code={train} colab={colab('train')} source={source('README.md')} />
 			<a class="more" href="/learn/surrogate-gradients/">Teach a neuron when to fire</a>
 			<SurrogatePlot slot="figure" />
 		</Section>
@@ -73,7 +73,7 @@ const kinds = { exact: 'Same numbers', tolerance: 'Within a tolerance', statisti
 				on {percent(evaluation.arrived)} of 1,000 random starts, and {percent(evaluation.arrived_from_inverted)} of those that began
 				upside down, in a median of {evaluation.median_time_s.toFixed(2)} s.
 			</p>
-			<CodeBlock code={pilot} source={source('site/lab/pilot.py')} />
+			<CodeBlock fold code={pilot} source={source('site/lab/pilot.py')} />
 			<a class="more" href="/learn/pilot/">Training, lesions and the check against sparx</a>
 			<figure slot="figure" class="numbers">
 				<div><strong>{percent(evaluation.arrived)}</strong><span>of 1,000 flights reach the target and stay</span></div>
@@ -93,7 +93,7 @@ const kinds = { exact: 'Same numbers', tolerance: 'Within a tolerance', statisti
 				Current-based LIF, Izhikevich, STDP and the cortical microcircuit on one drawn network match NEST spike for spike. Conductance and
 				adaptive models agree within stated margins. Chaotic networks, like this one, match in rate, irregularity and synchrony over seeds.
 			</p>
-			<CodeBlock code={brunel} colab={colab('brunel')} source={source('src/sparx/graph/models.py')} />
+			<CodeBlock fold code={brunel} colab={colab('brunel')} source={source('src/sparx/graph/models.py')} />
 			<a class="more" href="/learn/networks/">Brunel's regimes, and the whole fly brain</a>
 			<BrunelRaster slot="figure" />
 		</Section>

@@ -1,5 +1,6 @@
 ---
-// sparx code beside a figure, with where it comes from and a notebook that runs it.
+// sparx code beside a figure, with where it comes from and a notebook that runs it. With `fold`, as on the
+// front page, a phone shows it folded behind a tap so the page reads as a story; the course shows it inline.
 import { Code } from '@astrojs/starlight/components';
 
 interface Props {
@@ -7,12 +8,14 @@ interface Props {
 	title?: string;
 	colab?: string;
 	source?: string;
+	fold?: boolean;
 }
-const { code, title, colab, source } = Astro.props;
+const { code, title, colab, source, fold = false } = Astro.props;
+const Box = fold ? 'details' : 'div';
 ---
 
-<details class="code-block" open>
-	<summary>The code</summary>
+<Box class="code-block not-content" open={fold || undefined}>
+	{fold && <summary>The code</summary>}
 	<Code code={code.trim()} lang="python" title={title} wrap preserveIndent />
 	{
 		(colab || source) && (
@@ -22,11 +25,14 @@ const { code, title, colab, source } = Astro.props;
 			</div>
 		)
 	}
-</details>
-<script is:inline>
-	// On a phone the code starts folded, so the page reads as a story; it is one tap away.
-	if (matchMedia('(max-width: 63.99rem)').matches) document.currentScript.previousElementSibling.open = false;
-</script>
+</Box>
+{
+	fold && (
+		<script is:inline>
+			if (matchMedia('(max-width: 63.99rem)').matches) document.currentScript.previousElementSibling.open = false;
+		</script>
+	)
+}
 
 <style>
 	.code-block {

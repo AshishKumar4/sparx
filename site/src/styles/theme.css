@@ -166,3 +166,9 @@ html {
 	font-size: 0.8125rem;
 	color: var(--sx-muted);
 }
+
+@media (max-width: 40rem) {
+	.expressive-code {
+		--ec-codeFontSize: 0.6875rem;
+	}
+}

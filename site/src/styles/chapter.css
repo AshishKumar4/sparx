@@ -11,8 +11,9 @@
 }
 
 .sl-markdown-content .live-figure,
-.sl-markdown-content .chart {
-	margin-block: 1.75rem;
+.sl-markdown-content .chart,
+.sl-markdown-content .code-block {
+	margin-block: 1.5rem;
 }
 
 .sl-markdown-content .katex-display {

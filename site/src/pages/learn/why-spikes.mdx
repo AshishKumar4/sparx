@@ -119,7 +119,7 @@ The input layer comes out at 1.0 spikes per synapse: an image with a mean intens
 
 1. About 1.02: with 8-bit integers the multiply-add costs 0.23 pJ against a 10 pJ read, so the arithmetic barely moves the result. Memory traffic decides it.
 2. About 5 in 32-bit float (4.6 pJ against 0.9 pJ) and about 8 in 8-bit integers (0.23 pJ against 0.03 pJ). That ratio is the ceiling on what spikes can save on arithmetic alone.
-3. About 0.14, if both layers fire near the average, since each step is one inference. That is inside the band. The drone's first layer is different: its seven readings are real numbers, not spikes, so that layer does multiply-adds.
+3. 0.14 spikes per step × 1 step per inference = 0.14 spikes per synapse per inference, if both layers fire near the average. That is inside the band. The drone's first layer is different: its seven readings are real numbers, not spikes, so that layer does multiply-adds.
 4. They grow fourfold, to about 4 spikes per synapse at the input. The rate stayed the same; the time grew.
 
 </details>

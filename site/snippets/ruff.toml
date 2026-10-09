@@ -1,0 +1,3 @@
+# The pages show these files beside their prose, and phones show about 72 columns of code.
+extend = "../../pyproject.toml"
+line-length = 72
