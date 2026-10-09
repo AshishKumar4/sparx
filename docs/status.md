@@ -57,8 +57,7 @@ sparx uses dew wherever dew has the concept; changes dew needs go to dew as pull
 | What | Where it helps |
 | --- | --- |
 | `Supervised`'s metrics in the validation pass | `examples/pattern_completion.py` scores its holdout's zeroed bits itself after `fit` |
-| Boxed logical axes recorded with a checkpoint | dew `7ca258a0` places a parameter by its own `nn.with_logical_partitioning` names inside the trainer only, so a restore onto a mesh would lose them; sparx keeps `(module, parameter)` suffix declarations, which also place any other model's module of that name |
 
-Landed in dew and taken here: `Objective.with_gradients` leaves the rule out of a value-only pass, `Dataset.validation` reads a held-out split alone, `OMITTED`, `Omitted`, `Artifact` and `logical_axes` are exported (`b255a88d`), and `Objective.row_weights` gives a rule its rows' weights (`7e13c23a`).
+Landed in dew and taken here: `Objective.with_gradients` leaves the rule out of a value-only pass, `Dataset.validation` reads a held-out split alone, `OMITTED`, `Omitted`, `Artifact` and `logical_axes` are exported (`b255a88d`), and `Objective.row_weights` gives a rule its rows' weights (`7e13c23a`). dew places a parameter by the axes its module boxes (`nn.with_logical_partitioning`), in training and on restore (`f3324cfa`); sparx's models keep `(module, parameter)` declarations instead, because a boxed model's `init` returns `LogicallyPartitioned` leaves that every caller indexing its parameters would have to unbox, while a declaration also places another model's module of the same name and parameter in the same process.
 
 Stateful serving in dew (dew#30) was declined and the issue closed: dew's server overlaps dispatch and token draws, which synchronous spiking frames do not need, so `sparx.serve.StreamServer` stays sparx's.
