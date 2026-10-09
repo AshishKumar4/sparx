@@ -127,13 +127,18 @@ class Scaled(nn.Module):
 
 def test_the_server_calls_the_model_with_the_classifiers_recorded_arguments():
     model, rng = Scaled(), np.random.default_rng(2)
-    variables = model.init(jax.random.key(0), jnp.zeros((1, 1, 4)), 1.0)
-    server = StreamServer(model, variables, slots=1, frame=3, sample_shape=(4,), call={"scale": 2.5})
-    session, stream = server.open(), rng.random((6, 4)).astype(np.float32)
-    futures = [server.submit(session, stream[:3]), server.submit(session, stream[3:])]
-    server.run()
-    direct = model.apply(variables, jnp.asarray(stream)[:, None], 2.5)[:, 0]
-    np.testing.assert_allclose(np.concatenate([f.result() for f in futures]), direct, rtol=1e-6)  # observed 0
+    # In float64, as the tests above: an A100 runs float32 matrix products in TF32, rounded
+    # differently for the server's batch than for the direct call's.
+    with jax.enable_x64(new_val=True):
+        variables = model.init(jax.random.key(0), jnp.zeros((1, 1, 4)), 1.0)
+        server = StreamServer(model, variables, slots=1, frame=3, sample_shape=(4,), call={"scale": 2.5},
+                              dtype=jnp.float64)
+        session, stream = server.open(), rng.random((6, 4))
+        futures = [server.submit(session, stream[:3]), server.submit(session, stream[3:])]
+        server.run()
+        direct = model.apply(variables, jnp.asarray(stream)[:, None], 2.5)[:, 0]
+        served = np.concatenate([f.result() for f in futures])
+    np.testing.assert_allclose(served, direct, rtol=1e-12, atol=1e-12)
     assert np.abs(direct).max() > 0.1
 
 
