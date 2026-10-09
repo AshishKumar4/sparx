@@ -1,0 +1,99 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { explainers } from '../../data/learn.mjs';
+import '../../styles/page.css';
+---
+
+<StarlightPage
+	frontmatter={{
+		title: 'Learn',
+		description: 'Spiking networks, learning rules and simulation, explained with sparx running live in your browser.',
+		template: 'splash',
+	}}
+	hasSidebar={false}
+>
+	<div class="page index not-content">
+		<header>
+			<h1>Learn by changing things</h1>
+			<p>
+				Each page runs a piece of sparx in your browser and shows the Python that does the same in sparx. The browser's engines are
+				held to sparx's own runs by tests: the same spikes, and gradients equal to rounding.
+			</p>
+		</header>
+		<ol>
+			{
+				explainers.map((e, k) => (
+					<li style={`--role: var(--sx-${e.role})`}>
+						<a href={`/learn/${e.slug}/`}>
+							<span class="number">{String(k + 1).padStart(2, '0')}</span>
+							<span class="title">{e.title}</span>
+							<span class="summary">{e.summary}</span>
+						</a>
+					</li>
+				))
+			}
+		</ol>
+	</div>
+</StarlightPage>
+
+<style>
+	.index {
+		max-width: 68rem;
+		margin-inline: auto;
+		padding: 3rem var(--sl-content-pad-x, 1rem) 5rem;
+	}
+	h1 {
+		margin: 0;
+		font-size: clamp(2.2rem, 1.5rem + 3vw, 3.75rem);
+		letter-spacing: -0.04em;
+		line-height: 1.02;
+		font-weight: 700;
+		color: var(--sx-ink);
+	}
+	header p {
+		margin: 1rem 0 0;
+		max-width: 40rem;
+		font-size: 1.1875rem;
+		line-height: 1.55;
+		color: var(--sx-ink-2);
+	}
+	ol {
+		list-style: none;
+		padding: 0;
+		margin: 3rem 0 0;
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+		gap: 0.75rem;
+	}
+	a {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		gap: 0.5rem 0.875rem;
+		height: 100%;
+		padding: 1.25rem 1.375rem 1.375rem;
+		border: 1px solid var(--sx-line);
+		border-radius: 0.75rem;
+		background: var(--sx-panel);
+		text-decoration: none;
+	}
+	a:hover {
+		border-color: var(--sx-faint);
+	}
+	.number {
+		grid-row: span 2;
+		font-family: var(--sx-mono);
+		font-size: 0.8125rem;
+		color: var(--role);
+		padding-top: 0.2rem;
+	}
+	.title {
+		font-weight: 600;
+		font-size: 1.0625rem;
+		color: var(--sx-ink);
+	}
+	.summary {
+		font-size: 0.9375rem;
+		line-height: 1.5;
+		color: var(--sx-muted);
+	}
+</style>

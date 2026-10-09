@@ -1,0 +1,70 @@
+---
+import CodeBlock from '../../components/CodeBlock.astro';
+import LearnPage from '../../components/learn/LearnPage.astro';
+import IzhikevichScope from '../../components/live/IzhikevichScope.astro';
+import LifScope from '../../components/live/LifScope.astro';
+import PhysicalScope from '../../components/live/PhysicalScope.astro';
+import { colab, source } from '../../data/site.mjs';
+import izhikevich from '../../../snippets/izhikevich.py?raw';
+import neuron from '../../../snippets/neuron.py?raw';
+import physical from '../../../snippets/physical.py?raw';
+---
+
+<LearnPage
+	slug="neuron"
+	title="Neurons"
+	description="A spiking neuron keeps a charge that leaks away, fires when the charge crosses a threshold, and resets. Everything else in a spiking network is built on that."
+>
+	<h2>The leaky integrate-and-fire neuron</h2>
+	<p>
+		Each step, the membrane keeps a fraction of its charge and adds the step's input: <code>v = decay * v + x</code>. When
+		<code>v</code> reaches the threshold, the neuron emits a spike, a 1, and resets. Otherwise it emits 0. The decay is
+		<code>exp(-1 / tau)</code>, so a time constant of 12 steps keeps 92% of the charge each step.
+	</p>
+	<div class="wide"><LifScope height="17rem" /></div>
+	<p>
+		Raise the input until the neuron fires steadily, then lower it: below about <code>(1 - decay) * threshold</code> per step, the leak wins and
+		the neuron never fires, however long it waits. Noise lets it fire anyway, now and then. A longer time constant remembers more, so the same
+		input fires it sooner.
+	</p>
+	<p>
+		The reset matters. <code>"subtract"</code> takes the threshold away and keeps whatever overshoot there was, so a strong input fires at a
+		rate proportional to its size. <code>"zero"</code> forgets the overshoot. These are <code>LIFCell</code>'s; the layer
+		<code>sparx.nn.LIF</code> builds the same cell for every feature of a Flax model.
+	</p>
+	<CodeBlock code={neuron} colab={colab('neuron')} source={source('src/sparx/dynamics/ml.py')} />
+
+	<h2>A neuron in millivolts</h2>
+	<p>
+		The physical models run in ms, mV, pA, nS and pF. <code>LeakyIntegrateAndFire</code> solves its membrane exactly over each step, as NEST's
+		<code>iaf_psc_*</code> neurons do, and after a spike holds the reset for <code>t_ref</code>. Below 100 pA this cell never fires: a
+		current lifts its membrane by at most the current over its leak conductance, 10 nS, and it takes 100 pA to lift it the 10 mV from rest
+		to threshold.
+	</p>
+	<div class="wide"><PhysicalScope /></div>
+	<CodeBlock code={physical} colab={colab('neuron')} source={source('src/sparx/dynamics/neurons.py')} />
+
+	<h2>Two variables, many patterns</h2>
+	<p>
+		Izhikevich's model adds a recovery variable <code>u</code> that the membrane pushes up and that pulls the membrane down. Four numbers,
+		<code>a</code>, <code>b</code>, <code>c</code> and <code>d</code>, set how fast it recovers, how much it follows the voltage, where a spike
+		resets the voltage, and how much each spike adds to it. Together they give the cortical cell classes of his 2003 paper: pick one, and
+		change the current.
+	</p>
+	<div class="wide"><IzhikevichScope /></div>
+	<CodeBlock code={izhikevich} colab={colab('neuron')} source={source('src/sparx/dynamics/neurons.py')} />
+
+	<h2>Checked</h2>
+	<div class="checked">
+		<p>
+			The browser steps these neurons with the same arithmetic as sparx, and <code>site/test/neurons.test.ts</code> holds them to sparx's own
+			float64 runs on recorded inputs. <code>LIFCell</code> with each reset, <code>LeakyIntegrateAndFire</code>, and Izhikevich's seven classes
+			fire the same spikes. Izhikevich's membrane matches to the last bit when sparx runs op by op.
+		</p>
+		<p>
+			sparx itself is held to references: <code>LIFCell</code> to SpikingJelly and snnTorch, <code>LeakyIntegrateAndFire</code> to NEST within
+			1e-11 mV, and <code>Izhikevich</code> to his published code and to NEST, spike for spike. The <a href="/docs/fidelity/">fidelity ledger</a>
+			has each check, and <a href="/learn/simulators/">sparx, NEST and Brian2</a> shows them side by side.
+		</p>
+	</div>
+</LearnPage>

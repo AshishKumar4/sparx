@@ -1,0 +1,59 @@
+---
+import CodeBlock from '../../components/CodeBlock.astro';
+import LearnPage from '../../components/learn/LearnPage.astro';
+import Delays from '../../components/live/Delays.astro';
+import { colab, source } from '../../data/site.mjs';
+import code from '../../../snippets/delays.py?raw';
+---
+
+<LearnPage
+	slug="delays"
+	title="Learned delays"
+	description="A spike takes time to travel. When each synapse learns how long, a neuron can hear a sequence of spikes as one coincidence."
+>
+	<h2>Time as a parameter</h2>
+	<p>
+		In a brain, a spike reaches each target after its own delay, set by the length and speed of the axon. A neuron that only fires when its
+		inputs arrive together can then detect a sequence: the input that fires first takes the longest route. Hammouamri et al. (ICLR 2024)
+		learned these delays by gradient descent beside the weights, and reported a new state of the art on the Spiking Heidelberg Digits with
+		a small network.
+	</p>
+	<p>
+		A delay is a whole number of steps, which has no gradient. <code>sparx.nn.DelayedDense</code> spreads each synapse over a Gaussian centered
+		at its delay, so moving the delay moves where the spike arrives and the loss can feel it. As training goes on the Gaussians narrow, and at
+		<code>sigma=0</code> each synapse delivers to exactly one step: that is the network to deploy.
+	</p>
+
+	<h2>Line them up</h2>
+	<p>
+		Inputs A, B and C fire once each, at steps 5, 18 and 30, into one leaky integrator through a weight of 0.6, and the integrator is read
+		at step 50. The violet bars are each synapse's kernel: where its spike arrives, and how spread out. The reading is highest when all three
+		arrive just at step 50. Drag the delays yourself, or let gradient ascent on the reading learn them while sigma shrinks from 8 to 0.5; at
+		the end it rounds them.
+	</p>
+	<div class="wide"><Delays /></div>
+	<p>
+		With a wide Gaussian the arrivals overlap even when the delays are off, so the gradient can see the way to go. With a narrow one it sees
+		only the steps next to each delay. That is why training starts wide.
+	</p>
+	<CodeBlock code={code} colab={colab('delays')} source={source('src/sparx/nn/delays.py')} />
+
+	<h2>In a real network</h2>
+	<p>
+		<code>sparx.models.SpikingMLP(delays=...)</code> delays its synapses this way, and with Hammouamri et al.'s settings it is their SNN-delays
+		network, checked against their code. On a 4-core CPU, 20 of their 150 epochs reached 91.9% on SHD, and their code on the same machine
+		93.6%. The full-length, multi-seed comparison has not been run yet (<a href="/docs/status/">status</a>).
+	</p>
+
+	<h2>Checked</h2>
+	<div class="checked">
+		<p>
+			<code>site/test/learning.test.ts</code> runs this toy through sparx's <code>DelayedDense</code> and <code>LI</code> at three widths. The
+			browser's kernels match <code>delay_kernel</code> to 1e-14, and its gradient in each delay matches <code>jax.grad</code> to 1e-16.
+		</p>
+		<p>
+			<code>DelayedDense</code> matches DCLS, the layer SNN-delays uses: outputs within 2.4e-7, and gradients in the inputs, weights and delays
+			within 1.4e-6 (<a href="/docs/fidelity/">fidelity ledger</a>).
+		</p>
+	</div>
+</LearnPage>

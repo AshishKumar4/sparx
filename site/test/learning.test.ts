@@ -24,13 +24,13 @@ for (const [name, expected] of Object.entries<{ loss: number; grad: number[] }>(
 }
 
 for (const c of fixtures.delays.cases) {
-	test(`DelayedDense delays at sigma ${c.sigma}`, () => {
+	test(`DelayedDense delays, read ${c.read_at === null ? 'at the peak' : `at step ${c.read_at}`}, sigma ${c.sigma}`, () => {
 		const d = fixtures.delays;
-		const toy = { times: d.x_times, weight: Math.fround(d.weight), maxDelay: d.max_delay, steps: d.steps, decay: Math.exp(-1 / d.tau) };
-		for (const [i, delay] of d.delay.entries()) expect(largest(kernel(delay, d.max_delay, c.sigma), c.kernel[i])).toBeLessThan(1e-14);
-		const out = peak(toy, d.delay, c.sigma);
+		const toy = { times: d.x_times, weight: Math.fround(d.weight), maxDelay: c.max_delay, steps: d.steps, decay: Math.exp(-1 / d.tau) };
+		for (const [i, delay] of c.delay.entries()) expect(largest(kernel(delay, c.max_delay, c.sigma), c.kernel[i])).toBeLessThan(1e-14);
+		const out = peak(toy, c.delay, c.sigma, c.read_at ?? undefined);
 		const worst = largest(out.grad, c.grad);
-		console.log(`sigma ${c.sigma}: loss ${out.loss.toFixed(6)} (sparx ${c.loss.toFixed(6)}), gradient ${out.grad.map((g) => g.toExponential(2)).join(' ')}, within ${worst.toExponential(1)}`);
+		console.log(`read ${c.read_at ?? 'at peak'}, sigma ${c.sigma}: loss ${out.loss.toFixed(6)} (sparx ${c.loss.toFixed(6)}), gradient within ${worst.toExponential(1)}`);
 		expect(Math.abs(out.loss - c.loss)).toBeLessThan(1e-12);
 		expect(worst).toBeLessThan(1e-12);
 	});

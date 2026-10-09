@@ -33,8 +33,9 @@ export interface Toy {
 	decay: number;
 }
 
-/** The readout's membrane over time, its peak's step, and the gradient of minus the peak in each delay. */
-export function peak(toy: Toy, delays: number[], sigma: number) {
+/** The readout's membrane over time, the step it is read at (its peak's, or `readAt`), and the gradient of
+ * minus its value there in each delay. */
+export function peak(toy: Toy, delays: number[], sigma: number, readAt?: number) {
 	const { times, weight, maxDelay, steps, decay } = toy;
 	const kernels = delays.map((d) => kernel(d, maxDelay, sigma));
 	const y = new Float64Array(steps);
@@ -47,6 +48,7 @@ export function peak(toy: Toy, delays: number[], sigma: number) {
 		v[t] = (t ? decay * v[t - 1] : 0) + y[t];
 		if (v[t] > v[at]) at = t;
 	}
+	if (readAt !== undefined) at = readAt;
 	const dy = new Float64Array(steps);
 	for (let t = at, back = -1; t >= 0; t--, back *= decay) dy[t] = back;
 	const grad = delays.map((d, i) => {

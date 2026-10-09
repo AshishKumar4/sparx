@@ -1,0 +1,51 @@
+---
+// One sparx.dynamics.LeakyIntegrateAndFire in mV on a current in pA, stepped live.
+import Figure from './Figure.astro';
+import Slider from './Slider.astro';
+---
+
+<div data-physical>
+	<Figure engine="LeakyIntegrateAndFire" height="15rem">
+		<canvas role="img" aria-label="A leaky integrate-and-fire neuron's membrane in millivolts, rising toward -50 mV, firing, and held at its reset during the refractory period"></canvas>
+		<Fragment slot="controls">
+			<Slider name="current" label="Current" min={0} max={700} step={5} value={260} unit="pA" digits={0} />
+			<Slider name="refractory" label="Refractory period" min={0} max={20} step={0.5} value={5} unit="ms" digits={1} />
+		</Fragment>
+		<p slot="after" class="readout">20 ms, 200 pF, rest −60 mV, threshold −50 mV · dt 0.1 ms · rheobase 100 pA</p>
+	</Figure>
+</div>
+
+<script>
+	import { LeakyIntegrateAndFire } from '../../engines/neurons';
+	import { controls } from '../../widgets/controls';
+	import { scope } from '../../widgets/scope';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-physical]')) {
+		const cell = new LeakyIntegrateAndFire();
+		const ui = controls(root, () => {
+			cell.t_ref = ui.read('refractory');
+			view.redraw();
+		});
+		const view = scope(root.querySelector('canvas') as HTMLCanvasElement, {
+			threshold: -50,
+			range: [-62, -42],
+			inputRange: [0, 900],
+			step() {
+				const input = ui.read('current');
+				let fired = 0;
+				for (let k = 0; k < 5; k++) fired |= cell.step(input, 0.1);
+				return { v: cell.v, input, fired };
+			},
+		}, { steps: 400 });
+	}
+</script>
+
+<style>
+	.readout {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+	}
+</style>

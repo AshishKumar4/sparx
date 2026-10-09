@@ -1,0 +1,31 @@
+---
+// PairSTDP's weight change for one pair of spikes at each lag, computed by running the rule.
+import Choice from './Choice.astro';
+import Figure from './Figure.astro';
+import Slider from './Slider.astro';
+---
+
+<div data-stdp-window>
+	<Figure engine="PairSTDP" height="14rem">
+		<canvas role="img" aria-label="The STDP window: a presynaptic spike shortly before a postsynaptic one strengthens the synapse, shortly after weakens it"></canvas>
+		<Fragment slot="controls">
+			<Slider name="tau_plus" label="tau_plus" min={2} max={60} step={0.5} value={16.8} unit="ms" digits={1} />
+			<Slider name="tau_minus" label="tau_minus" min={2} max={80} step={0.5} value={33.7} unit="ms" digits={1} />
+			<Slider name="alpha" label="alpha (depression)" min={0} max={2} step={0.01} value={0.55} digits={2} />
+			<Choice name="mu" label="Bounds" value="0" options={[{ value: '0', label: 'Additive' }, { value: '1', label: 'Multiplicative' }]} />
+		</Fragment>
+	</Figure>
+</div>
+
+<script>
+	import { controls } from '../../widgets/controls';
+	import { windowFigure } from '../../widgets/plasticity';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-stdp-window]')) {
+		const ui = controls(root, () => draw());
+		const draw = windowFigure(root, () => {
+			const mu = Number(ui.choice('mu'));
+			return { tau_plus: ui.read('tau_plus'), tau_minus: ui.read('tau_minus'), lambda: 0.01, alpha: ui.read('alpha'), mu_plus: mu, mu_minus: mu, w_max: 1 };
+		});
+	}
+</script>

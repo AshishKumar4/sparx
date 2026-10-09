@@ -1,0 +1,60 @@
+---
+// Three inputs delayed onto one readout: set the delays, or learn them (src/widgets/delays.ts).
+import Figure from './Figure.astro';
+import Slider from './Slider.astro';
+---
+
+<div data-delays>
+	<Figure engine="DelayedDense + LI" height="21rem">
+		<canvas role="img" aria-label="Three inputs, each firing once, their delayed arrivals spread as Gaussians over the lags, and the readout membrane they drive, whose peak is highest when the arrivals coincide"></canvas>
+		<Fragment slot="controls">
+			<Slider name="d0" label="Delay of A" min={0} max={30} step={0.1} value={4} unit="steps" digits={1} />
+			<Slider name="d1" label="Delay of B" min={0} max={30} step={0.1} value={16} unit="steps" digits={1} />
+			<Slider name="d2" label="Delay of C" min={0} max={30} step={0.1} value={22} unit="steps" digits={1} />
+			<Slider name="sigma" label="Width sigma" min={0} max={8} step={0.05} value={3} digits={2} />
+			<div class="buttons">
+				<button type="button" data-act="learn" class="primary">Learn the delays</button>
+				<button type="button" data-act="scramble">Scramble</button>
+			</div>
+		</Fragment>
+		<p slot="after" class="readout" data-status aria-live="polite"></p>
+	</Figure>
+</div>
+
+<script>
+	import { delays } from '../../widgets/delays';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-delays]')) delays(root);
+</script>
+
+<style>
+	.buttons {
+		display: flex;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+	button {
+		font: inherit;
+		font-size: 0.875rem;
+		font-weight: 550;
+		height: 2.25rem;
+		padding-inline: 1rem;
+		border-radius: 0.5rem;
+		border: 1px solid var(--sx-line-strong);
+		background: var(--sx-page);
+		color: var(--sx-ink);
+		cursor: pointer;
+	}
+	button.primary {
+		background: var(--sx-learn);
+		border-color: var(--sx-learn);
+		color: #fff;
+	}
+	.readout {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+	}
+</style>

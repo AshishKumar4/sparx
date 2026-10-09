@@ -118,41 +118,39 @@ def teach(rng: np.random.Generator) -> dict:
 
 
 def delays(rng: np.random.Generator) -> dict:
-    """Three inputs that each fire once, delayed onto one leaky integrator; the loss is minus its peak."""
-    steps, max_delay = 80, 30
+    """Three inputs that each fire once, delayed onto one leaky integrator; the loss is minus its peak, or
+    minus its value at step 50, the delays page's (`read_at`)."""
+    steps = 80
     x = np.zeros((steps, 1, 3))
     for i, t in enumerate((5, 18, 30)):
         x[t, 0, i] = 1.0
-    delay = np.array([[24.3], [12.7], [3.1]])
     weight = np.full((3, 1), 0.6)
-    layer = DelayedDense(1, max_delay, use_bias=False)
     readout = LI(tau=4.0)
-    out = {
-        "x_times": [5, 18, 30],
-        "max_delay": max_delay,
-        "steps": steps,
-        "delay": delay[:, 0].tolist(),
-        "weight": 0.6,
-        "tau": 4.0,
-        "cases": [],
-    }
-    for sigma in (6.0, 1.5, 0.4):
+    out = {"x_times": [5, 18, 30], "steps": steps, "weight": 0.6, "tau": 4.0, "cases": []}
+    for max_delay, delay, read_at in ((30, [24.3, 12.7, 3.1], None), (45, [4.0, 16.0, 22.0], 50)):
+        layer = DelayedDense(1, max_delay, use_bias=False)
+        for sigma in (6.0, 1.5, 0.4):
 
-        def loss(delay, sigma=sigma):
-            params = {"kernel": jnp.asarray(weight), "delay": delay}
-            y = layer.apply({"params": params}, jnp.asarray(x), sigma)
-            return -jnp.max(readout.apply({}, y))
+            def loss(delay, sigma=sigma, layer=layer, read_at=read_at):
+                y = layer.apply(
+                    {"params": {"kernel": jnp.asarray(weight), "delay": delay}}, jnp.asarray(x), sigma
+                )
+                v = readout.apply({}, y)
+                return -(jnp.max(v) if read_at is None else v[read_at, 0, 0])
 
-        value, grad = jax.value_and_grad(loss)(jnp.asarray(delay))
-        kernel = delay_kernel(jnp.asarray(delay[:, 0]), max_delay, sigma)
-        out["cases"].append(
-            {
-                "sigma": sigma,
-                "loss": float(value),
-                "grad": np.asarray(grad)[:, 0].tolist(),
-                "kernel": np.asarray(kernel).T.tolist(),
-            }
-        )
+            value, grad = jax.value_and_grad(loss)(jnp.asarray(delay)[:, None])
+            kernel = delay_kernel(jnp.asarray(delay), max_delay, sigma)
+            out["cases"].append(
+                {
+                    "max_delay": max_delay,
+                    "delay": delay,
+                    "read_at": read_at,
+                    "sigma": sigma,
+                    "loss": float(value),
+                    "grad": np.asarray(grad)[:, 0].tolist(),
+                    "kernel": np.asarray(kernel).T.tolist(),
+                }
+            )
     return out
 
 

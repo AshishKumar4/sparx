@@ -1,0 +1,63 @@
+---
+// One LIF neuron taught, live, to fire at the times the reader marks (src/widgets/teach.ts).
+import Choice from './Choice.astro';
+import Figure from './Figure.astro';
+
+const names = ['ATan', 'FastSigmoid', 'Triangle', 'Gaussian', 'StraightThrough'];
+---
+
+<div data-teach>
+	<Figure engine="LIFCell + jax.grad" height="24rem">
+		<canvas role="img" aria-label="Forty input spike trains, the neuron's membrane and spikes, the target times, and the loss falling as gradient descent trains the input weights"></canvas>
+		<Fragment slot="controls">
+			<div class="buttons">
+				<button type="button" data-act="train" aria-pressed="false" class="primary">Train</button>
+				<button type="button" data-act="reset">Reset weights</button>
+			</div>
+			<Choice name="surrogate" label="Surrogate" value="ATan" options={names.map((n) => ({ value: n, label: n }))} />
+		</Fragment>
+		<p slot="after" class="readout" data-status aria-live="polite"></p>
+	</Figure>
+</div>
+
+<script>
+	import { controls } from '../../widgets/controls';
+	import { teacher } from '../../widgets/teach';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-teach]')) {
+		const teach = teacher(root);
+		const ui = controls(root, () => teach.setSurrogate(ui.choice('surrogate')));
+	}
+</script>
+
+<style>
+	.buttons {
+		display: flex;
+		gap: 0.5rem;
+	}
+	button {
+		font: inherit;
+		font-size: 0.875rem;
+		font-weight: 550;
+		height: 2.25rem;
+		padding-inline: 1rem;
+		border-radius: 0.5rem;
+		border: 1px solid var(--sx-line-strong);
+		background: var(--sx-page);
+		color: var(--sx-ink);
+		cursor: pointer;
+	}
+	button.primary {
+		background: var(--sx-learn);
+		border-color: var(--sx-learn);
+		color: #fff;
+		min-width: 5.5rem;
+	}
+	.readout {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+	}
+</style>

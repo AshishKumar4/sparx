@@ -1,0 +1,59 @@
+---
+import CodeBlock from '../../components/CodeBlock.astro';
+import LearnPage from '../../components/learn/LearnPage.astro';
+import PatternFinder from '../../components/live/PatternFinder.astro';
+import StdpWindow from '../../components/live/StdpWindow.astro';
+import { colab, source } from '../../data/site.mjs';
+import code from '../../../snippets/stdp.py?raw';
+---
+
+<LearnPage
+	slug="plasticity"
+	title="Plasticity"
+	description="Synapses that change with the timing of the spikes on either side of them, with no loss and no gradient. One neuron can find a pattern hidden in noise this way."
+>
+	<h2>Spike-timing-dependent plasticity</h2>
+	<p>
+		When an input spikes shortly before its neuron does, it probably helped, and STDP strengthens the synapse. When it spikes shortly after, it
+		didn't, and STDP weakens it. The closer the two spikes, the larger the change. <code>sparx.dynamics.PairSTDP</code> is NEST's
+		<code>stdp_synapse</code>: each neuron keeps a trace of its recent spikes, and each spike reads the other side's trace.
+	</p>
+	<div class="wide"><StdpWindow /></div>
+	<p>
+		Each point runs the rule on one pair of spikes at that lag, starting from half the maximum weight. With additive bounds every change has
+		the same size wherever the weight is, which pushes weights toward 0 or the maximum. With multiplicative bounds a strong synapse grows less
+		and a weak one shrinks less, which keeps them in between.
+	</p>
+
+	<h2>Finding a pattern in noise</h2>
+	<p>
+		Masquelier, Guyonneau and Thorpe (2008) showed what this rule can do on its own. 400 afferents fire at random, at 30 Hz plus 10 Hz of
+		noise. Now and then, for 50 ms, the first 200 replay the same frozen spike pattern, shaded below, at the same rate, so no afferent's rate
+		gives it away. One neuron listens to all of them through STDP, with nothing telling it the pattern exists.
+	</p>
+	<div class="wide"><PatternFinder /></div>
+	<p>
+		At first the neuron fires anywhere. Inputs that happened to come before its spikes grow, and since the pattern always repeats the same
+		spikes in the same order, its afferents grow more often than the others. Within about a minute of simulated time the neuron stops firing
+		outside the pattern and fires inside most of them. The weights of the pattern's afferents (violet) split
+		into strong and weak, and the others fall.
+	</p>
+	<p>
+		This is a smaller version of their experiment, with sparx's <code>LeakyIntegrateAndFire</code> and <code>PairSTDP</code> in place of their
+		neuron and rule. At their depression of <code>alpha = 0.85</code> it fell silent before finding the pattern, so this one uses 0.55.
+	</p>
+	<CodeBlock code={code} colab={colab('stdp')} source={source('src/sparx/dynamics/plasticity.py')} />
+
+	<h2>Checked</h2>
+	<div class="checked">
+		<p>
+			The browser's <code>PairSTDP</code> runs on recorded spikes beside sparx's in <code>site/test/learning.test.ts</code>: twelve synapses
+			for 3,000 steps, additive and multiplicative, agree to 2e-15. Its neuron is the <code>LeakyIntegrateAndFire</code> that
+			<a href="/learn/neuron/">Neurons</a> checks.
+		</p>
+		<p>
+			sparx's pair, triplet and dopamine-modulated STDP match NEST's synapses: every transmitted weight within 1e-10 relative
+			(<a href="/docs/fidelity/">fidelity ledger</a>).
+		</p>
+	</div>
+</LearnPage>

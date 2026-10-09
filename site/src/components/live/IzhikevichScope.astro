@@ -1,0 +1,71 @@
+---
+// One sparx.dynamics.Izhikevich neuron in mV and ms, in any of the 2003 paper's classes, stepped live.
+import Choice from './Choice.astro';
+import Figure from './Figure.astro';
+import Slider from './Slider.astro';
+
+const classes = [
+	['regular_spiking', 'Regular spiking'],
+	['intrinsically_bursting', 'Bursting'],
+	['chattering', 'Chattering'],
+	['fast_spiking', 'Fast spiking'],
+	['low_threshold_spiking', 'Low threshold'],
+	['thalamo_cortical', 'Thalamo-cortical'],
+	['resonator', 'Resonator'],
+].map(([value, label]) => ({ value, label }));
+---
+
+<div data-izhikevich>
+	<Figure engine="Izhikevich" height="16rem">
+		<canvas role="img" aria-label="An Izhikevich neuron's membrane potential in millivolts as it fires in the chosen pattern"></canvas>
+		<Fragment slot="controls">
+			<Choice name="kind" label="Cell class" value="regular_spiking" options={classes} />
+			<Slider name="current" label="Input current" min={0} max={20} step={0.5} value={10} digits={1} />
+		</Fragment>
+		<p slot="after" class="readout"><code data-call>Izhikevich(a=0.02, b=0.2, c=-65.0, d=8.0)</code> · dt 0.1 ms · 400 ms window</p>
+	</Figure>
+</div>
+
+<script>
+	import { IZHIKEVICH_2003, Izhikevich } from '../../engines/neurons';
+	import { controls } from '../../widgets/controls';
+	import { scope } from '../../widgets/scope';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-izhikevich]')) {
+		const call = root.querySelector<HTMLElement>('[data-call]');
+		let cell = new Izhikevich();
+		const ui = controls(root, (name) => {
+			if (name === 'kind') {
+				const [a, b, c, d] = IZHIKEVICH_2003[ui.choice('kind')];
+				cell = new Izhikevich(a, b, c, d);
+				if (call) call.textContent = `Izhikevich(a=${a}, b=${b}, c=${c.toFixed(1)}, d=${d})`;
+			}
+			view.redraw();
+		});
+		const view = scope(root.querySelector('canvas') as HTMLCanvasElement, {
+			threshold: 30,
+			range: [-90, 40],
+			inputRange: [0, 25],
+			step() {
+				const input = ui.read('current');
+				let fired = 0;
+				for (let k = 0; k < 10; k++) fired |= cell.step(input, 0.1);
+				return { v: fired ? 30 : cell.v, input, fired };
+			},
+		}, { steps: 400 });
+	}
+</script>
+
+<style>
+	.readout {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+	}
+	.readout code {
+		color: var(--sx-ink-2);
+		background: none;
+	}
+</style>

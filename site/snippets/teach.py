@@ -1,0 +1,30 @@
+import jax
+import jax.numpy as jnp
+import optax
+
+import sparx
+from sparx.dynamics import LIFCell, decay
+from sparx.surrogate import ATan
+
+T, N = 200, 40
+trains = (jax.random.uniform(jax.random.key(0), (T, N)) < 0.04).astype(jnp.float32)
+target = jnp.zeros(T).at[jnp.array([40, 90, 150])].set(1.0)   # fire at these steps
+cell = LIFCell(decay=decay(tau=10.0), threshold=1.0, surrogate=ATan())
+
+
+def smooth(spikes, keep=jnp.exp(-1 / 10)):
+    return jax.lax.scan(lambda f, s: (keep * f + s,) * 2, 0.0, spikes)[1]
+
+
+def loss(w):
+    out, _ = sparx.run(cell, trains @ w)          # spikes are exactly 0 or 1
+    return jnp.mean((smooth(out.value) - smooth(target)) ** 2)
+
+
+w = 0.35 * jax.random.normal(jax.random.key(1), (N,))
+adam = optax.adam(0.04)
+state = adam.init(w)
+for _ in range(400):
+    updates, state = adam.update(jax.grad(loss)(w), state)   # the slope comes from ATan
+    w = optax.apply_updates(w, updates)
+print("fires at", jnp.flatnonzero(sparx.run(cell, trains @ w)[0].value))

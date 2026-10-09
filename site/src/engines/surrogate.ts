@@ -42,6 +42,11 @@ export function surrogates(sharpness = 1): Surrogate[] {
 			derivative: (x) => (Math.abs(x) < width / 2 ? 1 / width : 0),
 		},
 		{
+			name: 'StraightThrough',
+			call: 'StraightThrough()',
+			derivative: () => 1,
+		},
+		{
 			name: 'Gaussian',
 			call: `Gaussian(sigma=${sigma.toFixed(2)})`,
 			derivative: (x) => Math.exp(-0.5 * (x / sigma) ** 2) / (sigma * Math.sqrt(2 * Math.PI)),
