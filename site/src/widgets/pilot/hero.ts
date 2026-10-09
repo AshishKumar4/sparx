@@ -54,7 +54,7 @@ export function hero(root: HTMLElement, model: PilotModel): void {
 	const hidden = pilot.neurons;
 	const half = hidden / 2;
 	const dt = pilot.drone.dt;
-	const kernels = pilot.steps.flatMap((s) => (s.kind === 'dense' ? [s] : []));
+	const kernels = pilot.network.kernels();
 
 	// Nodes: 7 readings, 128 hidden neurons, 2 readouts; edges: the strongest of each layer.
 	const I = INPUTS.length;

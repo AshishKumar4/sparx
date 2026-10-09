@@ -19,7 +19,7 @@ _, sown = net.apply(params, spikes, mutable=["spike_rates"])
 
 steps = spikes.shape[0]
 per_synapse = {
-    "input -> hidden": float(spikes.mean()) * steps,                     # every input spike crosses 256 synapses
+    "input -> hidden": float(spikes.mean()) * steps,     # each input spike crosses 256 synapses
     "hidden -> output": float(sparx.firing_rates(sown)["LIF_0"]) * steps,
 }
 print(per_synapse)    # spikes per synapse per inference; compare with the break-even above
