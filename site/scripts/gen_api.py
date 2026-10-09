@@ -142,7 +142,7 @@ def render(module: griffe.Module) -> str:
         lines += [f"| [`{name}`](#{anchor(name)}) | {summary(obj)} |" for name, obj, _ in objects]
         lines.append("")
     for name, obj, home in objects:
-        lines += [f"## {name}", ""]
+        lines += [f"## `{name}`", ""]
         lines += ["```python", signature(name, obj), "```", ""]
         lines += [f"<a class=\"api-source\" href=\"{source(obj)}\"><code>{home}</code> on GitHub</a>", ""]
         text = docstring(obj)
@@ -157,7 +157,7 @@ def render(module: griffe.Module) -> str:
                     lines.append(f"| `{f.name}` | `{str(f.annotation).replace('|', chr(92) + '|')}` | {default} |")
                 lines.append("")
             for method in methods(obj):
-                lines += [f"### {name}.{method.name}", "", "```python",
+                lines += [f"### `{name}.{method.name}`", "", "```python",
                           f"def {method.name}({parameters(method)})"
                           + (f" -> {method.returns}" if method.returns is not None else ""), "```", ""]
                 if docstring(method):

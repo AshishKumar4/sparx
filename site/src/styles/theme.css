@@ -149,3 +149,20 @@ html {
 		scroll-behavior: auto !important;
 	}
 }
+
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover {
+	background: var(--sx-raised);
+	color: var(--sx-ink);
+	font-weight: 600;
+	box-shadow: inset 2px 0 var(--sx-spike);
+}
+
+:root[data-theme='light'] .sidebar-content a[aria-current='page'] {
+	background: var(--sx-panel);
+}
+
+.api-source {
+	font-size: 0.8125rem;
+	color: var(--sx-muted);
+}
