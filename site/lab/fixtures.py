@@ -12,7 +12,8 @@
 - brunel: a Brunel network `sparx.graph.Network` builds and steps, its edges read back, with its
   external input recorded as `ArrivalInput`s;
 - biology: a `PointNeuron` with a current synapse and AMPA, GABA-A and NMDA conductances, the
-  `LeakyIntegrateAndFire` alone on held conductances, and `HodgkinHuxley` on a stepped current.
+  `LeakyIntegrateAndFire` alone on held conductances, and `HodgkinHuxley` on a stepped current;
+- events: the racer's event camera pixels (site/lab/racer.py, `sense`) on wandering log brightness.
 """
 
 from __future__ import annotations
@@ -407,6 +408,20 @@ def biology(rng: np.random.Generator) -> dict:
     return {"dt": dt, "point": point, "held": held, "hodgkin": hodgkin}
 
 
+def events(rng: np.random.Generator) -> dict:
+    from racer import World, sense
+
+    world = World()
+    seen = np.cumsum(0.08 * rng.standard_normal((400, 50)), axis=0)
+    level = jnp.asarray(seen[0])
+    on, off = [], []
+    for t in range(1, len(seen)):
+        level, up, down = sense(world, level, jnp.asarray(seen[t]))
+        on.append(np.flatnonzero(np.asarray(up)).tolist())
+        off.append(np.flatnonzero(np.asarray(down)).tolist())
+    return {"threshold": world.threshold, "seen": seen.tolist(), "on": on, "off": off}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -424,6 +439,7 @@ def main() -> None:
         "bptt": bptt,
         "eprop": eprop,
         "biology": biology,
+        "events": events,
     }
     with jax.enable_x64(new_val=True):
         data = {

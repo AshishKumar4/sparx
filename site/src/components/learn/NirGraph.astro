@@ -1,0 +1,74 @@
+---
+// The pilot's network as sparx.nir.to_nir writes it (public/pilot/nir.json, from site/lab/pilot.py nir): one box per
+// NIR node, with each field's shape and values.
+import graph from '../../../public/pilot/nir.json';
+
+const order = ['input', '0', '1', '2', '3', '4', '5', 'output'];
+const nodes = order.map((name) => graph.nodes.find((n) => n.name === name)).filter((n) => n !== undefined);
+const fmt = (v: number) => (Math.abs(v) >= 100 || (Math.abs(v) < 0.01 && v !== 0) ? v.toExponential(2) : v.toPrecision(3));
+---
+
+<ol class="graph not-content">
+	{
+		nodes.map((n) => (
+			<li class={n.type.toLowerCase()}>
+				<span class="type">{n.type}</span>
+				<span class="name">{n.name === 'input' || n.name === 'output' ? n.name : `node ${n.name}`}</span>
+				{Object.entries(n.fields).map(([key, f]) => (
+					<span class="field">
+						<code>{key}</code> [{f.shape.join(' × ')}] {f.min === f.max ? fmt(f.mean) : `${fmt(f.min)} to ${fmt(f.max)}`}
+					</span>
+				))}
+			</li>
+		))
+	}
+</ol>
+
+<style>
+	.graph {
+		list-style: none;
+		padding: 0;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		align-items: stretch;
+	}
+	.graph li {
+		position: relative;
+		display: grid;
+		align-content: start;
+		gap: 0.25rem;
+		min-width: 9rem;
+		flex: 1;
+		padding: 0.75rem 0.875rem;
+		border: 1px solid var(--sx-line);
+		border-radius: 0.5rem;
+		background: var(--sx-panel);
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+	}
+	.graph li.lif {
+		border-color: color-mix(in srgb, var(--sx-spike) 50%, var(--sx-line));
+	}
+	.graph li.li {
+		border-color: color-mix(in srgb, var(--sx-membrane) 50%, var(--sx-line));
+	}
+	.type {
+		font-weight: 650;
+		font-size: 0.9375rem;
+		color: var(--sx-ink);
+	}
+	.name {
+		font-family: var(--sx-mono);
+	}
+	.field {
+		font-family: var(--sx-mono);
+		font-size: 0.6875rem;
+		line-height: 1.5;
+	}
+	.field code {
+		color: var(--sx-ink-2);
+		background: none;
+		padding: 0;
+	}
+</style>
