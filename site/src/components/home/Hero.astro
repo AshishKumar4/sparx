@@ -1,0 +1,307 @@
+---
+// The front page's hero. The drone is flown, live, by the spiking network site/lab/pilot.py trained;
+// src/widgets/pilot/hero.ts steps it.
+import model from '../../../public/pilot/pilot.json';
+import Install from '../Install.astro';
+
+const evaluation = model.evaluation as Record<string, number>;
+const arrived = Math.round(evaluation.arrived * 1000) / 10;
+---
+
+<section class="hero" data-hero>
+	<div class="world-box">
+		<canvas class="world" data-world aria-hidden="true"></canvas>
+	</div>
+	<div class="copy">
+		<h1>Spiking neural networks in&nbsp;JAX</h1>
+		<p class="lede">
+			Train them with gradients or local rules. Simulate circuits in millivolts and milliseconds. sparx is built on Flax and{' '}
+			<a href="https://dewml.dev">dew</a>, and every model is checked against a reference.
+		</p>
+		<div class="actions">
+			<a class="button primary" href="/learn/">How it works</a>
+			<a class="button" href="/docs/">Docs</a>
+			<Install />
+		</div>
+	</div>
+	<figure class="pilot" aria-labelledby="pilot-caption">
+		<figcaption id="pilot-caption">
+			<span class="live" aria-hidden="true"></span>
+			<span>
+				<strong>A spiking network is flying this drone.</strong>
+				<span class="hint desk">Point anywhere to give it a target, click to push it, or drag it and let go.</span>
+				<span class="hint touch">Tap anywhere to give it a target.</span>
+			</span>
+		</figcaption>
+		<canvas class="raster" data-raster role="img" aria-label="The pilot's spikes over the last two seconds, one row per neuron, and the membranes of its two readout neurons, which set the rotors' thrust"></canvas>
+		<div class="controls">
+			<button type="button" data-act="gust">Gust</button>
+			<button type="button" data-act="flip">Flip</button>
+			<button type="button" data-act="silence">Silence 16</button>
+			<button type="button" data-act="restore" class="restore">Restore</button>
+			<button type="button" data-act="pause" aria-pressed="false">Pause</button>
+		</div>
+		<p class="stats">
+			<span>128 LIF neurons, 10 ms a step, in your browser</span>
+			<span>firing <span data-rate>0 Hz</span></span>
+			<span class="silenced" data-silenced></span>
+		</p>
+		<p class="more">
+			Trained with sparx by gradients through its spikes and the drone's physics. It reaches a fixed target within 15&nbsp;cm and stays
+			there on {arrived}% of 1,000 random starts. <a href="/learn/pilot/">How it learned to fly</a>
+		</p>
+	</figure>
+</section>
+
+<link rel="preload" href="/pilot/pilot.json" as="fetch" crossorigin="anonymous" />
+
+<script>
+	import { hero } from '../../widgets/pilot/hero';
+
+	const root = document.querySelector<HTMLElement>('[data-hero]');
+	if (root) {
+		const model = await (await fetch('/pilot/pilot.json')).json();
+		hero(root, model);
+	}
+</script>
+
+<style>
+	.hero {
+		position: relative;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-areas: 'copy' 'world' 'pilot';
+		margin-inline: calc(-1 * var(--sl-content-pad-x, 1rem));
+		padding-inline: var(--sl-content-pad-x, 1rem);
+		border-bottom: 1px solid var(--sx-line);
+	}
+	.world-box {
+		grid-area: world;
+		position: relative;
+		height: 58svh;
+		min-height: 22rem;
+		margin-inline: calc(-1 * var(--sl-content-pad-x, 1rem));
+		border-block: 1px solid var(--sx-line);
+		background:
+			radial-gradient(ellipse at 50% 120%, var(--sx-membrane-soft), transparent 60%),
+			var(--sx-page);
+		touch-action: pan-y;
+	}
+	.world {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		cursor: crosshair;
+	}
+	.world:global(.grabbing) {
+		cursor: grabbing;
+	}
+	.copy {
+		grid-area: copy;
+		position: relative;
+		z-index: 1;
+		padding-block: 2.5rem 2rem;
+		pointer-events: none;
+	}
+	.copy a,
+	.copy button,
+	.copy :global(.install) {
+		pointer-events: auto;
+	}
+	h1 {
+		font-size: clamp(2.4rem, 1.4rem + 4.4vw, 4.6rem);
+		line-height: 1;
+		letter-spacing: -0.045em;
+		font-weight: 700;
+		color: var(--sx-ink);
+		margin: 0;
+		max-width: 12ch;
+		text-wrap: balance;
+	}
+	.lede {
+		margin-top: 1.25rem;
+		font-size: clamp(1.05rem, 0.95rem + 0.4vw, 1.25rem);
+		line-height: 1.5;
+		color: var(--sx-ink-2);
+		max-width: 34rem;
+	}
+	.lede a {
+		color: inherit;
+		text-decoration-color: var(--sx-faint);
+		text-underline-offset: 0.18em;
+	}
+	.actions {
+		margin-top: 1.75rem;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.625rem;
+		align-items: center;
+	}
+	.button {
+		display: inline-flex;
+		align-items: center;
+		height: 2.5rem;
+		padding-inline: 1rem;
+		border-radius: 0.5rem;
+		border: 1px solid var(--sx-line-strong);
+		color: var(--sx-ink);
+		text-decoration: none;
+		font-weight: 550;
+		font-size: 0.9375rem;
+		background: var(--sx-page);
+	}
+	.button:hover {
+		border-color: var(--sx-faint);
+	}
+	.button.primary {
+		background: var(--sx-ink);
+		color: var(--sx-page);
+		border-color: var(--sx-ink);
+	}
+	.button.primary:hover {
+		opacity: 0.9;
+	}
+	.pilot {
+		grid-area: pilot;
+		margin: 0;
+		padding-block: 1.25rem 2rem;
+		display: grid;
+		gap: 0.75rem;
+	}
+	figcaption {
+		display: flex;
+		gap: 0.625rem;
+		align-items: baseline;
+		font-size: 0.875rem;
+		line-height: 1.45;
+		color: var(--sx-ink-2);
+	}
+	figcaption strong {
+		color: var(--sx-ink);
+		font-weight: 600;
+		display: block;
+	}
+	.live {
+		flex: none;
+		width: 0.5rem;
+		height: 0.5rem;
+		border-radius: 50%;
+		background: var(--sx-spike);
+		box-shadow: 0 0 0 0.25rem var(--sx-spike-soft);
+		translate: 0 -0.05rem;
+	}
+	.hero[data-paused='true'] .live {
+		background: var(--sx-faint);
+		box-shadow: none;
+	}
+	.hint.desk {
+		display: none;
+	}
+	@media (hover: hover) and (pointer: fine) {
+		.hint.desk {
+			display: inline;
+		}
+		.hint.touch {
+			display: none;
+		}
+	}
+	.raster {
+		width: 100%;
+		height: 13rem;
+		cursor: pointer;
+	}
+	.controls {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.375rem;
+	}
+	.controls button {
+		font: inherit;
+		font-size: 0.8125rem;
+		font-weight: 500;
+		height: 2rem;
+		padding-inline: 0.75rem;
+		border-radius: 0.375rem;
+		border: 1px solid var(--sx-line-strong);
+		background: var(--sx-page);
+		color: var(--sx-ink);
+		cursor: pointer;
+	}
+	.controls button:hover {
+		border-color: var(--sx-faint);
+	}
+	.controls [data-act='pause'] {
+		margin-left: auto;
+	}
+	.hero:not([data-silenced]) .restore,
+	.hero[data-silenced='0'] .restore {
+		display: none;
+	}
+	.stats {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem 1rem;
+		margin: 0;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+	}
+	.stats [data-rate],
+	.silenced {
+		color: var(--sx-spike);
+	}
+	.more {
+		margin: 0;
+		font-size: 0.8125rem;
+		line-height: 1.5;
+		color: var(--sx-muted);
+	}
+	.more a {
+		color: var(--sx-ink);
+		white-space: nowrap;
+	}
+
+	@media (min-width: 64rem) {
+		.hero {
+			grid-template-columns: minmax(0, 1fr) 24rem;
+			grid-template-rows: 1fr auto;
+			grid-template-areas: 'copy pilot' 'copy pilot';
+			min-height: min(calc(100svh - var(--sl-nav-height, 3.5rem)), 56rem);
+			column-gap: 3rem;
+			padding-inline: max(2.5rem, calc((100vw - 84rem) / 2));
+			border-bottom: 1px solid var(--sx-line);
+		}
+		.world-box {
+			position: absolute;
+			inset: 0;
+			height: auto;
+			min-height: 0;
+			margin: 0;
+			border: 0;
+		}
+		.copy {
+			align-self: center;
+			padding-block: 4rem;
+			max-width: 36rem;
+		}
+		.raster {
+			height: 10.5rem;
+		}
+		.more {
+			display: none;
+		}
+		.pilot {
+			align-self: end;
+			gap: 0.625rem;
+			padding: 0.875rem 1rem 1rem;
+			margin-bottom: 2rem;
+			border: 1px solid var(--sx-line);
+			border-radius: 0.75rem;
+			background: color-mix(in srgb, var(--sx-page) 82%, transparent);
+			backdrop-filter: blur(6px);
+			position: relative;
+			z-index: 1;
+		}
+	}
+</style>

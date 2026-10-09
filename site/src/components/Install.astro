@@ -1,0 +1,62 @@
+---
+// The install command with a copy button.
+import { install } from '../data/site.mjs';
+---
+
+<div class="install">
+	<code>{install}</code>
+	<button type="button" data-copy={install} aria-label="Copy the install command">
+		<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M5 1.5h7A1.5 1.5 0 0 1 13.5 3v8H12V3H5zM3.5 4.5h6A1.5 1.5 0 0 1 11 6v7.5A1.5 1.5 0 0 1 9.5 15h-6A1.5 1.5 0 0 1 2 13.5V6a1.5 1.5 0 0 1 1.5-1.5m0 1.5v7.5h6V6z"></path></svg>
+	</button>
+</div>
+
+<script>
+	for (const button of document.querySelectorAll<HTMLButtonElement>('[data-copy]')) {
+		button.addEventListener('click', async () => {
+			await navigator.clipboard.writeText(button.dataset.copy ?? '');
+			button.classList.add('copied');
+			setTimeout(() => button.classList.remove('copied'), 1200);
+		});
+	}
+</script>
+
+<style>
+	.install {
+		display: inline-flex;
+		align-items: center;
+		height: 2.5rem;
+		border: 1px solid var(--sx-line);
+		border-radius: 0.5rem;
+		background: var(--sx-panel);
+		font-family: var(--sx-mono);
+		font-size: 0.8125rem;
+		max-width: 100%;
+	}
+	code {
+		padding-inline: 0.875rem 0.25rem;
+		color: var(--sx-ink-2);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		background: none;
+	}
+	code::before {
+		content: '$ ';
+		color: var(--sx-faint);
+	}
+	button {
+		display: grid;
+		place-items: center;
+		width: 2.25rem;
+		height: 100%;
+		border: 0;
+		background: none;
+		color: var(--sx-muted);
+		cursor: pointer;
+		border-radius: 0 0.5rem 0.5rem 0;
+	}
+	button:hover,
+	button:global(.copied) {
+		color: var(--sx-spike);
+	}
+</style>

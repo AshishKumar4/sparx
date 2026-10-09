@@ -1,0 +1,95 @@
+---
+// A section of the site's own pages: a short label in its role's color, a heading, text, and a figure
+// beside it on a wide screen.
+interface Props {
+	id: string;
+	label: string;
+	role?: 'spike' | 'membrane' | 'bio' | 'learn';
+	title: string;
+	flip?: boolean;
+}
+const { id, label, role = 'spike', title, flip = false } = Astro.props;
+---
+
+<section id={id} class:list={['section', { flip }]} aria-labelledby={`${id}-title`}>
+	<div class="text">
+		<p class="label" style={`--role: var(--sx-${role})`}>{label}</p>
+		<h2 id={`${id}-title`}>{title}</h2>
+		<slot />
+	</div>
+	{Astro.slots.has('figure') && <div class="figure"><slot name="figure" /></div>}
+</section>
+
+<style>
+	.section {
+		display: grid;
+		gap: 2rem;
+		padding-block: 4.5rem;
+		border-bottom: 1px solid var(--sx-line);
+		max-width: 80rem;
+		margin-inline: auto;
+	}
+	.label {
+		margin: 0 0 0.75rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		font-weight: 500;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--role);
+	}
+	h2 {
+		margin: 0;
+		font-size: clamp(1.75rem, 1.3rem + 1.6vw, 2.5rem);
+		line-height: 1.1;
+		letter-spacing: -0.03em;
+		font-weight: 650;
+		color: var(--sx-ink);
+		text-wrap: balance;
+	}
+	.text :global(p:not(.label)) {
+		margin: 1rem 0 0;
+		font-size: 1.0625rem;
+		line-height: 1.6;
+		color: var(--sx-ink-2);
+		max-width: 38rem;
+	}
+	.text :global(p code) {
+		font-size: 0.875em;
+		color: var(--sx-ink);
+	}
+	.text :global(.code-block) {
+		margin-top: 1.5rem;
+	}
+	.text :global(.more) {
+		display: inline-block;
+		margin-top: 1.25rem;
+		font-weight: 550;
+		color: var(--sx-ink);
+		text-decoration: none;
+		border-bottom: 1px solid var(--sx-line-strong);
+	}
+	.text :global(.more:hover) {
+		border-color: var(--sx-ink);
+	}
+	.text :global(.more)::after {
+		content: ' →';
+	}
+	.figure {
+		min-width: 0;
+	}
+	@media (min-width: 64rem) {
+		.section {
+			grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+			gap: 4rem;
+			align-items: start;
+		}
+		.flip .text {
+			order: 2;
+		}
+		.figure {
+			position: sticky;
+			top: calc(var(--sl-nav-height, 3.5rem) + 2rem);
+		}
+	}
+</style>

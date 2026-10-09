@@ -1,0 +1,112 @@
+---
+// The spike's step and the derivative each surrogate puts in its place (src/engines/surrogate.ts).
+import Choice from './Choice.astro';
+import Figure from './Figure.astro';
+import Slider from './Slider.astro';
+
+interface Props {
+	height?: string;
+}
+const { height = '15rem' } = Astro.props;
+const names = ['ATan', 'Sigmoid', 'FastSigmoid', 'Triangle', 'Rectangle', 'Gaussian'];
+---
+
+<div data-surrogate-plot>
+	<Figure engine="sparx.surrogate" height={height}>
+		<canvas role="img" aria-label="The Heaviside step a spike is, and the smooth derivative a surrogate uses in its place in the backward pass"></canvas>
+		<Fragment slot="controls">
+			<Choice name="surrogate" label="Surrogate" value="ATan" options={names.map((n) => ({ value: n, label: n }))} />
+			<Slider name="sharpness" label="Sharpness" min={0.25} max={4} step={0.05} value={1} digits={2} unit="×" />
+		</Fragment>
+		<p slot="after" class="call"><code data-call>ATan(alpha=2.0)</code></p>
+	</Figure>
+</div>
+
+<script>
+	import { surrogates } from '../../engines/surrogate';
+	import { controls } from '../../widgets/controls';
+	import { alpha, fit, onTheme, type Palette } from '../../widgets/theme';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-surrogate-plot]')) {
+		const canvas = root.querySelector('canvas') as HTMLCanvasElement;
+		const call = root.querySelector<HTMLElement>('[data-call]');
+		let colors: Palette;
+		let view = fit(canvas);
+		const draw = () => {
+			if (!colors) return;
+			const chosen = surrogates(ui.read('sharpness')).find((s) => s.name === ui.choice('surrogate')) ?? surrogates()[0];
+			if (call) call.textContent = chosen.call;
+			const { ctx, width, height } = view;
+			ctx.clearRect(0, 0, width, height);
+			const pad = 28;
+			const x = (u: number) => pad + ((u + 2) / 4) * (width - 2 * pad);
+			const top = 30;
+			const bottom = height - 26;
+			const ymax = 2.2;
+			const y = (v: number) => bottom - (Math.min(v, ymax) / ymax) * (bottom - top);
+			ctx.strokeStyle = alpha(colors.ink, 0.15);
+			ctx.lineWidth = 1;
+			ctx.beginPath();
+			ctx.moveTo(pad, Math.round(bottom) + 0.5);
+			ctx.lineTo(width - pad, Math.round(bottom) + 0.5);
+			ctx.moveTo(Math.round(x(0)) + 0.5, top - 10);
+			ctx.lineTo(Math.round(x(0)) + 0.5, bottom + 6);
+			ctx.stroke();
+			ctx.fillStyle = colors.muted;
+			ctx.font = `11px ${getComputedStyle(canvas).getPropertyValue('--sx-mono')}`;
+			ctx.textAlign = 'center';
+			ctx.fillText('v − threshold', x(1.4), bottom + 18);
+			ctx.fillText('0', x(0), bottom + 18);
+			ctx.strokeStyle = colors.spike;
+			ctx.lineWidth = 2;
+			ctx.beginPath();
+			ctx.moveTo(x(-2), y(0));
+			ctx.lineTo(x(0), y(0));
+			ctx.lineTo(x(0), y(1));
+			ctx.lineTo(x(2), y(1));
+			ctx.stroke();
+			ctx.fillStyle = colors.learn;
+			ctx.strokeStyle = colors.learn;
+			ctx.beginPath();
+			const n = 400;
+			for (let k = 0; k <= n; k++) {
+				const u = -2 + (4 * k) / n;
+				const yy = y(chosen.derivative(u));
+				if (k === 0) ctx.moveTo(x(u), yy);
+				else ctx.lineTo(x(u), yy);
+			}
+			ctx.stroke();
+			ctx.lineTo(x(2), y(0));
+			ctx.lineTo(x(-2), y(0));
+			ctx.fillStyle = alpha(colors.learn, 0.12);
+			ctx.fill();
+			ctx.textAlign = 'left';
+			ctx.fillStyle = colors.spike;
+			ctx.fillText('spike (forward)', x(0.15), y(1) - 8);
+			ctx.fillStyle = colors.learn;
+			ctx.fillText('surrogate slope (backward)', x(-1.95), top - 14);
+		};
+		const ui = controls(root, draw);
+		new ResizeObserver(() => {
+			view = fit(canvas);
+			draw();
+		}).observe(canvas);
+		onTheme((p) => {
+			colors = p;
+			draw();
+		});
+	}
+</script>
+
+<style>
+	.call {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-size: 0.75rem;
+	}
+	.call code {
+		font-family: var(--sx-mono);
+		color: var(--sx-learn);
+		background: none;
+	}
+</style>

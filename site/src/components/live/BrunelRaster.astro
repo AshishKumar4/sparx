@@ -1,0 +1,86 @@
+---
+// Brunel's balanced network, stepped live in a worker (src/engines/brunel.ts), in the regime the reader picks.
+import Choice from './Choice.astro';
+import Figure from './Figure.astro';
+import Slider from './Slider.astro';
+
+interface Props {
+	order?: number;
+	height?: string;
+	sliders?: boolean;
+}
+const { order = 250, height = '19rem', sliders = false } = Astro.props;
+const neurons = (5 * order).toLocaleString('en-US');
+const regimes = [
+	{ value: '5,2', label: 'Asynchronous irregular' },
+	{ value: '3,2', label: 'Synchronous regular' },
+	{ value: '6,4', label: 'Synchronous, fast' },
+	{ value: '4.5,0.9', label: 'Synchronous, slow' },
+];
+---
+
+<div class="brunel" data-brunel data-order={order}>
+	<Figure engine={`brunel(${order})`} height={height}>
+		<canvas role="img" aria-label={`Spikes of 200 of the network's ${neurons} neurons over the last 400 ms, excitatory above and inhibitory below, with the excitatory population's rate`}></canvas>
+		<Fragment slot="controls">
+			<Choice name="regime" label="Regime" value="5,2" options={regimes} />
+			{sliders && <Slider name="g" label="Inhibition g" min={2} max={8} step={0.1} value={5} digits={1} />}
+			{sliders && <Slider name="eta" label="External drive η" min={0.5} max={4} step={0.05} value={2} digits={2} />}
+		</Fragment>
+		<p slot="after" class="readout">
+			{neurons} LIF neurons, {(order * 4 * 0.1 + order * 0.1).toLocaleString('en-US')} inputs each, 0.1 ms steps · excitatory rate <span data-rate>…</span>
+		</p>
+	</Figure>
+</div>
+
+<script>
+	import { controls } from '../../widgets/controls';
+	import { raster } from '../../widgets/brunel/raster';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-brunel]')) {
+		const canvas = root.querySelector('canvas') as HTMLCanvasElement;
+		const order = Number(root.dataset.order);
+		let started: ReturnType<typeof raster> | null = null;
+		const begin = () => {
+			if (started) return started;
+			started = raster(canvas, { order });
+			return started;
+		};
+		new IntersectionObserver(([entry], observer) => {
+			if (!entry.isIntersecting) return;
+			begin();
+			observer.disconnect();
+		}, { rootMargin: '200px' }).observe(root);
+		const hasSliders = root.querySelector('input[name="g"]') !== null;
+		const ui = controls(root, (name) => {
+			const sim = begin();
+			if (name === 'regime') {
+				const [g, eta] = ui.choice('regime').split(',').map(Number);
+				if (hasSliders) {
+					for (const [key, value] of [['g', g], ['eta', eta]] as const) {
+						(root.querySelector(`input[name="${key}"]`) as HTMLInputElement).value = String(value);
+						(root.querySelector(`output[data-for="${key}"]`) as HTMLOutputElement).textContent = value.toFixed(key === 'g' ? 1 : 2);
+					}
+				}
+				sim.set(g, eta);
+			} else sim.set(ui.read('g'), ui.read('eta'));
+		});
+		const rate = root.querySelector<HTMLElement>('[data-rate]');
+		setInterval(() => {
+			if (started && rate) rate.textContent = `${started.rate().toFixed(1)} Hz`;
+		}, 500);
+	}
+</script>
+
+<style>
+	.readout {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+	}
+	[data-rate] {
+		color: var(--sx-membrane);
+	}
+</style>

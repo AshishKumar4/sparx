@@ -1,0 +1,19 @@
+/* The site's own pages (the front page and Learn): full width inside Starlight's splash frame. */
+
+:root:has(.page) .content-panel,
+:root:has(.page) .sl-container {
+	max-width: none;
+}
+
+:root:has(.page) .content-panel {
+	padding-block: 0;
+	border: 0;
+}
+
+:root:has(.page) .sl-markdown-content {
+	margin: 0;
+}
+
+:root:has(.page) h1#_top {
+	display: none;
+}

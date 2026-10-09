@@ -1,0 +1,95 @@
+// sparx's neuron models, one step at a time, in double precision. Each mirrors the `step` of the
+// model it is named after (sparx.dynamics), and test/neurons.test.ts holds it to sparx's run.
+
+export type Reset = 'subtract' | 'zero' | 'none';
+
+/** `sparx.dynamics.LIFCell`: `v = decay v + x`, a spike at `v >= threshold`, then the reset. */
+export class LIF {
+	v = 0;
+	/** The membrane before this step's reset, which crossed the threshold if it fired. */
+	peak = 0;
+	constructor(
+		public decay: number,
+		public threshold = 1,
+		public reset: Reset = 'subtract',
+	) {}
+
+	step(x: number): number {
+		const v = this.decay * this.v + x;
+		const s = v >= this.threshold ? 1 : 0;
+		this.peak = v;
+		this.v = !s || this.reset === 'none' ? v : this.reset === 'zero' ? 0 : v - this.threshold;
+		return s;
+	}
+}
+
+/** `sparx.dynamics.LeakyIntegrateAndFire` on a current `i` (pA) held over the step and a voltage `jump`
+ * (mV) that lands before the threshold test: the exact solution of the membrane, then the reset held
+ * for `t_ref`. */
+export class LeakyIntegrateAndFire {
+	v: number;
+	refractory = 0;
+	constructor(
+		public tau_m = 20,
+		public c_m = 200,
+		public e_l = -60,
+		public v_th = -50,
+		public v_reset = -60,
+		public t_ref = 5,
+		public i_e = 0,
+	) {
+		this.v = e_l;
+	}
+
+	step(i: number, dt: number, jump = 0): number {
+		const g = this.c_m / this.tau_m;
+		const target = (g * this.e_l + this.i_e + i) / g;
+		const integrated = target + (this.v - target) * Math.exp(-dt / (this.c_m / g)) + jump;
+		const held = this.refractory > dt / 2;
+		const v = held ? this.v_reset : integrated;
+		const fired = !held && v >= this.v_th;
+		this.v = fired ? this.v_reset : v;
+		this.refractory = fired ? this.t_ref : Math.max(this.refractory - dt, 0);
+		return fired ? 1 : 0;
+	}
+}
+
+/** `sparx.dynamics.Izhikevich` with `scheme="published"`: two half-steps of `v`, then `u` from the new
+ * `v`; a spike at 30 mV sets `v` to `c` and adds `d` to `u`. */
+export class Izhikevich {
+	v: number;
+	u: number;
+	constructor(
+		public a = 0.02,
+		public b = 0.2,
+		public c = -65,
+		public d = 8,
+		public v_th = 30,
+		v_init = -65,
+	) {
+		this.v = v_init;
+		this.u = b * v_init;
+	}
+
+	step(i: number, dt: number): number {
+		const dv = (v: number, u: number) => 0.04 * v ** 2 + 5 * v + 140 - u + i;
+		let v = this.v + (dt / 2) * dv(this.v, this.u);
+		v = v + (dt / 2) * dv(v, this.u);
+		const u = this.u + dt * this.a * (this.b * v - this.u);
+		const fired = v >= this.v_th;
+		this.v = fired ? this.c : v;
+		this.u = fired ? u + this.d : u;
+		return fired ? 1 : 0;
+	}
+}
+
+/** Izhikevich's (2003) cortical and thalamic classes, `(a, b, c, d)`, as `sparx.dynamics.IZHIKEVICH_2003`. */
+export const IZHIKEVICH_2003: Record<string, [number, number, number, number]> = {
+	regular_spiking: [0.02, 0.2, -65, 8],
+	intrinsically_bursting: [0.02, 0.2, -55, 4],
+	chattering: [0.02, 0.2, -50, 2],
+	fast_spiking: [0.1, 0.2, -65, 2],
+	low_threshold_spiking: [0.02, 0.25, -65, 2],
+	thalamo_cortical: [0.02, 0.25, -65, 0.05],
+	resonator: [0.1, 0.26, -65, 2],
+};

@@ -1,0 +1,151 @@
+/* sparx's colors and type, for Starlight's variables and the site's own pages.
+   Colors keep the roles of the README's figures (tools/drawing.py): blue for state that runs
+   continuously, orange for spikes and events, aqua for the biological half, violet for learning. */
+
+:root {
+	--sx-sans: var(--font-sans);
+	--sx-mono: var(--font-mono);
+	--sl-font: var(--sx-sans);
+	--sl-font-mono: var(--sx-mono);
+	--sl-line-height: 1.68;
+	--sl-content-width: 48rem;
+	--sl-sidebar-width: 17rem;
+
+	--sx-page: #0b0d10;
+	--sx-panel: #111418;
+	--sx-raised: #161a1f;
+	--sx-line: #20252c;
+	--sx-line-strong: #2c323a;
+	--sx-ink: #eceef1;
+	--sx-ink-2: #b4bac3;
+	--sx-muted: #858c96;
+	--sx-faint: #555c66;
+
+	--sx-spike: #ff7a3d;
+	--sx-spike-soft: rgba(255, 122, 61, 0.14);
+	--sx-membrane: #5aa2f8;
+	--sx-membrane-soft: rgba(90, 162, 248, 0.14);
+	--sx-bio: #2fc48f;
+	--sx-bio-soft: rgba(47, 196, 143, 0.14);
+	--sx-learn: #a395ff;
+	--sx-learn-soft: rgba(163, 149, 255, 0.14);
+
+	--sl-color-white: var(--sx-ink);
+	--sl-color-gray-1: #dfe2e6;
+	--sl-color-gray-2: var(--sx-ink-2);
+	--sl-color-gray-3: var(--sx-muted);
+	--sl-color-gray-4: var(--sx-faint);
+	--sl-color-gray-5: var(--sx-line-strong);
+	--sl-color-gray-6: var(--sx-raised);
+	--sl-color-black: var(--sx-page);
+	--sl-color-accent-low: #3a1a0b;
+	--sl-color-accent: #ff8a52;
+	--sl-color-accent-high: #ffc4a3;
+	--sl-color-text-accent: #ff9d6c;
+	--sl-color-bg-nav: var(--sx-page);
+	--sl-color-bg-sidebar: var(--sx-page);
+	--sl-color-bg-inline-code: #1a1e24;
+	--sl-color-hairline: var(--sx-line);
+	--sl-color-hairline-light: var(--sx-line-strong);
+	--sl-color-hairline-shade: #06070a;
+	--sl-color-backdrop-overlay: rgba(5, 6, 8, 0.72);
+}
+
+:root[data-theme='light'] {
+	--sx-page: #fcfcfb;
+	--sx-panel: #f5f5f2;
+	--sx-raised: #ffffff;
+	--sx-line: #e6e5df;
+	--sx-line-strong: #d6d5ce;
+	--sx-ink: #101113;
+	--sx-ink-2: #44474d;
+	--sx-muted: #6b6f76;
+	--sx-faint: #a3a6ab;
+
+	--sx-spike: #e2541e;
+	--sx-spike-soft: rgba(226, 84, 30, 0.1);
+	--sx-membrane: #2a6fd0;
+	--sx-membrane-soft: rgba(42, 111, 208, 0.1);
+	--sx-bio: #12865e;
+	--sx-bio-soft: rgba(18, 134, 94, 0.1);
+	--sx-learn: #5a46c8;
+	--sx-learn-soft: rgba(90, 70, 200, 0.1);
+
+	--sl-color-white: var(--sx-ink);
+	--sl-color-gray-1: #1d1f23;
+	--sl-color-gray-2: var(--sx-ink-2);
+	--sl-color-gray-3: var(--sx-muted);
+	--sl-color-gray-4: var(--sx-faint);
+	--sl-color-gray-5: var(--sx-line-strong);
+	--sl-color-gray-6: var(--sx-panel);
+	--sl-color-gray-7: #fafaf8;
+	--sl-color-black: var(--sx-page);
+	--sl-color-accent-low: #fde5d9;
+	--sl-color-accent: #c2410c;
+	--sl-color-accent-high: #7c2a08;
+	--sl-color-text-accent: #b93c09;
+	--sl-color-bg-nav: var(--sx-page);
+	--sl-color-bg-sidebar: var(--sx-page);
+	--sl-color-bg-inline-code: #f0efea;
+	--sl-color-hairline: var(--sx-line);
+	--sl-color-hairline-light: var(--sx-line-strong);
+	--sl-color-hairline-shade: #d0cfc8;
+	--sl-color-backdrop-overlay: rgba(40, 40, 36, 0.4);
+}
+
+html {
+	font-optical-sizing: auto;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+	background: var(--sx-spike-soft);
+}
+
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3 {
+	letter-spacing: -0.015em;
+	text-wrap: balance;
+}
+
+.sl-markdown-content :not(pre) > code {
+	font-size: 0.86em;
+	padding: 0.1em 0.3em;
+	border-radius: 0.25rem;
+}
+
+.sl-markdown-content table {
+	font-size: 0.875rem;
+	display: block;
+	overflow-x: auto;
+}
+
+.sl-markdown-content th {
+	font-weight: 600;
+	color: var(--sx-ink);
+}
+
+.sl-markdown-content td,
+.sl-markdown-content th {
+	border-color: var(--sx-line);
+	vertical-align: top;
+}
+
+.sl-markdown-content img {
+	border-radius: 0.5rem;
+}
+
+:focus-visible {
+	outline: 2px solid var(--sx-spike);
+	outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		scroll-behavior: auto !important;
+	}
+}

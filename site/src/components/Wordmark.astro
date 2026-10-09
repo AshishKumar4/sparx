@@ -1,0 +1,43 @@
+---
+// "sparx." as the README's banner sets it. The dot is a leaky integrate-and-fire neuron on a noisy
+// current (src/widgets/dot.ts), so it flashes when it spikes.
+interface Props {
+	size?: string;
+}
+const { size = '1.375rem' } = Astro.props;
+---
+
+<span class="wordmark" style={`--size: ${size}`}>sparx<span class="dot" data-neuron></span></span>
+
+<style>
+	.wordmark {
+		font-family: var(--sx-sans);
+		font-size: var(--size);
+		font-weight: 720;
+		letter-spacing: -0.045em;
+		line-height: 1;
+		color: var(--sx-ink);
+		font-variation-settings: 'opsz' 32;
+		display: inline-flex;
+		align-items: baseline;
+		white-space: nowrap;
+	}
+	.dot {
+		display: inline-block;
+		width: 0.22em;
+		height: 0.22em;
+		margin-left: 0.04em;
+		border-radius: 50%;
+		background: var(--sx-spike);
+		transition: box-shadow 0.35s ease-out, filter 0.35s ease-out;
+	}
+	.dot:global(.fired) {
+		box-shadow: 0 0 0 0.12em var(--sx-spike-soft), 0 0 0.6em 0.1em var(--sx-spike);
+		filter: brightness(1.35);
+		transition: none;
+	}
+</style>
+
+<script>
+	import '../widgets/dot';
+</script>

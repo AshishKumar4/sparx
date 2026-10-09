@@ -1,0 +1,51 @@
+---
+// A segmented choice; widgets read the checked option's value by `name`.
+interface Props {
+	name: string;
+	label: string;
+	options: { value: string; label: string }[];
+	value: string;
+}
+const { name, label, options, value } = Astro.props;
+---
+
+<div class="choice" role="radiogroup" aria-label={label} data-name={name}>
+	{
+		options.map((option) => (
+			<button type="button" role="radio" value={option.value} aria-checked={String(option.value === value)}>
+				{option.label}
+			</button>
+		))
+	}
+</div>
+
+<style>
+	.choice {
+		display: inline-flex;
+		flex-wrap: wrap;
+		gap: 0.25rem;
+		padding: 0.1875rem;
+		border: 1px solid var(--sx-line);
+		border-radius: 0.5rem;
+		background: var(--sx-panel);
+	}
+	button {
+		font: inherit;
+		font-size: 0.8125rem;
+		font-weight: 500;
+		padding: 0.25rem 0.625rem;
+		border: 0;
+		border-radius: 0.375rem;
+		background: none;
+		color: var(--sx-muted);
+		cursor: pointer;
+	}
+	button:hover {
+		color: var(--sx-ink);
+	}
+	button[aria-checked='true'] {
+		background: var(--sx-raised);
+		color: var(--sx-ink);
+		box-shadow: 0 0 0 1px var(--sx-line-strong);
+	}
+</style>

@@ -1,0 +1,46 @@
+---
+// A labelled range input whose value shows beside it; widgets read it by `name`.
+interface Props {
+	name: string;
+	label: string;
+	min: number;
+	max: number;
+	step: number;
+	value: number;
+	unit?: string;
+	digits?: number;
+}
+const { name, label, min, max, step, value, unit = '', digits = 2 } = Astro.props;
+const id = `slider-${name}-${Math.random().toString(36).slice(2, 8)}`;
+---
+
+<label class="slider" for={id}>
+	<span class="name">{label}</span>
+	<output data-for={name} data-digits={digits} data-unit={unit}>{value.toFixed(digits)}{unit && ` ${unit}`}</output>
+	<input id={id} type="range" name={name} min={min} max={max} step={step} value={value} />
+</label>
+
+<style>
+	.slider {
+		display: grid;
+		grid-template-columns: 1fr auto;
+		gap: 0.25rem 0.75rem;
+		align-items: baseline;
+		font-size: 0.8125rem;
+		color: var(--sx-ink-2);
+		min-width: 0;
+	}
+	output {
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		color: var(--sx-ink);
+		font-variant-numeric: tabular-nums;
+	}
+	input {
+		grid-column: 1 / -1;
+		width: 100%;
+		accent-color: var(--sx-spike);
+		margin: 0;
+		height: 1.5rem;
+	}
+</style>

@@ -1,0 +1,70 @@
+---
+// One sparx.dynamics.LIFCell on a constant drive, stepped live (src/engines/neurons.ts).
+import Choice from './Choice.astro';
+import Figure from './Figure.astro';
+import Slider from './Slider.astro';
+
+interface Props {
+	height?: string;
+}
+const { height = '15rem' } = Astro.props;
+---
+
+<div class="lif-scope" data-lif-scope>
+	<Figure engine="LIFCell" height={height}>
+		<canvas role="img" aria-label="A leaky integrate-and-fire neuron's membrane rising toward its threshold, firing and resetting"></canvas>
+		<Fragment slot="controls">
+			<Slider name="drive" label="Input each step" min={0} max={0.4} step={0.005} value={0.12} />
+			<Slider name="noise" label="Noise" min={0} max={0.4} step={0.01} value={0.05} />
+			<Slider name="tau" label="Time constant" min={2} max={60} step={1} value={12} unit="steps" digits={0} />
+			<Choice name="reset" label="Reset" value="subtract" options={[{ value: 'subtract', label: 'Subtract' }, { value: 'zero', label: 'To zero' }]} />
+		</Fragment>
+		<p slot="after" class="readout"><span data-rate>0</span> spikes per 100 steps</p>
+	</Figure>
+</div>
+
+<script>
+	import { LIF } from '../../engines/neurons';
+	import { controls } from '../../widgets/controls';
+	import { scope } from '../../widgets/scope';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-lif-scope]')) {
+		const cell = new LIF(Math.exp(-1 / 12), 1, 'subtract');
+		const ui = controls(root, () => {
+			cell.decay = Math.exp(-1 / ui.read('tau'));
+			cell.reset = ui.choice('reset') as 'subtract' | 'zero';
+			view.redraw();
+		});
+		const canvas = root.querySelector('canvas') as HTMLCanvasElement;
+		const view = scope(canvas, {
+			threshold: 1,
+			range: [-0.2, 1.6],
+			inputRange: [-0.3, 0.8],
+			step() {
+				const input = ui.read('drive') + ui.read('noise') * (Math.random() * 2 - 1);
+				const fired = cell.step(input);
+				return { v: fired ? cell.peak : cell.v, input, fired };
+			},
+		});
+		const rate = root.querySelector<HTMLElement>('[data-rate]');
+		let window: number[] = [];
+		setInterval(() => {
+			window.push(view.take());
+			if (window.length > 6) window = window.slice(-6);
+			if (rate) rate.textContent = String(Math.round((window.reduce((a, b) => a + b, 0) / (window.length * 30)) * 100));
+		}, 500);
+	}
+</script>
+
+<style>
+	.readout {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+	}
+	[data-rate] {
+		color: var(--sx-spike);
+	}
+</style>

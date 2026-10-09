@@ -1,0 +1,313 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import CodeBlock from '../components/CodeBlock.astro';
+import Explainers from '../components/Explainers.astro';
+import Hero from '../components/home/Hero.astro';
+import Install from '../components/Install.astro';
+import BrunelRaster from '../components/live/BrunelRaster.astro';
+import LifScope from '../components/live/LifScope.astro';
+import SurrogatePlot from '../components/live/SurrogatePlot.astro';
+import Section from '../components/Section.astro';
+import { checks, results } from '../data/checks.mjs';
+import { colab, repository, source } from '../data/site.mjs';
+import model from '../../public/pilot/pilot.json';
+import brunel from '../../snippets/brunel.py?raw';
+import neuron from '../../snippets/neuron.py?raw';
+import pilot from '../../snippets/pilot.py?raw';
+import train from '../../snippets/train.py?raw';
+import '../styles/page.css';
+
+const evaluation = model.evaluation as Record<string, number>;
+const trained = (model.meta as { trained: { steps: number; batch: number; horizon: number } }).trained;
+const percent = (x: number) => `${Math.round(x * 1000) / 10}%`;
+const kinds = { exact: 'Same numbers', tolerance: 'Within a tolerance', statistics: 'Same statistics' };
+---
+
+<StarlightPage
+	frontmatter={{
+		title: 'sparx: spiking neural networks in JAX',
+		description: 'Train spiking networks with gradients or local rules, and simulate circuits of biological neurons in millivolts and milliseconds, in JAX.',
+		template: 'splash',
+		pagefind: false,
+	}}
+	hasSidebar={false}
+>
+	<div class="page home not-content">
+		<Hero />
+
+		<Section id="neuron" label="Neurons" role="membrane" title="A neuron keeps a charge, and spikes when it is full">
+			<p>
+				A spiking neuron adds its input to a membrane potential that leaks away over time. When the membrane reaches a threshold, the
+				neuron sends a spike, a single 1, and resets. The rest of the time it sends nothing.
+			</p>
+			<p>
+				Every sparx neuron is a small JAX dataclass with a <code>step</code>, and <code>sparx.run</code> scans one over time. The
+				figure is that step, in your browser.
+			</p>
+			<CodeBlock code={neuron} colab={colab('neuron')} source={source('src/sparx/dynamics/ml.py')} />
+			<a class="more" href="/learn/neuron/">Neurons, from LIF to Izhikevich</a>
+			<LifScope slot="figure" />
+		</Section>
+
+		<Section id="train" label="Training" role="learn" title="Layers that train like any Flax module" flip>
+			<p>
+				A spike is a step function, so its derivative is zero almost everywhere and gradients cannot pass it. sparx keeps the spike exact
+				on the way forward and uses a smooth surrogate's slope on the way back. Its layers are Flax modules over time-major arrays,
+				<code>[T, B, ...]</code>, so <code>jit</code>, <code>grad</code>, <code>vmap</code>, optax and sharding work as they do for any
+				network.
+			</p>
+			<CodeBlock code={train} colab={colab('train')} source={source('README.md')} />
+			<a class="more" href="/learn/surrogate-gradients/">Teach a neuron when to fire</a>
+			<SurrogatePlot slot="figure" />
+		</Section>
+
+		<Section id="pilot" label="The drone" role="spike" title="How the pilot learned to fly">
+			<p>
+				The network flying the drone at the top of this page is three sparx layers: 7 readings in, 64 and 64 LIF neurons, and two leaky
+				integrators whose membranes set the rotors' thrust. Nothing showed it how to fly. Each training step flew {trained.batch} drones
+				for {trained.horizon / 100} s through a model of their physics in JAX, and took the gradient of their distance to their targets,
+				through the spikes and through the physics.
+			</p>
+			<p>
+				After {trained.steps.toLocaleString('en-US')} steps it brings the drone within 15 cm of a fixed target, and keeps it there, on
+				{percent(evaluation.arrived)} of 1,000 random starts, {percent(evaluation.arrived_from_inverted)} of those that began upside
+				down, in a median of {evaluation.median_time_s.toFixed(2)} s.
+			</p>
+			<CodeBlock code={pilot} source={source('site/lab/pilot.py')} />
+			<a class="more" href="/learn/pilot/">Training, lesions and the check against sparx</a>
+			<figure slot="figure" class="numbers">
+				<div><strong>{percent(evaluation.arrived)}</strong><span>of 1,000 flights reach the target and stay</span></div>
+				<div><strong>{percent(evaluation.arrived_thrown)}</strong><span>of 1,000 thrown at 4 m/s and spun at 15 rad/s</span></div>
+				<div><strong>{evaluation.median_time_s.toFixed(2)} s</strong><span>median time to arrive</span></div>
+				<div><strong>{(evaluation.final_distance_median_m * 100).toFixed(1)} cm</strong><span>median distance after 6 s</span></div>
+			</figure>
+		</Section>
+
+		<Section id="circuits" label="Circuits" role="bio" title="Circuits in millivolts and milliseconds" flip>
+			<p>
+				The same neuron protocol runs biological models in physical units, wired into populations and projections with delays, and
+				simulated on one clock in NEST's order. Brunel's balanced network shifts between its regimes as inhibition and external drive
+				change. The figure steps the network <code>brunel(250)</code> builds, in a worker in your browser.
+			</p>
+			<p>
+				Where the dynamics are deterministic, sparx matches NEST and Brian2 spike for spike. Where they are chaotic, as here, it matches
+				them in rate, irregularity and synchrony over seeds.
+			</p>
+			<CodeBlock code={brunel} colab={colab('brunel')} source={source('src/sparx/graph/models.py')} />
+			<a class="more" href="/learn/networks/">Brunel's regimes, and the whole fly brain</a>
+			<BrunelRaster slot="figure" />
+		</Section>
+
+		<Section id="checked" label="Fidelity" role="bio" title="Every model is checked against a reference">
+			<p>
+				Each model is checked against what defines it: a float64 loop of its equations, the authors' code, or NEST and Brian2. The
+				<a href="/docs/fidelity/">fidelity ledger</a> lists every check, its observed error and every known difference, and the
+				<a href="/docs/status/">status</a> page what is not established.
+			</p>
+			<div slot="figure" class="checks" role="table" aria-label="Checks against references">
+				<div class="row head" role="row">
+					<span role="columnheader">Model</span><span role="columnheader">Reference</span><span role="columnheader">Result</span>
+				</div>
+				{
+					checks.map((check) => (
+						<div class="row" role="row">
+							<span role="cell" class="model">{check.model}</span>
+							<span role="cell" class="reference">{check.reference}</span>
+							<span role="cell" class="result">
+								<span class:list={['kind', check.kind]}>{kinds[check.kind as keyof typeof kinds]}</span>
+								{check.result}
+							</span>
+						</div>
+					))
+				}
+			</div>
+		</Section>
+
+		<Section id="results" label="Results" role="learn" title="Measured, with their conditions" flip>
+			<p>
+				These are short, untuned runs on a 4-core CPU, each beside its reference's number. No GPU or TPU numbers exist yet, and the
+				full-length, multi-seed SHD comparison is still open.
+			</p>
+			<a class="more" href="/docs/guide/#results-in-detail">Commands, times and comparisons</a>
+			<div slot="figure" class="results" role="table" aria-label="Results">
+				{
+					results.map((row) => (
+						<div class="result-row" role="row">
+							<span role="cell" class="task">{row.task}</span>
+							<span role="cell" class="network">{row.network}</span>
+							<span role="cell" class="accuracy">{row.accuracy}</span>
+						</div>
+					))
+				}
+			</div>
+		</Section>
+
+		<Explainers />
+
+		<section class="closing">
+			<h2>Install it</h2>
+			<p>Python 3.12 or later, with JAX, Flax and dew. For a GPU or TPU, install the matching JAX first.</p>
+			<Install />
+			<p class="links">
+				<a href="/docs/">Read the docs</a>
+				<a href={repository}>GitHub</a>
+				<a href="/docs/status/">What works, and what doesn't yet</a>
+			</p>
+		</section>
+	</div>
+</StarlightPage>
+
+<style>
+	.home {
+		padding-inline: var(--sl-content-pad-x, 1rem);
+	}
+	.numbers {
+		margin: 0;
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 1px;
+		background: var(--sx-line);
+		border: 1px solid var(--sx-line);
+		border-radius: 0.75rem;
+		overflow: hidden;
+	}
+	.numbers div {
+		background: var(--sx-panel);
+		padding: 1.5rem 1.25rem;
+		display: grid;
+		gap: 0.5rem;
+		align-content: start;
+	}
+	.numbers strong {
+		font-size: clamp(1.75rem, 1.4rem + 1.4vw, 2.75rem);
+		font-weight: 650;
+		letter-spacing: -0.03em;
+		color: var(--sx-ink);
+		font-variant-numeric: tabular-nums;
+		line-height: 1;
+	}
+	.numbers span {
+		font-size: 0.875rem;
+		line-height: 1.4;
+		color: var(--sx-muted);
+	}
+	.checks,
+	.results {
+		border: 1px solid var(--sx-line);
+		border-radius: 0.75rem;
+		overflow: hidden;
+		font-size: 0.8125rem;
+		line-height: 1.45;
+	}
+	.row {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: 0.25rem;
+		padding: 0.75rem 1rem;
+		border-top: 1px solid var(--sx-line);
+	}
+	.row.head {
+		display: none;
+	}
+	.model {
+		color: var(--sx-ink);
+		font-weight: 550;
+	}
+	.reference {
+		color: var(--sx-muted);
+	}
+	.result {
+		color: var(--sx-ink-2);
+	}
+	.kind {
+		display: inline-block;
+		margin-right: 0.5rem;
+		padding: 0 0.375rem;
+		border-radius: 0.25rem;
+		font-family: var(--sx-mono);
+		font-size: 0.6875rem;
+		line-height: 1.5rem;
+		white-space: nowrap;
+	}
+	.kind.exact {
+		color: var(--sx-bio);
+		background: var(--sx-bio-soft);
+	}
+	.kind.tolerance {
+		color: var(--sx-membrane);
+		background: var(--sx-membrane-soft);
+	}
+	.kind.statistics {
+		color: var(--sx-learn);
+		background: var(--sx-learn-soft);
+	}
+	.row:first-of-type {
+		border-top: 0;
+	}
+	@media (min-width: 40rem) {
+		.row {
+			grid-template-columns: 1.1fr 1fr 1.4fr;
+			gap: 1rem;
+		}
+		.row.head {
+			display: grid;
+			border-top: 0;
+			font-size: 0.6875rem;
+			font-family: var(--sx-mono);
+			text-transform: uppercase;
+			letter-spacing: 0.04em;
+			color: var(--sx-muted);
+			background: var(--sx-panel);
+		}
+	}
+	.result-row {
+		display: grid;
+		gap: 0.25rem;
+		padding: 0.875rem 1rem;
+		border-top: 1px solid var(--sx-line);
+	}
+	.result-row:first-child {
+		border-top: 0;
+	}
+	.task {
+		color: var(--sx-ink);
+		font-weight: 550;
+	}
+	.network {
+		color: var(--sx-muted);
+	}
+	.accuracy {
+		font-family: var(--sx-mono);
+		font-size: 0.8125rem;
+		color: var(--sx-ink);
+	}
+	.closing {
+		max-width: 80rem;
+		margin-inline: auto;
+		padding-block: 5rem 6rem;
+		display: grid;
+		gap: 1rem;
+		justify-items: start;
+	}
+	.closing h2 {
+		margin: 0;
+		font-size: clamp(1.75rem, 1.3rem + 1.6vw, 2.5rem);
+		letter-spacing: -0.03em;
+		font-weight: 650;
+		color: var(--sx-ink);
+	}
+	.closing p {
+		margin: 0;
+		color: var(--sx-ink-2);
+	}
+	.closing .links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 1.5rem;
+		margin-top: 1rem;
+	}
+	.closing .links a {
+		color: var(--sx-ink);
+		font-weight: 550;
+	}
+</style>

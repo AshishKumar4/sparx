@@ -1,0 +1,10 @@
+---
+// Starlight's head with the site's fonts: the text face preloaded, the mono loading behind a
+// size-adjusted fallback.
+import Default from '@astrojs/starlight/components/Head.astro';
+import { Font } from 'astro:assets';
+---
+
+<Default />
+<Font cssVariable="--font-sans" preload />
+<Font cssVariable="--font-mono" />
