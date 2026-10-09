@@ -1,0 +1,119 @@
+---
+layout: ../../layouts/Chapter.astro
+title: Simulators and fidelity
+description: A simulator turns equations into numbers one step at a time, and every step involves choices, about where an input lands, what is held constant and how the arithmetic rounds. This chapter shows those choices, how far each one moves the answer, and how to tell whether two simulators agree.
+---
+
+import CodeBlock from '../../components/CodeBlock.astro';
+import ConvergenceChart from '../../components/live/ConvergenceChart.astro';
+import Parity from '../../components/live/Parity.astro';
+import Patterns from '../../components/live/Patterns.astro';
+import { colab, source } from '../../data/site.mjs';
+import convergence from '../../../snippets/convergence.py?raw';
+
+## Equations do not run themselves
+
+Every model in this course is a differential equation, and no computer solves one directly. A simulator replaces it with a rule that moves the state forward by a step $\mathrm{d}t$, and applies the rule again and again. Two simulators given the same equations can disagree for three reasons. They can order the events of a step differently: when an input lands, when the threshold is tested, how long the reset is held. They can integrate differently, holding different things constant over a step. And they can round differently, in different precision or in a different order of operations. Chapter 9 showed what chaos does with the smallest difference: in a large network, any of the three becomes different spikes.
+
+## What happens in a step
+
+sparx follows NEST's order. In each step, the inputs due are delivered, every membrane is integrated, membranes at threshold fire and reset, refractory neurons stay held, and the new spikes are sent along their connections, to land after their delays. A spike sent in step $m$ over a delay of $D$ steps lands at the end of step $m + D$, and a synapse it lands on shapes the membrane from the next step on.
+
+Simulators disagree about the details, and each difference moves spikes:
+
+- A delta synapse, a jump of the voltage, lands in NEST before the threshold test, so it can fire the neuron in the step it arrives. Brian2's `on_pre="v += w"` lands it after the test: it takes effect from the next step, decaying over it first, and is lost if the neuron fired. sparx does either: `Delta()` is NEST's, `Delta(after_threshold=True)` Brian2's.
+- Brian2 counts the refractory period from the start of the step in which the neuron crossed threshold, so it holds the neuron one step less than NEST. sparx follows NEST, which never holds it for less than the stated period, and its parity test with Brian2 shortens `t_ref` by one step.
+- snnTorch's LIF by default subtracts the threshold one step after the spike, without decaying it. That is not a discretization of the continuous LIF, whose reset happens at the spike and then decays, so sparx resets in the spiking step and pins the difference in a test.
+
+None of these is a bug in anyone's code. Each is a choice, and a model's results depend on it.
+
+## How accurate a step is
+
+For a linear membrane with current input, chapter 2 found the step's exact solution, so the step size changes nothing at the instants the steps share. NEST's `iaf_psc_exp` integrates the same way, following Rotter and Diesmann, and sparx agrees with it to $10^{-13}$ mV.
+
+Conductances break this. Within a step a synaptic conductance decays, so the membrane's time constant changes during the step, and the equation has no simple exact solution. Every fixed-step simulator holds the conductance constant over the step and solves the membrane exactly for that value. Brian2's `exponential_euler` holds the value at the start of the step. sparx, by default, holds its exact average over the step. The difference is the order of the scheme: the error of the first falls in proportion to $\mathrm{d}t$, that of the second in proportion to $\mathrm{d}t^2$.
+
+<ConvergenceChart />
+
+A membrane receives AMPA input every 3 ms and GABA-A input every 7 ms, landing on millisecond edges so that every step size sees the same inputs. sparx runs it at four step sizes with each hold, against the mean scheme at 1/1024 ms:
+
+<CodeBlock code={convergence} colab={colab('simulators')} source={source('src/sparx/dynamics/synapses.py')} />
+
+```
+hold=start: 7.6e-01, 3.7e-01, 1.8e-01, 9.2e-02 mV; each halving divides it by 2.0, 2.0, 2.0
+hold=mean: 7.9e-03, 2.0e-03, 4.9e-04, 1.2e-04 mV; each halving divides it by 4.0, 4.0, 4.0
+```
+
+At half a millisecond the start-of-step hold is off by 0.76 mV, because a conductance that has just jumped is held at its peak for the whole step. The mean is a hundred times closer, and each halving of the step makes it four times closer, against two for the start.
+
+Nonlinear neurons are harder again. AdEx's exponential upswing is stiff, so sparx integrates it by RK4 in substeps of 0.01 ms. Hodgkin and Huxley's gates are stiff under hyperpolarization: at −128 mV the sodium gate's closing rate $\beta_m$ is about 130 per ms, and RK4 diverges there; a shorter substep only lowers the voltage at which it does. sparx's default for it, Strang splitting, solves each gate with the voltage held and the voltage with the gates held, each exactly, which keeps every substep stable.
+
+## Three kinds of agreement
+
+So when two simulators are compared, the right claim depends on what they compute. Where they integrate the same equations the same way in the same precision, they should agree to rounding. Where they integrate differently, the claim is a measured tolerance, with the reason for it. Where the system is chaotic, the last bit grows into different spikes, and the claim is statistics over many runs.
+
+Below, sparx runs the inputs of the reference fixtures its parity tests run: 300 ms of random excitatory and inhibitory spikes and a constant current, in float64. Orange is the reference, blue is sparx drawn over it, and the dots below are their difference on a log scale.
+
+<Parity />
+
+The current-based LIF agrees with NEST to $10^{-13}$ mV, and sparx's conductance scheme with Brian2's to $7 \times 10^{-14}$ mV once it holds the conductance as Brian2 does. Against NEST's adaptive integration of the same conductance model, which lands within about $10^{-9}$ mV of the truth, sparx's mean hold is within $7 \times 10^{-4}$ mV and fires the same 33 spikes. The Izhikevich neuron is NEST's to the last bit, but only run operation by operation: compiled, XLA fuses the quadratic's arithmetic and rounds its last bit differently, and the membrane amplifies that until a spike moves by a step.
+
+## Izhikevich's twenty patterns
+
+Izhikevich's 2004 paper shows twenty behaviours of his model, from tonic spiking to inhibition-induced bursting, made by his MATLAB script, each panel with its own current, step and starting state. sparx runs each panel as the script does, beside the script itself run in GNU Octave.
+
+<Patterns />
+
+## Chaos and precision
+
+For chaotic networks, spikes cannot be the test. sparx checks Brunel's network at 2,500 neurons in each of his four regimes by the statistics chapter 9 used: one sparx run's excitatory rate, mean CV and Fano factor must fall within NEST's spread over eight seeds. The cortical microcircuit is checked both ways: over the reference's own random draws at 15 seeds, each population's mean rate is within four standard deviations of NEST's, and on the one network sparx draws, NEST and sparx fire the same 12,689 spikes for 300 ms.
+
+Precision is part of the comparison. sparx runs in float32 unless JAX's 64-bit mode is on, and its parity checks run in float64. A float32 run of a chaotic network is a different run, not a less accurate copy, since chaos grows its rounding differences into different spikes, and it can only be compared by its statistics.
+
+## Speed
+
+On a 4-core CPU, with NEST and Brian2 using four threads and sparx running in float32, a simulated second takes:
+
+| Network | Neurons, synapses | sparx | NEST | Brian2 standalone |
+| --- | --- | --- | --- | --- |
+| Brunel | 12,500, 15.6 million | 9.6 s | 7.5 s | 11.8 s |
+| CUBA | 4,000, 320,000 | 0.71 s | 0.42 s | 0.33 s |
+| COBA | 4,000, 320,000 | 1.01 s | 3.85 s | 0.54 s |
+| Microcircuit, a fifth | 15,435, 12 million | 8.76 s | 2.89 s | |
+
+NEST integrates COBA's conductances adaptively, which is more accurate and costs it that row; sparx and Brian2 hold the conductance over the step. No GPU or TPU numbers exist yet. The [fidelity ledger](/docs/fidelity/) lists every model's checks and every known difference, and [performance](/docs/performance/) the measurements.
+
+## Try this
+
+1. In the parity figure, choose the conductance case against NEST and zoom in. Where does the difference grow, and where does it shrink?
+2. From the chart, which step does each scheme need for the membrane to be within 0.001 mV of the truth?
+3. A neuron's membrane is 0.5 mV below threshold, and a delta input of 1 mV arrives at the end of the step. When does it fire in NEST, and in Brian2?
+4. Why is a float32 run of Brunel's network not a less accurate version of a float64 run?
+
+<details>
+<summary>Answers</summary>
+
+1. It is exactly zero for 2 ms after each spike, while both neurons are held at the same reset voltage. Then it grows again as the membrane integrates its inputs, to about 5 × 10<sup>−4</sup> mV before the next spike.
+2. The mean hold is at $2.0 \times 10^{-3}$ mV at 1/4 ms and $4.9 \times 10^{-4}$ mV at 1/8 ms, so 1/8 ms does it. The start-of-step hold halves its error with each halving of the step, from 0.092 mV at 1/16 ms, so it needs about a hundred times shorter, under a thousandth of a millisecond.
+3. In NEST in that step: the jump lands before the threshold test, and the membrane is 0.5 mV above threshold. In Brian2 the test comes first, so the jump lands after it, and the neuron fires in the next step if the membrane, decaying over it, is still above threshold.
+4. A chaotic network grows any difference into different spikes, and float32's rounding is a difference at every step. The float32 run is a different trajectory of the same network, as valid as the float64 one, and the two can only be compared by their statistics.
+
+</details>
+
+## Summary
+
+A simulator chooses where inputs land in a step, what it holds constant over the step and how it rounds, and each choice moves spikes. For linear membranes sparx integrates exactly and agrees with NEST to rounding; for conductances its mean hold is second order, a hundred times closer than the start-of-step hold at half a millisecond; for chaotic networks the comparison is statistics. The next chapter leaves simulation for hardware: event cameras, neuromorphic chips, and the format that moves a network between them.
+
+## References
+
+<ul class="references">
+<li>S. Rotter and M. Diesmann, "Exact digital simulation of time-invariant linear systems with applications to neuronal modeling", <em>Biological Cybernetics</em> 81, 1999, <a href="https://doi.org/10.1007/s004220050570">doi:10.1007/s004220050570</a>.</li>
+<li>M.-O. Gewaltig and M. Diesmann, "NEST (NEural Simulation Tool)", <em>Scholarpedia</em> 2, 2007, <a href="https://doi.org/10.4249/scholarpedia.1430">doi:10.4249/scholarpedia.1430</a>.</li>
+<li>M. Stimberg, R. Brette and D. F. M. Goodman, "Brian 2, an intuitive and efficient neural simulator", <em>eLife</em> 8, 2019, <a href="https://doi.org/10.7554/eLife.47314">doi:10.7554/eLife.47314</a>.</li>
+<li>R. Brette et al., "Simulation of networks of spiking neurons: a review of tools and strategies", <em>Journal of Computational Neuroscience</em> 23, 2007, <a href="https://doi.org/10.1007/s10827-007-0038-6">doi:10.1007/s10827-007-0038-6</a>.</li>
+<li>S. Rush and H. Larsen, "A practical algorithm for solving dynamic membrane equations", <em>IEEE Transactions on Biomedical Engineering</em> 25, 1978, <a href="https://doi.org/10.1109/TBME.1978.326270">doi:10.1109/TBME.1978.326270</a>.</li>
+<li>G. Strang, "On the construction and comparison of difference schemes", <em>SIAM Journal on Numerical Analysis</em> 5, 1968, <a href="https://doi.org/10.1137/0705041">doi:10.1137/0705041</a>.</li>
+<li>E. M. Izhikevich, "Which model to use for cortical spiking neurons?", <em>IEEE Transactions on Neural Networks</em> 15, 2004, <a href="https://doi.org/10.1109/TNN.2004.832719">doi:10.1109/TNN.2004.832719</a>.</li>
+<li>N. Brunel, "Dynamics of sparsely connected networks of excitatory and inhibitory spiking neurons", <em>Journal of Computational Neuroscience</em> 8, 2000, <a href="https://doi.org/10.1023/A:1008925309027">doi:10.1023/A:1008925309027</a>.</li>
+<li>T. C. Potjans and M. Diesmann, "The cell-type specific cortical microcircuit: relating structure and activity in a full-scale spiking network model", <em>Cerebral Cortex</em> 24, 2014, <a href="https://doi.org/10.1093/cercor/bhs358">doi:10.1093/cercor/bhs358</a>.</li>
+</ul>

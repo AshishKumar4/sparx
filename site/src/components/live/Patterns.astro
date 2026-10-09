@@ -5,7 +5,7 @@ import data from '../../../public/data/parity.json';
 const names = data.patterns.map((p) => p.pattern.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase()));
 ---
 
-<figure class="patterns" data-patterns>
+<figure class="patterns not-content" data-patterns>
 	<ol>
 		{
 			data.patterns.map((p, k) => (

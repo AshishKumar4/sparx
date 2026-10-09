@@ -33,6 +33,7 @@ NOTEBOOKS = {
     "train": ("A first spiking network", "surrogate-gradients", ["train"]),
     "networks": ("Networks and dynamics", "networks", ["brunel", "regimes"]),
     "biology": ("Physical units and biology", "biology", ["conductance", "hodgkin"]),
+    "simulators": ("Simulators and fidelity", "simulators", ["convergence"]),
     "nir": ("NIR export", "nir", ["export"]),
 }
 
