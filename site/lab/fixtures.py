@@ -138,6 +138,50 @@ def encoders(rng: np.random.Generator) -> dict:
     return out
 
 
+def bptt(rng: np.random.Generator) -> dict:
+    """A LIFCell whose spike feeds back with weight `w`: the gradient of its last membrane in each input."""
+    from sparx.dynamics import MembraneState
+
+    steps = 120
+    x = 0.12 + 0.2 * rng.random(steps)
+    cases = []
+    for w, name, detach in (
+        (0.0, "ATan", False),
+        (1.5, "ATan", False),
+        (1.5, "FastSigmoid", True),
+        (-0.5, "Triangle", False),
+    ):
+        made = {
+            "ATan": surrogates.ATan(),
+            "FastSigmoid": surrogates.FastSigmoid(),
+            "Triangle": surrogates.Triangle(),
+        }[name]
+        cell = LIFCell(decay=decay(tau=10.0), threshold=1.0, surrogate=made, detach_reset=detach)
+
+        def last(x, cell=cell, w=w):
+            def step(carry, xt):
+                state, spike = carry
+                state, out = cell.step(state, SynapticInput(jump=xt + w * spike), 1.0)
+                return (state, out.value), out.value
+
+            start = (MembraneState(jnp.zeros(())), jnp.zeros(()))
+            (state, _), spikes = jax.lax.scan(step, start, x)
+            return state.v, spikes
+
+        grad = jax.grad(lambda x: last(x)[0])(jnp.asarray(x))
+        spikes = last(jnp.asarray(x))[1]
+        cases.append(
+            {
+                "w": w,
+                "surrogate": name,
+                "detach": detach,
+                "grad": np.asarray(grad).tolist(),
+                "spikes": np.flatnonzero(np.asarray(spikes)).tolist(),
+            }
+        )
+    return {"x": x.tolist(), "tau": 10.0, "cases": cases}
+
+
 def delays(rng: np.random.Generator) -> dict:
     """Three inputs that each fire once, delayed onto one leaky integrator; the loss is minus its peak, or
     minus its value at step 50, the delays page's (`read_at`)."""
@@ -278,6 +322,7 @@ def main() -> None:
         "stdp": stdp,
         "brunel": brunel,
         "encoders": encoders,
+        "bptt": bptt,
     }
     with jax.enable_x64(new_val=True):
         data = {

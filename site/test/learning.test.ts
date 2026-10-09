@@ -1,6 +1,7 @@
 // The browser's learning engines against sparx in float64 (site/lab/fixtures.py): the surrogate
 // gradient of the teach page's neuron, the delays page's kernels and gradient, and PairSTDP's weights.
 import { expect, test } from 'bun:test';
+import { unroll } from '../src/engines/bptt';
 import { kernel, peak } from '../src/engines/delays';
 import { delta, latency } from '../src/engines/encode';
 import { PairSTDP } from '../src/engines/stdp';
@@ -65,4 +66,18 @@ test('LatencyEncoder and DeltaEncoder', () => {
 	const e = fixtures.encoders;
 	for (const [steps, expected] of Object.entries<number[][]>(e.latency)) expect(latency(e.values, Number(steps))).toEqual(expected);
 	for (const [threshold, expected] of Object.entries<number[]>(e.delta)) expect(delta(e.signal, Number(threshold))).toEqual(expected);
+});
+
+test('backpropagation through an autapse LIFCell', () => {
+	if (!fixtures.bptt) throw new Error('fixtures.bptt is missing: run site/lab/fixtures.py --only bptt');
+	const b = fixtures.bptt;
+	for (const c of b.cases) {
+		const derivative = surrogates().find((s) => s.name === c.surrogate)?.derivative as (x: number) => number;
+		const out = unroll(b.x, Math.exp(-1 / b.tau), c.w, derivative, c.detach);
+		expect([...out.s.keys()].filter((t) => out.s[t])).toEqual(c.spikes);
+		const scale = Math.max(...c.grad.map(Math.abs));
+		const worst = Math.max(...c.grad.map((g: number, t: number) => Math.abs(g - out.grad[t])));
+		console.log(`autapse w=${c.w} ${c.surrogate}${c.detach ? ' detached' : ''}: ${c.spikes.length} spikes, gradient within ${worst.toExponential(1)} of a largest ${scale.toExponential(1)}`);
+		expect(worst).toBeLessThan(1e-10 * Math.max(scale, 1));
+	}
 });

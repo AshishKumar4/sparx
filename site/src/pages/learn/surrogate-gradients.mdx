@@ -1,0 +1,105 @@
+---
+layout: ../../layouts/Chapter.astro
+title: Surrogate gradients
+description: Gradient descent needs a derivative, and a spike's is zero almost everywhere. This chapter shows why that stops learning cold, how a surrogate derivative gets around it while every spike stays exact, and how to choose one.
+---
+
+import CodeBlock from '../../components/CodeBlock.astro';
+import SurrogatePlot from '../../components/live/SurrogatePlot.astro';
+import Teach from '../../components/live/Teach.astro';
+import { colab, source } from '../../data/site.mjs';
+import surrogate from '../../../snippets/surrogate.py?raw';
+import teach from '../../../snippets/teach.py?raw';
+
+## The problem
+
+A neuron spikes when its membrane reaches the threshold. Write $x = v - \theta$ for how far above threshold the membrane is; the spike is the Heaviside step of $x$:
+
+$$
+s = H(x) = \begin{cases} 1 & x \geq 0 \\ 0 & x < 0 \end{cases}
+$$
+
+Training by gradient descent asks how the loss changes when a weight changes a little. A weight changes the input, the input changes $v$, and $v$ changes $s$. The chain rule multiplies the derivatives along that path, and one of them is $\mathrm{d}s/\mathrm{d}x$. It is zero for every $x$ except 0, where it is undefined. So every gradient that passes through a spike is zero.
+
+This is not a technicality. Nudge a weight by a small amount and every membrane moves by a small amount, but unless one of them happens to cross the threshold, no spike changes, and neither does the loss. Seen as a function of the weights, the loss is flat almost everywhere and jumps where some spike appears or disappears. Gradient descent on that surface has nowhere to go.
+
+## The surrogate
+
+The fix is to keep the forward pass exactly as it is, binary spikes and all, and change only the derivative used in the backward pass. In place of $H'(x)$, use the derivative $\sigma'(x)$ of a smooth step $\sigma$, a bump centred on the threshold:
+
+$$
+\frac{\partial s}{\partial x} \;\longrightarrow\; \sigma'(x)
+$$
+
+This is a surrogate gradient. It is a deliberate approximation: the gradient computed this way is not the gradient of anything the network computes. But it points somewhere sensible. A neuron whose membrane is just below threshold could be made to fire by a small push, and the surrogate gives it a large gradient. A neuron far below threshold would need a large push, and the surrogate gives it little. The surrogate answers the question gradient descent needs answered, which neurons are close to changing, while the spikes themselves stay exact.
+
+<SurrogatePlot height="16rem" />
+
+The orange line is the spike as the forward pass computes it; the violet curve is the slope the backward pass uses in its place. Each surrogate in sparx is a different bump:
+
+| Surrogate | $\sigma'(x)$ | Note |
+| --- | --- | --- |
+| `ATan(alpha=2)` | $\dfrac{\alpha/2}{1 + (\tfrac{\pi}{2}\alpha x)^2}$ | Integrates to 1; its tails fall as $1/x^2$, so distant neurons still get some gradient |
+| `Sigmoid(alpha=4)` | $\alpha\,\mathrm{sig}(\alpha x)\,(1 - \mathrm{sig}(\alpha x))$ | The logistic's slope |
+| `FastSigmoid(slope=25)` | $\dfrac{1}{(\text{slope}\,\lvert x\rvert + 1)^2}$ | SuperSpike's; peak 1 at any slope |
+| `Triangle(width=1)` | $\max(0,\ 1 - \lvert x\rvert/\text{width})$ | Zero beyond `width` |
+| `Rectangle(width=1)` | $1/\text{width}$ for $\lvert x\rvert < \text{width}/2$ | A box |
+| `Gaussian(sigma=0.5)` | the normal density | |
+| `StraightThrough()` | $1$ | Passes the gradient as if the spike were the identity |
+
+## How sparx implements it
+
+`sparx.spike` is a `jax.custom_jvp`: its forward pass is the step, and its derivative rule is the surrogate's. JAX derives reverse mode from that rule by transposing it, so the one definition serves `jax.grad`, `jax.jvp` and `vmap` alike. Every neuron model takes its surrogate as a field, `LIFCell(..., surrogate=FastSigmoid(100.0))`, and so does every layer, `sparx.nn.LIF(surrogate=...)`.
+
+<CodeBlock code={surrogate} colab={colab('surrogate-gradients')} source={source('src/sparx/surrogate.py')} />
+
+The forward pass gives exactly 0 or 1. The gradients are the two bumps sampled at five points: `ATan` passes 0.09 of the gradient a whole threshold away, `FastSigmoid(25)` only 0.0015.
+
+## Teach a neuron when to fire
+
+Now use it. One neuron listens to 40 inputs, each a random spike train, through 40 weights. The task is to make it fire at three chosen steps and nowhere else. Mark the steps on the strip under its membrane, by clicking to add or remove a mark, and press Train.
+
+The loss compares the neuron's spikes with the marks after smoothing both with an exponential filter of 10 steps, then takes the mean squared difference. Without the smoothing, a spike one step early would count as fully wrong, with no hint of which way to move it. This filtered distance is van Rossum's spike distance.
+
+<Teach />
+
+The rows on top are the inputs, darker for a stronger excitatory weight and blue for an inhibitory one. Each update is a full pass of backpropagation through all 200 steps with the chosen surrogate, followed by an Adam step on the weights. Inputs that fire just before a mark grow stronger; inputs that fire before an unwanted spike weaken. With `ATan`, within 100 updates the neuron fires at the three marks, give or take a few steps. Try the other surrogates from the same starting weights: most get there, at different speeds.
+
+<CodeBlock code={teach} colab={colab('surrogate-gradients')} source={source('src/sparx/dynamics/ml.py')} />
+
+## Shape matters less than scale
+
+With so many surrogates to choose from, does the choice matter? Zenke and Vogels tested this systematically and found that learning is robust to the surrogate's shape, but sensitive to its scale: how wide the bump is and how tall. Too narrow and few neurons receive any gradient; too wide or too tall and gradients through many steps compound.
+
+The compounding is worst in recurrent networks, where the gradient passes through the same neurons at every step. sparx measured it on the Spiking Heidelberg Digits: training a recurrent network with `ATan` grew the gradient norm past $10^8$ within 300 steps, while the much narrower `FastSigmoid(100)` kept it below 10. Chapter 6 looks at why gradients through time explode.
+
+## Try this
+
+1. In the teaching figure, reset the weights and train with `Triangle`. It fires at two of the marks and never at the third. Why?
+2. With `ATan(alpha=2)`, how much gradient passes at $x = 0.5$, half a threshold above?
+3. Why might `FastSigmoid(100)` keep a recurrent network's gradients small, when `ATan` does not?
+4. Why not make training easy by replacing the spike with a sigmoid in the forward pass too?
+
+<details>
+<summary>Answers</summary>
+
+1. `Triangle` passes no gradient at all where the membrane is more than one threshold away from it. Around the third mark the membrane never comes that close, so no weight receives any signal to make the neuron fire there, and training stops improving. `ATan`'s long tails do reach it, and so, crudely, does `StraightThrough`, whose slope is 1 everywhere. On this small problem even that is enough; chapter 6 shows where it is not.
+2. $\dfrac{1}{1 + (\pi/2 \times 2 \times 0.5)^2} = \dfrac{1}{1 + (\pi/2)^2} \approx 0.29$.
+3. At 0.1 from threshold `FastSigmoid(100)` passes $1/121$ of the gradient, and `ATan` about 0.9. Only neurons within a few hundredths of threshold pass gradient, so far fewer paths through time carry it, and the product of factors along each path stays small.
+4. The network would then compute with real numbers, not spikes. It would lose the sparsity and the additions-only arithmetic of chapter 0, and a network trained that way behaves differently when its spikes are made binary again.
+
+</details>
+
+## Summary
+
+A spike's derivative is zero almost everywhere, so ordinary gradients cannot pass it. A surrogate keeps every spike exact in the forward pass and uses a smooth bump's slope in the backward pass, giving credit to neurons in proportion to how close they are to firing. The shape of the bump matters little, its scale a great deal. The next chapter follows the gradient back through time, step by step, and asks what that costs.
+
+## References
+
+<ul class="references">
+<li>E. O. Neftci, H. Mostafa and F. Zenke, "Surrogate gradient learning in spiking neural networks", <em>IEEE Signal Processing Magazine</em> 36(6), 2019, <a href="https://doi.org/10.1109/MSP.2019.2931595">doi:10.1109/MSP.2019.2931595</a>.</li>
+<li>F. Zenke and T. P. Vogels, "The remarkable robustness of surrogate gradient learning for instilling complex function in spiking neural networks", <em>Neural Computation</em> 33(4), 2021, <a href="https://doi.org/10.1162/neco_a_01367">doi:10.1162/neco_a_01367</a>.</li>
+<li>F. Zenke and S. Ganguli, "SuperSpike: supervised learning in multilayer spiking neural networks", <em>Neural Computation</em> 30(6), 2018, <a href="https://doi.org/10.1162/neco_a_01086">doi:10.1162/neco_a_01086</a>. The fast sigmoid.</li>
+<li>M. C. W. van Rossum, "A novel spike distance", <em>Neural Computation</em> 13(4), 2001, <a href="https://doi.org/10.1162/089976601300014321">doi:10.1162/089976601300014321</a>.</li>
+<li>sparx's measurement of gradients through recurrence: <a href="/docs/design/">design notes</a>.</li>
+</ul>

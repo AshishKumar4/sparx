@@ -1,0 +1,125 @@
+---
+// One LIF neuron with an autapse, unrolled over 120 steps, and the gradient of its last membrane flowing back
+// to every step (src/engines/bptt.ts).
+import Choice from './Choice.astro';
+import Figure from './Figure.astro';
+import Slider from './Slider.astro';
+
+const names = ['ATan', 'FastSigmoid', 'Triangle', 'StraightThrough'];
+---
+
+<div data-unroll>
+	<Figure engine="LIFCell + jax.grad" height="19rem">
+		<canvas role="img" aria-label="A neuron's membrane and spikes over 120 steps, and below, on a log scale, how strongly the last membrane depends on each earlier step's input"></canvas>
+		<Fragment slot="controls">
+			<Slider name="w" label="Self-connection w" min={-1} max={3} step={0.05} value={0} digits={2} />
+			<Slider name="sharpness" label="Surrogate sharpness" min={0.25} max={4} step={0.05} value={1} digits={2} unit="×" />
+			<Choice name="surrogate" label="Surrogate" value="ATan" options={names.map((n) => ({ value: n, label: n }))} />
+			<Choice name="detach" label="Reset" value="yes" options={[{ value: 'no', label: 'Gradient through reset' }, { value: 'yes', label: 'detach_reset' }]} />
+		</Fragment>
+		<p slot="after" class="readout" data-status aria-live="polite"></p>
+	</Figure>
+</div>
+
+<script>
+	import { generator } from '../../engines/brunel';
+	import { unroll } from '../../engines/bptt';
+	import { surrogates } from '../../engines/surrogate';
+	import { controls } from '../../widgets/controls';
+	import { alpha, fit, onTheme, type Palette } from '../../widgets/theme';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-unroll]')) {
+		const canvas = root.querySelector('canvas') as HTMLCanvasElement;
+		const status = root.querySelector<HTMLElement>('[data-status]');
+		const random = generator(5);
+		const x = Array.from({ length: 120 }, () => 0.12 + 0.2 * random());
+		let colors: Palette;
+		let view = fit(canvas);
+		const draw = () => {
+			if (!colors) return;
+			const w = ui.read('w');
+			const surrogate = surrogates(ui.read('sharpness')).find((s) => s.name === ui.choice('surrogate'))?.derivative as (x: number) => number;
+			const out = unroll(x, Math.exp(-1 / 10), w, surrogate, ui.choice('detach') === 'yes');
+			const { ctx, width, height } = view;
+			ctx.clearRect(0, 0, width, height);
+			const left = 46;
+			const right = width - 10;
+			const T = x.length;
+			const px = (t: number) => left + ((t + 0.5) / T) * (right - left);
+			const split = height * 0.4;
+			const lo = -0.5;
+			const hi = 2.5;
+			const vy = (v: number) => split - 8 - ((Math.min(Math.max(v, lo), hi) - lo) / (hi - lo)) * (split - 22);
+			ctx.font = `11px ${getComputedStyle(canvas).getPropertyValue('--sx-mono')}`;
+			ctx.setLineDash([4, 4]);
+			ctx.strokeStyle = alpha(colors.spike, 0.6);
+			ctx.beginPath();
+			ctx.moveTo(left, vy(1));
+			ctx.lineTo(right, vy(1));
+			ctx.stroke();
+			ctx.setLineDash([]);
+			ctx.strokeStyle = colors.membrane;
+			ctx.lineWidth = 1.5;
+			ctx.beginPath();
+			for (let t = 0; t < T; t++) (t ? ctx.lineTo : ctx.moveTo).call(ctx, px(t), vy(out.u[t]));
+			ctx.stroke();
+			ctx.strokeStyle = colors.spike;
+			ctx.lineWidth = 2;
+			ctx.beginPath();
+			for (let t = 0; t < T; t++) {
+				if (!out.s[t]) continue;
+				ctx.moveTo(px(t), 4);
+				ctx.lineTo(px(t), 14);
+			}
+			ctx.stroke();
+			const top = split + 12;
+			const bottom = height - 18;
+			const gy = (g: number) => bottom - ((Math.log10(Math.max(Math.abs(g), 1e-12)) + 12) / 24) * (bottom - top);
+			ctx.strokeStyle = alpha(colors.ink, 0.12);
+			ctx.lineWidth = 1;
+			ctx.fillStyle = colors.muted;
+			ctx.textAlign = 'right';
+			for (const e of [-12, -6, 0, 6, 12]) {
+				ctx.beginPath();
+				ctx.moveTo(left, Math.round(gy(10 ** e)) + 0.5);
+				ctx.lineTo(right, Math.round(gy(10 ** e)) + 0.5);
+				ctx.stroke();
+				ctx.fillText(`1e${e}`, left - 6, gy(10 ** e) + 4);
+			}
+			const bar = Math.max(1, ((right - left) / T) * 0.7);
+			for (let t = 0; t < T; t++) {
+				const g = out.grad[t];
+				ctx.fillStyle = g >= 0 ? colors.learn : alpha(colors.learn, 0.45);
+				const y = gy(g);
+				ctx.fillRect(px(t) - bar / 2, y, bar, gy(1e-12) - y);
+			}
+			ctx.textAlign = 'left';
+			ctx.fillStyle = colors.muted;
+			ctx.fillText('d v_T / d x_t, log scale ←', left + 4, height - 4);
+			if (status) {
+				const first = Math.abs(out.grad[0]);
+				const spikes = out.s.reduce((a, b) => a + b, 0);
+				status.textContent = `${spikes} spikes · the last membrane's gradient reaches step 0 at ${first.toExponential(1)} of its size at the end${first > 1 ? ': it grew going back' : ''}`;
+			}
+		};
+		const ui = controls(root, draw);
+		new ResizeObserver(() => {
+			view = fit(canvas);
+			draw();
+		}).observe(canvas);
+		onTheme((p) => {
+			colors = p;
+			draw();
+		});
+	}
+</script>
+
+<style>
+	.readout {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+	}
+</style>
