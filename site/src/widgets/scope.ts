@@ -103,10 +103,9 @@ export function scope(canvas: HTMLCanvasElement, trace: Trace, { steps = 360, pe
 		ctx.stroke();
 	}
 
-	if (reduced) {
-		advance(steps);
-		draw();
-	}
+	// The window starts full, so the figure reads as running from its first frame.
+	advance(steps);
+	draw();
 	animate(canvas, () => {
 		if (reduced) return;
 		advance(perFrame);
@@ -120,10 +119,7 @@ export function scope(canvas: HTMLCanvasElement, trace: Trace, { steps = 360, pe
 			return n;
 		},
 		redraw() {
-			if (reduced) {
-				head = 0;
-				advance(steps);
-			}
+			if (reduced) advance(steps);
 			draw();
 		},
 	};

@@ -54,15 +54,19 @@ def neurons(rng: np.random.Generator) -> dict:
     physical = {"current": current.tolist(), "dt": 0.1, "v": np.asarray(v).tolist(),
                 "spikes": np.flatnonzero(np.asarray(out.value)).tolist()}
     izhikevich = {}
+    # Compiled, XLA fuses the quadratic membrane's arithmetic and rounds its last bit differently, which
+    # the membrane amplifies into a step's difference in a spike (docs/fidelity.md); run op by op.
     for name, (a, b, c, d) in IZHIKEVICH_2003.items():
-        steps_i = 3000
+        steps_i = 2000
         current_i = np.where(np.arange(steps_i) > 200, 10.0, 0.0)
         cell = Izhikevich(a=a, b=b, c=c, d=d)
-        (out, v), _ = run(cell, SynapticInput(current=jnp.asarray(current_i)), dt=0.1, record=lambda s: s.v)
+        with jax.disable_jit():
+            (out, v), _ = run(cell, SynapticInput(current=jnp.asarray(current_i)), dt=0.1,
+                              record=lambda s: s.v)
         izhikevich[name] = {"spikes": np.flatnonzero(np.asarray(out.value)).tolist(),
                             "v": np.asarray(v).tolist()}
     return {"drive": drive.tolist(), "lif": lif, "physical": physical, "izhikevich": izhikevich,
-            "izhikevich_current": {"after": 200, "amplitude": 10.0, "dt": 0.1, "steps": 3000}}
+            "izhikevich_current": {"after": 200, "amplitude": 10.0, "dt": 0.1, "steps": 2000}}
 
 
 def filtered(x: jax.Array, keep: float) -> jax.Array:

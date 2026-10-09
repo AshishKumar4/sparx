@@ -1,6 +1,6 @@
 ---
-// The front page's hero. The drone is flown, live, by the spiking network site/lab/pilot.py trained;
-// src/widgets/pilot/hero.ts steps it.
+// The front page's hero: the drone, flown live by the spiking network site/lab/pilot.py trained, and the
+// network itself (src/widgets/pilot/hero.ts).
 import model from '../../../public/pilot/pilot.json';
 import Install from '../Install.astro';
 
@@ -9,14 +9,15 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 ---
 
 <section class="hero" data-hero>
-	<div class="world-box">
-		<canvas class="world" data-world aria-hidden="true"></canvas>
+	<div class="stage">
+		<canvas data-stage role="img" aria-label="A drone flown by a spiking network toward the pointer, beside the network: its seven readings, two layers of 64 neurons that light up as they spike, and two readout neurons wired to the rotors"></canvas>
+		<div class="net" data-net aria-hidden="true"></div>
 	</div>
 	<div class="copy">
 		<h1>Spiking neural networks in&nbsp;JAX</h1>
 		<p class="lede">
-			Train them with gradients or local rules. Simulate circuits in millivolts and milliseconds. sparx is built on Flax and{' '}
-			<a href="https://dewml.dev">dew</a>, and every model is checked against a reference.
+			Train them with gradients or local rules. Simulate circuits in millivolts and milliseconds. Built on Flax and{' '}
+			<a href="https://dewml.dev">dew</a>, with every model checked against a reference.
 		</p>
 		<div class="actions">
 			<a class="button primary" href="/learn/">How it works</a>
@@ -24,16 +25,15 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 			<Install />
 		</div>
 	</div>
-	<figure class="pilot" aria-labelledby="pilot-caption">
-		<figcaption id="pilot-caption">
+	<div class="panel">
+		<p class="caption">
 			<span class="live" aria-hidden="true"></span>
 			<span>
-				<strong>A spiking network is flying this drone.</strong>
-				<span class="hint desk">Point anywhere to give it a target, click to push it, or drag it and let go.</span>
-				<span class="hint touch">Tap anywhere to give it a target.</span>
+				<strong>This drone is flown by 128 spiking neurons, live.</strong>{' '}
+				<span class="hint desk">Move your pointer and it follows. Click to push it, drag it to throw it, click a neuron to silence it.</span>
+				<span class="hint touch">Tap anywhere to send it there. Tap a neuron to silence it.</span>
 			</span>
-		</figcaption>
-		<canvas class="raster" data-raster role="img" aria-label="The pilot's spikes over the last two seconds, one row per neuron, and the membranes of its two readout neurons, which set the rotors' thrust"></canvas>
+		</p>
 		<div class="controls">
 			<button type="button" data-act="gust">Gust</button>
 			<button type="button" data-act="flip">Flip</button>
@@ -42,15 +42,11 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 			<button type="button" data-act="pause" aria-pressed="false">Pause</button>
 		</div>
 		<p class="stats">
-			<span>128 LIF neurons, 10 ms a step, in your browser</span>
 			<span>firing <span data-rate>0 Hz</span></span>
 			<span class="silenced" data-silenced></span>
+			<span>trained with sparx · reaches its target on {arrived}% of 1,000 starts · <a href="/learn/pilot/">how it learned</a></span>
 		</p>
-		<p class="more">
-			Trained with sparx by gradients through its spikes and the drone's physics. It reaches a fixed target within 15&nbsp;cm and stays
-			there on {arrived}% of 1,000 random starts. <a href="/learn/pilot/">How it learned to fly</a>
-		</p>
-	</figure>
+	</div>
 </section>
 
 <link rel="preload" href="/pilot/pilot.json" as="fetch" crossorigin="anonymous" />
@@ -70,61 +66,59 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 		position: relative;
 		display: grid;
 		grid-template-columns: minmax(0, 1fr);
-		grid-template-areas: 'copy' 'world' 'pilot';
+		grid-template-areas: 'copy' 'stage' 'panel';
 		margin-inline: calc(-1 * var(--sl-content-pad-x, 1rem));
-		padding-inline: var(--sl-content-pad-x, 1rem);
 		border-bottom: 1px solid var(--sx-line);
 	}
-	.world-box {
-		grid-area: world;
+	.stage {
+		grid-area: stage;
 		position: relative;
-		height: 58svh;
-		min-height: 22rem;
-		margin-inline: calc(-1 * var(--sl-content-pad-x, 1rem));
+		height: max(34rem, 88svh);
 		border-block: 1px solid var(--sx-line);
-		background:
-			radial-gradient(ellipse at 50% 120%, var(--sx-membrane-soft), transparent 60%),
-			var(--sx-page);
+		background: radial-gradient(ellipse at 50% 100%, var(--sx-membrane-soft), transparent 65%), var(--sx-page);
 		touch-action: pan-y;
 	}
-	.world {
+	canvas {
 		position: absolute;
 		inset: 0;
 		width: 100%;
 		height: 100%;
 		cursor: crosshair;
+		user-select: none;
 	}
-	.world:global(.grabbing) {
+	.hero:global(.grabbing) canvas {
 		cursor: grabbing;
+	}
+	.net {
+		position: absolute;
+		left: var(--sl-content-pad-x, 1rem);
+		right: var(--sl-content-pad-x, 1rem);
+		bottom: 1rem;
+		height: 38%;
+		pointer-events: none;
 	}
 	.copy {
 		grid-area: copy;
 		position: relative;
 		z-index: 1;
-		padding-block: 2.5rem 2rem;
-		pointer-events: none;
-	}
-	.copy a,
-	.copy button,
-	.copy :global(.install) {
-		pointer-events: auto;
+		padding: 2.25rem var(--sl-content-pad-x, 1rem) 1.75rem;
 	}
 	h1 {
-		font-size: clamp(2.4rem, 1.4rem + 4.4vw, 4.6rem);
-		line-height: 1;
+		font-size: clamp(2.4rem, 1.3rem + 4.2vw, 4.75rem);
+		line-height: 0.98;
 		letter-spacing: -0.045em;
 		font-weight: 700;
 		color: var(--sx-ink);
 		margin: 0;
-		max-width: 12ch;
+		max-width: 13ch;
 		text-wrap: balance;
 	}
 	.lede {
-		margin-top: 1.25rem;
-		font-size: clamp(1.05rem, 0.95rem + 0.4vw, 1.25rem);
+		margin: 1.125rem 0 0;
+		font-size: clamp(1.05rem, 0.95rem + 0.35vw, 1.2rem);
 		line-height: 1.5;
 		color: var(--sx-ink-2);
-		max-width: 34rem;
+		max-width: 31rem;
 	}
 	.lede a {
 		color: inherit;
@@ -132,7 +126,7 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 		text-underline-offset: 0.18em;
 	}
 	.actions {
-		margin-top: 1.75rem;
+		margin-top: 1.5rem;
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.625rem;
@@ -159,28 +153,26 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 		color: var(--sx-page);
 		border-color: var(--sx-ink);
 	}
-	.button.primary:hover {
-		opacity: 0.9;
-	}
-	.pilot {
-		grid-area: pilot;
-		margin: 0;
-		padding-block: 1.25rem 2rem;
+	.panel {
+		grid-area: panel;
+		position: relative;
+		z-index: 1;
 		display: grid;
 		gap: 0.75rem;
+		padding: 1rem var(--sl-content-pad-x, 1rem) 1.5rem;
 	}
-	figcaption {
+	.caption {
 		display: flex;
 		gap: 0.625rem;
 		align-items: baseline;
+		margin: 0;
 		font-size: 0.875rem;
 		line-height: 1.45;
 		color: var(--sx-ink-2);
 	}
-	figcaption strong {
+	.caption strong {
 		color: var(--sx-ink);
 		font-weight: 600;
-		display: block;
 	}
 	.live {
 		flex: none;
@@ -206,11 +198,6 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 			display: none;
 		}
 	}
-	.raster {
-		width: 100%;
-		height: 13rem;
-		cursor: pointer;
-	}
 	.controls {
 		display: flex;
 		flex-wrap: wrap;
@@ -231,9 +218,6 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 	.controls button:hover {
 		border-color: var(--sx-faint);
 	}
-	.controls [data-act='pause'] {
-		margin-left: auto;
-	}
 	.hero:not([data-silenced]) .restore,
 	.hero[data-silenced='0'] .restore {
 		display: none;
@@ -247,61 +231,60 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 		font-size: 0.75rem;
 		color: var(--sx-muted);
 	}
-	.stats [data-rate],
+	.stats a {
+		color: var(--sx-ink);
+	}
+	[data-rate],
 	.silenced {
 		color: var(--sx-spike);
-	}
-	.more {
-		margin: 0;
-		font-size: 0.8125rem;
-		line-height: 1.5;
-		color: var(--sx-muted);
-	}
-	.more a {
-		color: var(--sx-ink);
-		white-space: nowrap;
 	}
 
 	@media (min-width: 64rem) {
 		.hero {
-			grid-template-columns: minmax(0, 1fr) 24rem;
-			grid-template-rows: 1fr auto;
-			grid-template-areas: 'copy pilot' 'copy pilot';
-			min-height: min(calc(100svh - var(--sl-nav-height, 3.5rem)), 56rem);
-			column-gap: 3rem;
-			padding-inline: max(2.5rem, calc((100vw - 84rem) / 2));
-			border-bottom: 1px solid var(--sx-line);
+			display: block;
+			height: calc(100svh - var(--sl-nav-height, 3.5rem));
+			min-height: 40rem;
+			max-height: 60rem;
 		}
-		.world-box {
+		.stage {
 			position: absolute;
 			inset: 0;
 			height: auto;
-			min-height: 0;
-			margin: 0;
 			border: 0;
 		}
+		.net {
+			left: max(2.5rem, calc((100vw - 84rem) / 2));
+			right: auto;
+			bottom: 2.5rem;
+			width: min(40rem, 47vw);
+			height: min(19rem, 38%);
+		}
 		.copy {
-			align-self: center;
-			padding-block: 4rem;
-			max-width: 36rem;
+			position: absolute;
+			top: clamp(2rem, 7svh, 5rem);
+			left: max(2.5rem, calc((100vw - 84rem) / 2));
+			padding: 0;
+			pointer-events: none;
 		}
-		.raster {
-			height: 10.5rem;
+		.copy a,
+		.copy :global(.install) {
+			pointer-events: auto;
 		}
-		.more {
-			display: none;
+		.panel {
+			position: absolute;
+			right: max(2.5rem, calc((100vw - 84rem) / 2));
+			bottom: 2.5rem;
+			width: min(25rem, 30vw);
+			padding: 0;
+			justify-items: end;
+			text-align: right;
 		}
-		.pilot {
-			align-self: end;
-			gap: 0.625rem;
-			padding: 0.875rem 1rem 1rem;
-			margin-bottom: 2rem;
-			border: 1px solid var(--sx-line);
-			border-radius: 0.75rem;
-			background: color-mix(in srgb, var(--sx-page) 82%, transparent);
-			backdrop-filter: blur(6px);
-			position: relative;
-			z-index: 1;
+		.caption {
+			flex-direction: row-reverse;
+		}
+		.controls,
+		.stats {
+			justify-content: flex-end;
 		}
 	}
 </style>

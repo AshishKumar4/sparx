@@ -11,7 +11,8 @@ interface Props {
 const { code, title, colab, source } = Astro.props;
 ---
 
-<div class="code-block">
+<details class="code-block" open>
+	<summary>The code</summary>
 	<Code code={code.trim()} lang="python" title={title} wrap preserveIndent />
 	{
 		(colab || source) && (
@@ -21,11 +22,35 @@ const { code, title, colab, source } = Astro.props;
 			</div>
 		)
 	}
-</div>
+</details>
+<script is:inline>
+	// On a phone the code starts folded, so the page reads as a story; it is one tap away.
+	if (matchMedia('(max-width: 63.99rem)').matches) document.currentScript.previousElementSibling.open = false;
+</script>
 
 <style>
 	.code-block {
 		min-width: 0;
+	}
+	summary {
+		display: none;
+		cursor: pointer;
+		font-size: 0.875rem;
+		font-weight: 550;
+		color: var(--sx-ink);
+		padding: 0.625rem 0.875rem;
+		border: 1px solid var(--sx-line);
+		border-radius: 0.5rem;
+		background: var(--sx-panel);
+		list-style-position: inside;
+	}
+	.code-block[open] summary {
+		margin-bottom: 0.5rem;
+	}
+	@media (max-width: 63.99rem) {
+		summary {
+			display: list-item;
+		}
 	}
 	.code-block :global(.expressive-code) {
 		margin: 0;

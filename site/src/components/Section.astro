@@ -23,8 +23,8 @@ const { id, label, role = 'spike', title, flip = false } = Astro.props;
 <style>
 	.section {
 		display: grid;
-		gap: 2rem;
-		padding-block: 4.5rem;
+		gap: 1.75rem;
+		padding-block: 3rem;
 		border-bottom: 1px solid var(--sx-line);
 		max-width: 80rem;
 		margin-inline: auto;
@@ -80,6 +80,7 @@ const { id, label, role = 'spike', title, flip = false } = Astro.props;
 	}
 	@media (min-width: 64rem) {
 		.section {
+			padding-block: 4.5rem;
 			grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
 			gap: 4rem;
 			align-items: start;
