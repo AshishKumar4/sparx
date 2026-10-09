@@ -34,8 +34,10 @@ from sparx.dynamics.core import Gap, NeuronModel, Output, SynapticInput, Term
 
 __all__ = [
     "Alpha",
+    "AlphaState",
     "Arrivals",
     "BiExponential",
+    "BiExponentialState",
     "Delta",
     "Exponential",
     "Graded",
@@ -118,6 +120,8 @@ class Exponential:
 
 
 class AlphaState(NamedTuple):
+    """An `Alpha` synapse's waveform `(value + slope * s) exp(-s / tau)` from the start of the step."""
+
     value: jax.Array
     slope: jax.Array
 
@@ -150,6 +154,8 @@ class Alpha:
 
 
 class BiExponentialState(NamedTuple):
+    """A `BiExponential` synapse's two exponentials, whose difference is its current."""
+
     decay: jax.Array
     rise: jax.Array
 

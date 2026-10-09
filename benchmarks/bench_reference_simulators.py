@@ -26,8 +26,8 @@ PyNEST implementation of INM-6/microcircuit-PD14-model at `--microcircuit`
 Each prints the excitatory population's mean rate after the first 100 ms
 (after 500 ms, layer 2/3's, in the microcircuit, whose onset lasts that
 long), to show it runs the network sparx runs. The microcircuit runs in
-NEST only. Needs NEST 3.10 and Brian2 2.10 (the
-reference environment of HANDOFF.md) and a C++ compiler.
+NEST only. Needs NEST 3.10 and Brian2 2.10 (the NEST
+environment, tools/environments/nest.yml) and a C++ compiler.
 """
 
 import argparse

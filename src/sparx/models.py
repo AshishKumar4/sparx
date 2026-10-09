@@ -61,7 +61,7 @@ from flax.typing import Dtype, PrecisionLike
 from sparx.nn.delays import DelayedDense
 from sparx.nn.neurons import LI, LIF, Neuron, Recurrent, adopt
 
-__all__ = ["SEWBlock", "SEWResNet", "SpikingMLP", "sew_resnet18", "sew_resnet34"]
+__all__ = ["SEWBlock", "SEWResNet", "SpikingMLP", "connect", "sew_resnet18", "sew_resnet34"]
 
 type Axes = dict[tuple[str, ...], LogicalAxes]
 
@@ -104,6 +104,9 @@ _kaiming_uniform = nn.initializers.variance_scaling(2.0, "fan_in", "uniform")
 
 
 def connect(shortcut: jax.Array, residual: jax.Array, how: Connect) -> jax.Array:
+    """A SEW block's shortcut joined to its residual spikes: `add` sums them, `and` keeps their
+    coincidences and `iand` the shortcut's spikes the residual does not repeat (SpikingJelly's
+    connect functions)."""
     if how == "add":
         return shortcut + residual
     if how == "and":

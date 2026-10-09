@@ -9,7 +9,10 @@ from pathlib import Path
 import pytest
 
 EXAMPLES = Path(__file__).parents[1] / "examples"
-RUNS = [[path.name] for path in sorted(EXAMPLES.glob("*.py"))] + [["train_shd.py", "--recipe", "snn-delays"]]
+# SNN-delays' recipe both with a holdout and, as their script trains, on every training recording.
+RUNS = [[path.name] for path in sorted(EXAMPLES.glob("*.py"))] + [
+    ["train_shd.py", "--recipe", "snn-delays"],
+    ["train_shd.py", "--recipe", "snn-delays", "--validation", "0"]]
 
 
 @pytest.mark.parametrize("run", RUNS, ids=" ".join)

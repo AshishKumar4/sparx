@@ -1,6 +1,8 @@
-# Installs sparx with dew and the dataset reader on dew's jax (constraints.txt),
-# runs dew's three lint gates (ruff, tools/lint_slop.py, pyright) and the CPU
-# test suite, dew's Trainer tests included.
+# Installs sparx with dew and the dataset reader on the dew commit and the jax
+# build constraints.txt names, runs dew's three lint gates (ruff,
+# tools/lint_slop.py, pyright) once, and the CPU test suite, dew's Trainer
+# tests included, on every Python sparx supports on Linux and on macOS. The
+# package job builds the sdist and wheel and checks what PyPI would refuse.
 
 name: CI
 
@@ -10,17 +12,18 @@ on:
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 # A newer push to the same ref makes the older run's verdict moot.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -39,12 +42,56 @@ jobs:
       run: |
         uvx ruff@0.14.3 check src tests tools benchmarks examples recipes research
         python tools/lint_slop.py --package sparx src/sparx tests tools recipes examples benchmarks research
-    - name: The prose checker is dew's
-      # tools/lint_slop.py is dew's file as it is at the commit pyproject.toml pins.
+    - name: The prose checker and the distribution checker are dew's
+      # Each is dew's file as it is at the commit constraints.txt pins.
       run: |
-        pin=$(sed -n 's|.*AshishKumar4/dew@\([0-9a-f]*\).*|\1|p' pyproject.toml)
-        curl -fsSL "https://raw.githubusercontent.com/AshishKumar4/dew/$pin/tools/lint_slop.py" | diff - tools/lint_slop.py
+        pin=$(sed -n 's|.*AshishKumar4/dew@\([0-9a-f]*\).*|\1|p' constraints.txt)
+        for tool in lint_slop.py check_distribution.py; do
+          curl -fsSL "https://raw.githubusercontent.com/AshishKumar4/dew/$pin/tools/$tool" | diff - "tools/$tool"
+        done
     - name: Type check
       run: uvx pyright@1.1.406 --pythonpath "$(which python)" src/sparx
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - { os: ubuntu-latest, python: "3.12" }
+        - { os: ubuntu-latest, python: "3.13" }
+        - { os: ubuntu-latest, python: "3.14" }
+        - { os: macos-latest, python: "3.12" }
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python }}
+        cache: pip
+        cache-dependency-path: |
+          pyproject.toml
+          constraints.txt
+    - name: Install
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[datasets,test]" -c constraints.txt
     - name: Test
       run: JAX_PLATFORMS=cpu python -m pytest -q
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Build and check the sdist and wheel
+      run: |
+        python -m pip install --upgrade pip build twine packaging
+        python -m build
+        python -m twine check --strict dist/*
+        python tools/check_distribution.py dist/*
+    - uses: actions/upload-artifact@v4
+      with:
+        name: dist
+        path: dist/

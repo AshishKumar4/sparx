@@ -1,6 +1,6 @@
 """Train a spiking network on the Spiking Heidelberg Digits with dew's Trainer.
 
-    pip install -e ".[datasets]"
+    pip install "sparxml[datasets]"     # from a clone: pip install -e ".[datasets]" -c constraints.txt
     python examples/train_shd.py --steps 3000
     python examples/train_shd.py --recipe snn-delays --epochs 150
     JAX_PLATFORMS=cpu python examples/train_shd.py --smoke --out /tmp/shd-smoke
@@ -248,11 +248,12 @@ def snn_delays(config: Config) -> None:
                 checkpoint_every=5 * per_epoch, metrics=[accuracy], validation=splits,
                 best=Best(accuracy, split="val") if "val" in splits else None)
     checkpoints.wait()
-    report(journal.directory / "scalars.jsonl", checkpoints, per_epoch)
+    report(journal.directory / "scalars.jsonl", checkpoints if "val" in splits else None, per_epoch)
 
 
-def report(journal: Path, checkpoints: Checkpoints, per_epoch: int) -> None:
-    """Each epoch's scores, the test accuracy of the best validation checkpoint, and SNN-delays' number."""
+def report(journal: Path, checkpoints: Checkpoints | None, per_epoch: int) -> None:
+    """Each epoch's scores, the test accuracy of the checkpoint the validation split chose when
+    `checkpoints` ranks by one, and SNN-delays' number."""
     # Each split's scores arrive as a row of their own; an epoch is every row of its step.
     epochs: dict[int, dict[str, float]] = {}
     arrived: dict[int, float] = {}
@@ -270,8 +271,8 @@ def report(journal: Path, checkpoints: Checkpoints, per_epoch: int) -> None:
         print(f"{step // per_epoch:>5} {scalars.get('val/accuracy', math.nan):>8.4f} "
               f"{scalars['test/accuracy']:>8.4f} {arrived[step] - previous:>8.1f}")
         previous = arrived[step]
-    best = checkpoints.best
-    if best is not None:
+    best = None if checkpoints is None else checkpoints.best
+    if checkpoints is not None and best is not None:
         kept = {checkpoint.step: checkpoint.metrics for checkpoint in checkpoints.kept()}
         print(f"selected on validation: epoch {best // per_epoch}, validation accuracy "
               f"{kept[best]['val/accuracy']:.4f}, test accuracy {kept[best]['test/accuracy']:.4f}")

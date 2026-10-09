@@ -76,8 +76,10 @@ from sparx.dynamics.plasticity import (
 )
 from sparx.dynamics.synapses import (
     Alpha,
+    AlphaState,
     Arrivals,
     BiExponential,
+    BiExponentialState,
     Delta,
     Exponential,
     Graded,
@@ -100,10 +102,12 @@ __all__ = [
     "AdEx",
     "AdExState",
     "Alpha",
+    "AlphaState",
     "Arrivals",
     "BernoulliCell",
     "BernoulliState",
     "BiExponential",
+    "BiExponentialState",
     "DecayingHebb",
     "Delta",
     "Dense",
