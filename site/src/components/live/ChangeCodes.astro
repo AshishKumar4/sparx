@@ -1,0 +1,36 @@
+---
+// A signal the reader draws, as change events two ways (src/widgets/codes.ts).
+import Figure from './Figure.astro';
+import Slider from './Slider.astro';
+---
+
+<div data-change-codes>
+	<Figure engine="DeltaEncoder · send-on-delta" height="18rem">
+		<canvas style="touch-action: none" role="img" aria-label="A signal over time, the level a receiver tracks from send-on-delta events, and the events of two delta codes"></canvas>
+		<Fragment slot="controls">
+			<Slider name="threshold" label="Threshold" min={0.02} max={0.3} step={0.01} value={0.08} digits={2} />
+		</Fragment>
+		<p slot="after" class="readout"><span data-status aria-live="polite"></span><br />Draw on the top half to change the signal.</p>
+	</Figure>
+</div>
+
+<script>
+	import { changeCodes } from '../../widgets/codes';
+	import { controls } from '../../widgets/controls';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-change-codes]')) {
+		const ui = controls(root, () => draw());
+		const draw = changeCodes(root, () => ({ threshold: ui.read('threshold') }));
+	}
+</script>
+
+<style>
+	.readout {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		line-height: 1.6;
+		color: var(--sx-muted);
+	}
+</style>

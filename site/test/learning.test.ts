@@ -2,6 +2,7 @@
 // gradient of the teach page's neuron, the delays page's kernels and gradient, and PairSTDP's weights.
 import { expect, test } from 'bun:test';
 import { kernel, peak } from '../src/engines/delays';
+import { delta, latency } from '../src/engines/encode';
 import { PairSTDP } from '../src/engines/stdp';
 import { surrogates } from '../src/engines/surrogate';
 import { teach } from '../src/engines/teach';
@@ -58,3 +59,10 @@ for (const [name, c] of Object.entries<{ mu: number; weights: number[][]; final:
 		expect(worst).toBeLessThan(1e-12);
 	});
 }
+
+test('LatencyEncoder and DeltaEncoder', () => {
+	if (!fixtures.encoders) throw new Error('fixtures.encoders is missing: run site/lab/fixtures.py --only encoders');
+	const e = fixtures.encoders;
+	for (const [steps, expected] of Object.entries<number[][]>(e.latency)) expect(latency(e.values, Number(steps))).toEqual(expected);
+	for (const [threshold, expected] of Object.entries<number[]>(e.delta)) expect(delta(e.signal, Number(threshold))).toEqual(expected);
+});

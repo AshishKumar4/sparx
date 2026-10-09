@@ -1,0 +1,93 @@
+---
+layout: ../../layouts/Chapter.astro
+title: Coding
+description: A spiking network takes spikes in and puts spikes out, but data arrives as numbers. This chapter compares the three main ways of turning numbers into spikes, by how many spikes each costs, how fast it is, and what noise does to it.
+---
+
+import CodeBlock from '../../components/CodeBlock.astro';
+import ChangeCodes from '../../components/live/ChangeCodes.astro';
+import StaticCodes from '../../components/live/StaticCodes.astro';
+import { colab, source } from '../../data/site.mjs';
+import coding from '../../../snippets/coding.py?raw';
+
+## A spike says when, not how much
+
+Every spike looks the same, so a single spike carries no number. A neuron can only encode a value in *how many* spikes it sends in some window, or *when* it sends them. Which one the brain uses, and where, is one of neuroscience's long arguments. For an engineer it is a design choice, and each choice has a price.
+
+Three codes cover most of practice. A **rate code** sends more spikes for a larger value. A **latency code** sends one spike, sooner for a larger value. A **delta code** sends a spike only when the value changes. The first two put a fixed value into a window of $T$ steps; the third suits signals that already run over time, such as audio or video.
+
+## Rate codes
+
+The simplest rate code fires at each step with a probability equal to the value: a pixel of brightness 0.6 fires on about 60% of the steps. Over $T$ steps the spike count $k$ is binomial, with mean $Tx$, and the receiver estimates the value as $\hat{x} = k/T$. Its error has standard deviation
+
+$$
+\sigma_{\hat x} = \sqrt{\frac{x(1 - x)}{T}}
+$$
+
+so halving the error takes four times as many steps, and four times as many spikes. A value of 0.5 read over 16 steps comes back with a standard deviation of 0.125. This is why rate-coded networks spend so many spikes, the cost chapter 0 counted.
+
+Rate codes have two strengths. They degrade gracefully: one lost or extra spike changes the estimate by only $1/T$. And timing does not matter, so jitter in when spikes arrive costs nothing.
+
+## Latency codes
+
+A latency code sends each value as one spike, at a time that depends on the value. sparx's `LatencyEncoder` fires a value $x$ at step $\operatorname{round}\big((1 - x)(T - 1)\big)$: 1 fires at the first step, values near 0 near the last, and values below a threshold not at all. The receiver reads $\hat{x} = 1 - t/(T - 1)$.
+
+This is cheap: one spike per value, against $Tx$ on average for the rate code. It is fast too: the largest values arrive first, so a network can start deciding before the window ends. Speed is a reason to think brains use timing at least some of the time. Thorpe and colleagues flashed photographs for 20 ms and asked people whether each contained an animal; brain activity for the two kinds of image diverged about 150 ms after the flash. That leaves each neuron along the visual pathway time for only a few spikes, too few to estimate a rate.
+
+The weakness is timing. The value lives entirely in when the spike arrives, so a spike that arrives one step late reads as a value $1/(T-1)$ too small, and a lost spike reads as 0.
+
+<StaticCodes />
+
+Each row is one value. The middle columns show the spikes each code sends over $T$ steps, and the narrow bars after them show what a receiver reads back, against a tick at the true value. Raise the jitter and watch the latency code's readings move while the rate code's do not. Lower the steps and watch the rate code's readings scatter.
+
+## Delta codes
+
+Many signals change slowly most of the time and quickly some of the time. Sending their value at every step wastes spikes on the slow parts. A delta code sends only changes.
+
+The version an event camera uses is called send-on-delta. Each pixel remembers a level, the value it last reported. When the signal moves a threshold $\theta$ above the level, the pixel sends an ON event and raises the level by $\theta$; when it falls $\theta$ below, an OFF event lowers it. A receiver that adds $+\theta$ for each ON and $-\theta$ for each OFF tracks the signal to within $\theta$ at all times, and the number of events is the total distance the signal travels divided by $\theta$. A still signal sends nothing.
+
+sparx's `DeltaEncoder` is simpler. It compares each sample with the one before and fires where that single step's change reaches the threshold. It catches sudden changes and misses slow ones: a ramp that rises 0.007 per step never fires at a threshold of 0.08, however far it rises in total.
+
+<ChangeCodes />
+
+The grey curve is the signal and the violet staircase is the level a send-on-delta receiver tracks. The two rows below are the events of each delta code, up for ON and down for OFF. Draw your own signal on the top half. Steep edges fire both codes; long ramps fire only send-on-delta.
+
+## The sparx way
+
+Every encoder in `sparx.encode` is a frozen dataclass called as `encoder(key, x)` on a batch. Encoders of static data add a time axis in front, `[B, ...]` to `[T, B, ...]`. Encoders of data that already runs over time move its time axis to the front.
+
+<CodeBlock code={coding} colab={colab('coding')} source={source('src/sparx/encode.py')} />
+
+The rate code reads 0.95 as 15 spikes out of 16 and 0.05 as none; another key gives other counts. The latency code fires the four values at steps 1, 6, 10 and 14, and reads them back to within $1/30$. The delta code fires once, at the jump; the ramp before it, 0.0128 a step, never reaches the threshold of 0.1.
+
+There is a fourth option this chapter has not drawn. A direct encoder, `sparx.encode.DirectEncoder`, sends the real values themselves at every step and lets the network's first layer of spiking neurons do the encoding. It is common for images, where it trains well with few steps, but its first layer does multiply-adds, not additions. The drone on the front page reads its sensors this way.
+
+## Try this
+
+1. With 16 steps, what is the standard deviation of a rate-coded 0.9? How many steps would bring it to 0.025?
+2. In the first figure, set the jitter to 1 step with 16 steps. How far off can a latency-coded value read? With 64 steps?
+3. A pixel watches a signal that rises steadily by 0.55 over 100 steps. How many send-on-delta events does it send at a threshold of 0.1, and how many does `DeltaEncoder` send?
+4. Which code would you use for the input of a network running on an event camera's output? For a network classifying still images on a GPU?
+
+<details>
+<summary>Answers</summary>
+
+1. $\sqrt{0.9 \times 0.1 / 16} = 0.075$. To reach 0.025 you need $T = 0.09/0.025^2 = 144$ steps, nine times as many.
+2. One step reads as $1/15 \approx 0.067$ too large or too small. With 64 steps it is $1/63 \approx 0.016$, but the window is four times longer.
+3. Five ON events from send-on-delta, one per 0.1 risen. None from `DeltaEncoder`: each step's change is 0.0055, far below 0.1.
+4. The event camera's output already is a send-on-delta code, so feed the events in directly: no encoder at all, as the racer in chapter 14 does. For still images on a GPU, a direct encoder or a short rate code usually trains best; the latency code is the cheapest in spikes if the hardware rewards that.
+
+</details>
+
+## Summary
+
+A rate code puts a value in a spike count, robust to timing but costly: its error shrinks only as $1/\sqrt{T}$. A latency code uses one spike and is fast, but every step of timing error is an error in the value. Delta codes send only changes, and send-on-delta, the event camera's code, tracks a signal to within its threshold for a cost proportional to how much the signal moves. With neurons, their rates and their codes in hand, the next chapter turns to training them: why a spike has no gradient, and what to use instead.
+
+## References
+
+<ul class="references">
+<li>S. Thorpe, D. Fize and C. Marlot, "Speed of processing in the human visual system", <em>Nature</em> 381, 1996, <a href="https://doi.org/10.1038/381520a0">doi:10.1038/381520a0</a>. The images were flashed for 20 ms; 150 ms is when brain activity for animal and non-animal images diverges, not a reaction time.</li>
+<li>G. Gallego et al., "Event-based vision: a survey", <em>IEEE TPAMI</em> 44(1), 2022, <a href="https://doi.org/10.1109/TPAMI.2020.3008413">doi:10.1109/TPAMI.2020.3008413</a>. Section 2 describes the event camera's pixel.</li>
+<li>N. Rathi and K. Roy, "DIET-SNN: a low-latency spiking neural network with direct input encoding and leakage and threshold optimization", <em>IEEE TNNLS</em> 34(6), 2023, <a href="https://doi.org/10.1109/TNNLS.2021.3111897">doi:10.1109/TNNLS.2021.3111897</a>. Direct encoding.</li>
+<li>J. K. Eshraghian et al., "Training spiking neural networks using lessons from deep learning", <em>Proceedings of the IEEE</em> 111(9), 2023, <a href="https://doi.org/10.1109/JPROC.2023.3308088">doi:10.1109/JPROC.2023.3308088</a>. snnTorch's rate, latency and delta encoders, which sparx's match.</li>
+</ul>

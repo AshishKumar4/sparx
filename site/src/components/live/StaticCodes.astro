@@ -1,0 +1,50 @@
+---
+// Twelve values as a rate code and a latency code, and what each reads back (src/widgets/codes.ts).
+import Figure from './Figure.astro';
+import Slider from './Slider.astro';
+---
+
+<div data-static-codes>
+	<Figure engine="RateEncoder · LatencyEncoder" height="19rem">
+		<canvas style="touch-action: none" role="img" aria-label="Twelve values as bars, each encoded as a rate code and as a latency code, with the value each code reads back"></canvas>
+		<Fragment slot="controls">
+			<Slider name="steps" label="Steps" min={4} max={64} step={1} value={16} digits={0} />
+			<Slider name="jitter" label="Timing jitter" min={0} max={4} step={1} value={0} unit="steps" digits={0} />
+			<div><button type="button" data-act="resample">Draw the rate code again</button></div>
+		</Fragment>
+		<p slot="after" class="readout"><span data-status aria-live="polite"></span><br />Drag the bars on the left to change the values.</p>
+	</Figure>
+</div>
+
+<script>
+	import { staticCodes } from '../../widgets/codes';
+	import { controls } from '../../widgets/controls';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-static-codes]')) {
+		const ui = controls(root, () => draw());
+		const draw = staticCodes(root, () => ({ steps: ui.read('steps'), jitter: ui.read('jitter') }));
+	}
+</script>
+
+<style>
+	button {
+		font: inherit;
+		font-size: 0.875rem;
+		font-weight: 550;
+		height: 2.25rem;
+		padding-inline: 1rem;
+		border-radius: 0.5rem;
+		border: 1px solid var(--sx-line-strong);
+		background: var(--sx-page);
+		color: var(--sx-ink);
+		cursor: pointer;
+	}
+	.readout {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		line-height: 1.6;
+		color: var(--sx-muted);
+	}
+</style>

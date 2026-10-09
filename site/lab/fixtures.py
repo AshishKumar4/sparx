@@ -121,6 +121,23 @@ def teach(rng: np.random.Generator) -> dict:
     }
 
 
+def encoders(rng: np.random.Generator) -> dict:
+    """`LatencyEncoder` on values and `DeltaEncoder` on a signal, both deterministic."""
+    from sparx.encode import DeltaEncoder, LatencyEncoder
+
+    values = np.concatenate([rng.random(30), [0.0, 0.005, 0.01, 0.3, 0.5, 1.0]])
+    signal = np.cumsum(rng.normal(0.0, 0.08, 120))
+    key = jax.random.key(0)
+    out = {"values": values.tolist(), "signal": signal.tolist(), "latency": {}, "delta": {}}
+    for steps in (8, 16, 33):
+        spikes = np.asarray(LatencyEncoder(steps=steps)(key, jnp.asarray(values)[None]))[:, 0]
+        out["latency"][str(steps)] = [np.flatnonzero(spikes[:, i]).tolist() for i in range(len(values))]
+    for threshold in (0.05, 0.1):
+        events = DeltaEncoder(threshold=threshold, off_spikes=True)(key, jnp.asarray(signal)[None, :, None])
+        out["delta"][str(threshold)] = np.asarray(events[:, 0, 0]).astype(int).tolist()
+    return out
+
+
 def delays(rng: np.random.Generator) -> dict:
     """Three inputs that each fire once, delayed onto one leaky integrator; the loss is minus its peak, or
     minus its value at step 50, the delays page's (`read_at`)."""
@@ -254,7 +271,14 @@ def main() -> None:
     parser.add_argument("--out", default="site/test/fixtures/sparx.json")
     parser.add_argument("--only", nargs="*", default=None)
     args = parser.parse_args()
-    makers = {"neurons": neurons, "teach": teach, "delays": delays, "stdp": stdp, "brunel": brunel}
+    makers = {
+        "neurons": neurons,
+        "teach": teach,
+        "delays": delays,
+        "stdp": stdp,
+        "brunel": brunel,
+        "encoders": encoders,
+    }
     with jax.enable_x64(new_val=True):
         data = {
             name: make(np.random.default_rng(k))
