@@ -17,10 +17,10 @@ import Figure from './Figure.astro';
 
 <script>
 	import { controls } from '../../widgets/controls';
-	import { twins } from '../../widgets/twins';
+	import { type TwinsFigure, twins } from '../../widgets/twins';
 
 	for (const root of document.querySelectorAll<HTMLElement>('[data-twins]')) {
-		let figure: ReturnType<typeof twins> | null = null;
+		let figure: TwinsFigure | null = null;
 		const ui = controls(root, () => figure?.restart());
 		const regime = () => {
 			const [g, eta] = ui.choice('regime').split(',').map(Number);

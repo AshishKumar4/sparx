@@ -6,7 +6,12 @@ import { alpha, animate, fit, onTheme, type Palette } from './theme';
 const ROWS = 120;
 const WINDOW = 4000;
 
-export function twins(root: HTMLElement, read: () => { g: number; eta: number }) {
+export interface TwinsFigure {
+	nudge(): void;
+	restart(): void;
+}
+
+export function twins(root: HTMLElement, read: () => { g: number; eta: number }): TwinsFigure {
 	const canvas = root.querySelector('canvas') as HTMLCanvasElement;
 	const status = root.querySelector<HTMLElement>('[data-status]');
 	let sim = new Twins({ order: 250, ...read() });

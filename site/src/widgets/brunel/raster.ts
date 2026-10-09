@@ -2,14 +2,22 @@
 import { alpha, fit, onTheme, type Palette } from '../theme';
 import type { Batch, Setup } from './worker';
 
-export interface Raster {
-	set(g: number, eta: number, order?: number): void;
-	rate(): number;
+export interface Settings {
+	order: number;
+	g: number;
+	eta: number;
+	/** Each excitatory synapse's jump, mV. */
+	j: number;
 }
 
-export function raster(canvas: HTMLCanvasElement, { order: initial = 250, g = 5, eta = 2, window = 400, rows = 200, speed = 120 } = {}): Raster {
-	let order = initial;
-	let excitatory = 4 * order;
+export interface Raster {
+	set(settings: Settings): void;
+	/** The excitatory rate over the window shown (Hz), and the median CV and Fano factor since the first 100 ms. */
+	stats(): { rate: number; cv: number; fano: number };
+}
+
+export function raster(canvas: HTMLCanvasElement, initial: Settings, { window = 400, rows = 200, speed = 120 } = {}): Raster {
+	let excitatory = 4 * initial.order;
 	const shownE = Math.round(rows * 0.8);
 	const shownOf = () => [...Array.from({ length: shownE }, (_, k) => k), ...Array.from({ length: rows - shownE }, (_, k) => excitatory + k)];
 	const dt = 0.1;
@@ -18,6 +26,8 @@ export function raster(canvas: HTMLCanvasElement, { order: initial = 250, g = 5,
 	const ids: number[] = [];
 	const rate = new Float32Array(capacity);
 	let now = 0;
+	let cv = Number.NaN;
+	let fano = Number.NaN;
 	let colors: Palette;
 	let view = fit(canvas);
 	let dirty = true;
@@ -31,12 +41,14 @@ export function raster(canvas: HTMLCanvasElement, { order: initial = 250, g = 5,
 	});
 
 	const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
-	const start = (gg: number, ee: number) => {
+	const start = (settings: Settings) => {
+		excitatory = 4 * settings.order;
 		times.length = 0;
 		ids.length = 0;
 		rate.fill(0);
 		now = 0;
-		const setup: Setup = { order, g: gg, eta: ee, seed: 7, shown: shownOf(), speed };
+		cv = fano = Number.NaN;
+		const setup: Setup = { ...settings, seed: 7, shown: shownOf(), speed };
 		worker.postMessage(setup);
 	};
 	worker.onmessage = (event: MessageEvent<Batch>) => {
@@ -54,6 +66,8 @@ export function raster(canvas: HTMLCanvasElement, { order: initial = 250, g = 5,
 			rate[step % capacity] = batch.excitatory[s] / excitatory / (dt / 1000);
 		}
 		now = batch.time;
+		cv = batch.cv;
+		fano = batch.fano;
 		let drop = 0;
 		while (drop < times.length && times[drop] < now - window) drop++;
 		if (drop) {
@@ -62,7 +76,7 @@ export function raster(canvas: HTMLCanvasElement, { order: initial = 250, g = 5,
 		}
 		dirty = true;
 	};
-	start(g, eta);
+	start(initial);
 
 	const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 	let visible = false;
@@ -116,18 +130,12 @@ export function raster(canvas: HTMLCanvasElement, { order: initial = 250, g = 5,
 	requestAnimationFrame(draw);
 
 	return {
-		set(gg, ee, size) {
-			if (size) {
-				order = size;
-				excitatory = 4 * order;
-			}
-			start(gg, ee);
-		},
-		rate() {
+		set: start,
+		stats() {
 			const filled = Math.min(capacity, Math.round(now / dt));
 			let sum = 0;
 			for (const r of rate) sum += r;
-			return filled ? sum / filled : 0;
+			return { rate: filled ? sum / filled : 0, cv, fano };
 		},
 	};
 }

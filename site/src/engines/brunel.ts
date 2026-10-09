@@ -119,10 +119,16 @@ export interface Brunel {
 	dt?: number;
 }
 
+/** A Brunel network and the source of its external input: each call draws one step's jumps (mV) per neuron. */
+export interface BrunelRun {
+	network: DeltaNetwork;
+	draw: () => Float64Array;
+}
+
 /** `sparx.graph.models.brunel`'s network with its own draws: each neuron takes `C_E` excitatory and `C_I`
  * inhibitory inputs with replacement, as NEST's `fixed_indegree` does, and Poisson input from `C_E`
  * sources at `eta` times the threshold rate. Returns the network and a source of its external input. */
-export function brunel({ order, g, eta, j = 0.1, delay = 1.5, epsilon = 0.1, dt = 0.1 }: Brunel, seed = 1) {
+export function brunel({ order, g, eta, j = 0.1, delay = 1.5, epsilon = 0.1, dt = 0.1 }: Brunel, seed = 1): BrunelRun {
 	const random = generator(seed);
 	const excitatory = 4 * order;
 	const inhibitory = order;

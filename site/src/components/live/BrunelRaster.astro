@@ -1,5 +1,6 @@
 ---
-// Brunel's balanced network, stepped live in a worker (src/engines/brunel.ts), in the regime the reader picks.
+// Brunel's balanced network, stepped live in a worker (src/engines/brunel.ts), with the parameters the reader
+// picks, and its irregularity measured as it runs.
 import Choice from './Choice.astro';
 import Figure from './Figure.astro';
 import Slider from './Slider.astro';
@@ -18,39 +19,53 @@ const sizeOptions = [
 	{ value: '1000', label: '5,000' },
 ];
 const regimes = [
-	{ value: '5,2', label: 'Asynchronous irregular' },
-	{ value: '3,2', label: 'Synchronous regular' },
-	{ value: '6,4', label: 'Synchronous, fast' },
-	{ value: '4.5,0.9', label: 'Synchronous, slow' },
+	{ value: '5,2', label: 'g 5, η 2' },
+	{ value: '3,2', label: 'g 3, η 2' },
+	{ value: '6,4', label: 'g 6, η 4' },
+	{ value: '4.5,0.9', label: 'g 4.5, η 0.9' },
+];
+const synapses = [
+	{ value: 'scaled', label: 'His total input' },
+	{ value: 'paper', label: 'His synapses, 0.1 mV' },
 ];
 ---
 
 <div class="brunel" data-brunel data-order={order}>
-	<Figure engine={`brunel(${order})`} height={height}>
+	<Figure engine="brunel" height={height}>
 		<canvas role="img" aria-label={`Spikes of 200 of the network's ${neurons} neurons over the last 400 ms, excitatory above and inhibitory below, with the excitatory population's rate`}></canvas>
 		<Fragment slot="controls">
-			<Choice name="regime" label="Regime" value="5,2" options={regimes} />
+			<Choice name="regime" label="Brunel's parameters" value="5,2" options={regimes} />
+			<Choice name="synapses" label="Synapses" value="scaled" options={synapses} />
 			{sizes && <Choice name="order" label="Neurons" value={String(order)} options={sizeOptions} />}
 			{sliders && <Slider name="g" label="Inhibition g" min={2} max={8} step={0.1} value={5} digits={1} />}
 			{sliders && <Slider name="eta" label="External drive η" min={0.5} max={4} step={0.05} value={2} digits={2} />}
 		</Fragment>
 		<p slot="after" class="readout">
-			<span data-size>{neurons} LIF neurons, {(order * 0.5).toLocaleString('en-US')} inputs each</span>, 0.1 ms steps · excitatory rate <span data-rate>…</span>
+			<span data-size></span> · rate <span data-rate>…</span> · CV <span data-cv>…</span> · Fano <span data-fano>…</span>
 		</p>
 	</Figure>
 </div>
 
 <script>
+	import { type Raster, type Settings, raster } from '../../widgets/brunel/raster';
 	import { controls } from '../../widgets/controls';
-	import { raster } from '../../widgets/brunel/raster';
 
 	for (const root of document.querySelectorAll<HTMLElement>('[data-brunel]')) {
 		const canvas = root.querySelector('canvas') as HTMLCanvasElement;
-		const order = Number(root.dataset.order);
-		let started: ReturnType<typeof raster> | null = null;
+		const hasSliders = root.querySelector('input[name="g"]') !== null;
+		const hasSizes = root.querySelector('[data-name="order"]') !== null;
+		const size = root.querySelector<HTMLElement>('[data-size]');
+		const settings = (): Settings => {
+			const order = hasSizes ? Number(ui.choice('order')) : Number(root.dataset.order);
+			const [g, eta] = hasSliders ? [ui.read('g'), ui.read('eta')] : ui.choice('regime').split(',').map(Number);
+			// Brunel's neurons each receive 1,000 excitatory synapses of 0.1 mV; scaled, C_E j stays 100 mV.
+			const j = ui.choice('synapses') === 'paper' ? 0.1 : 250 / order;
+			if (size) size.textContent = `${(5 * order).toLocaleString('en-US')} neurons, ${(order / 2).toLocaleString('en-US')} inputs of ${j.toFixed(2)} mV each`;
+			return { order, g, eta, j };
+		};
+		let started: Raster | null = null;
 		const begin = () => {
-			if (started) return started;
-			started = raster(canvas, { order });
+			started ??= raster(canvas, settings());
 			return started;
 		};
 		new IntersectionObserver(([entry], observer) => {
@@ -58,29 +73,23 @@ const regimes = [
 			begin();
 			observer.disconnect();
 		}, { rootMargin: '200px' }).observe(root);
-		const hasSliders = root.querySelector('input[name="g"]') !== null;
-		const size = root.querySelector<HTMLElement>('[data-size]');
 		const ui = controls(root, (name) => {
-			const sim = begin();
-			if (name === 'order') {
-				const n = Number(ui.choice('order'));
-				const [g, eta] = hasSliders ? [ui.read('g'), ui.read('eta')] : ui.choice('regime').split(',').map(Number);
-				sim.set(g, eta, n);
-				if (size) size.textContent = `${(5 * n).toLocaleString('en-US')} LIF neurons, ${(n / 2).toLocaleString('en-US')} inputs each`;
-			} else if (name === 'regime') {
+			if (name === 'regime' && hasSliders) {
 				const [g, eta] = ui.choice('regime').split(',').map(Number);
-				if (hasSliders) {
-					for (const [key, value] of [['g', g], ['eta', eta]] as const) {
-						(root.querySelector(`input[name="${key}"]`) as HTMLInputElement).value = String(value);
-						(root.querySelector(`output[data-for="${key}"]`) as HTMLOutputElement).textContent = value.toFixed(key === 'g' ? 1 : 2);
-					}
+				for (const [key, value] of [['g', g], ['eta', eta]] as const) {
+					(root.querySelector(`input[name="${key}"]`) as HTMLInputElement).value = String(value);
+					(root.querySelector(`output[data-for="${key}"]`) as HTMLOutputElement).textContent = value.toFixed(key === 'g' ? 1 : 2);
 				}
-				sim.set(g, eta);
-			} else sim.set(ui.read('g'), ui.read('eta'));
+			}
+			begin().set(settings());
 		});
-		const rate = root.querySelector<HTMLElement>('[data-rate]');
+		settings();
+		const fields = ['rate', 'cv', 'fano'].map((key) => root.querySelector<HTMLElement>(`[data-${key}]`));
 		setInterval(() => {
-			if (started && rate) rate.textContent = `${started.rate().toFixed(1)} Hz`;
+			if (!started) return;
+			const { rate, cv, fano } = started.stats();
+			const shown = [`${rate.toFixed(1)} Hz`, Number.isNaN(cv) ? '…' : cv.toFixed(2), Number.isNaN(fano) ? '…' : fano.toFixed(1)];
+			for (const [k, field] of fields.entries()) if (field) field.textContent = shown[k];
 		}, 500);
 	}
 </script>

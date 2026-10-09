@@ -68,7 +68,13 @@ export function windowFigure(root: HTMLElement, read: () => Rule) {
 	return draw;
 }
 
-export function patternFigure(root: HTMLElement) {
+export interface PatternFigure {
+	setSpeed(value: number): void;
+	reset(): void;
+	setLearning(on: boolean): void;
+}
+
+export function patternFigure(root: HTMLElement): PatternFigure {
 	const canvas = root.querySelector('canvas') as HTMLCanvasElement;
 	const status = root.querySelector<HTMLElement>('[data-status]');
 	const span = 600;

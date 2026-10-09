@@ -1,10 +1,10 @@
 // Two copies of one Brunel network (src/engines/brunel.ts): the same connections and the same external
 // input, step for step, until one neuron of the second copy is nudged over threshold once.
-import { brunel, type Brunel } from './brunel';
+import { type Brunel, type BrunelRun, brunel } from './brunel';
 
 export class Twins {
-	readonly a: ReturnType<typeof brunel>;
-	readonly b: ReturnType<typeof brunel>;
+	readonly a: BrunelRun;
+	readonly b: BrunelRun;
 	private kick = -1;
 
 	constructor(spec: Brunel, seed = 7) {
