@@ -1,0 +1,147 @@
+---
+layout: ../../layouts/Chapter.astro
+title: Physical units and biology
+description: Every input so far has added a fixed current. A real synapse opens channels, and what flows through them depends on the membrane's own voltage. This chapter puts in the conductances, the receptors and the channels that make a spike, and shows what each one changes.
+---
+
+import CodeBlock from '../../components/CodeBlock.astro';
+import Conductance from '../../components/live/Conductance.astro';
+import HodgkinHuxley from '../../components/live/HodgkinHuxley.astro';
+import NmdaChart from '../../components/live/NmdaChart.astro';
+import { colab, source } from '../../data/site.mjs';
+import conductance from '../../../snippets/conductance.py?raw';
+import hodgkin from '../../../snippets/hodgkin.py?raw';
+
+## A synapse is a door, not a pump
+
+Since chapter 1, every input has added a fixed current, like a pump that pushes the same charge whatever the membrane is doing. A real synapse is closer to a door. Transmitter opens channels that let certain ions through, and the ions flow down their gradient. The flow stops at the channel's reversal potential, where the electrical pull on the ions balances the difference in their concentration, and it reverses beyond it.
+
+So the current through a synapse depends on where the membrane is. An excitatory channel that reverses at 0 mV pushes hard on a membrane at −80 mV and not at all on one at 0 mV. An inhibitory channel that reverses at −80 mV pulls a membrane at −50 mV down and leaves one at −80 mV where it is. sparx reads AMPA and NMDA receptors, the fast and slow excitatory ones, against 0 mV, and GABA-A receptors, the fast inhibitory ones, against −80 mV, the values of Brette et al.'s simulator benchmarks.
+
+## The membrane with conductances
+
+Chapter 2's membrane gains one term per receptor. Each conductance $g_k$, in nS, jumps by its synapse's weight when a spike arrives and decays with its own time constant, and passes the current $g_k (E_k - v)$:
+
+$$
+C \frac{\mathrm{d}v}{\mathrm{d}t} = -g_L (v - E_L) + \sum_k g_k(t)\,(E_k - v) + I
+$$
+
+Collect the terms in $v$ and the equation is chapter 2's again:
+
+$$
+C \frac{\mathrm{d}v}{\mathrm{d}t} = -g_\text{tot}\,(v - v_\infty), \qquad g_\text{tot} = g_L + \sum_k g_k, \qquad v_\infty = \frac{g_L E_L + \sum_k g_k E_k + I}{g_\text{tot}}
+$$
+
+The membrane still relaxes exponentially, with two differences. Its target $v_\infty$ is an average of the reversal potentials, weighted by how open each channel is. And its time constant is $C / g_\text{tot}$, so the more channels are open, the faster it forgets. sparx holds each conductance at its exact average over the step and then solves the membrane exactly, as chapter 2 did with a held current.
+
+## Held at different potentials
+
+Here are three copies of chapter 2's membrane: 200 pF, a 10 nS leak, rest at −60 mV. Spiking is switched off, as an experimenter switches it off with the sodium-channel blocker TTX, and a current holds all three at the same potential. Every 150 ms each receives one input. The first is a current that peaks at 180 pA. The second is 3 nS of AMPA conductance, which at −60 mV, 60 mV from its reversal potential, also passes 180 pA at its peak. The third is 3 nS of GABA-A. Each trace is drawn as its change from the held potential.
+
+<Conductance />
+
+Move the held potential. The current input lifts the membrane by 2.83 mV wherever it is held. The AMPA input lifts it by 3.67 mV at −80 mV, by 1.84 mV at −40 mV, and not at all at 0 mV. The GABA-A input does nothing at −80 mV and pulls harder the higher the membrane sits: 0.92 mV at −60 mV, 1.84 mV at −40 mV. Each conductance input is proportional to the distance from its reversal potential.
+
+Now add background inhibition: a steady GABA-A conductance, like the one that ongoing activity in a living cortex provides. In anesthetized cats, during network activity like that of the waking state, Destexhe and Paré found that synaptic input lowered pyramidal neurons' input resistance about fivefold. A 40 nS background does that here, and the membrane's time constant falls from 20 ms to 4 ms. Every input shrinks, the current one included, because its charge leaks away almost as fast as it arrives. Inhibition that barely moves the voltage but divides every other input is called shunting.
+
+<CodeBlock code={conductance} colab={colab('biology')} source={source('src/sparx/dynamics/synapses.py')} />
+
+`PointNeuron` puts a neuron model together with the synapses onto it, by receptor name. `Receptor(Exponential(5.0), "conductance")` makes a synapse that decays in 5 ms and acts as a conductance, read against the reversal potential the neuron keeps for that name. The run prints the numbers above:
+
+```
+held at -80 mV: 180 pA +2.83 mV, AMPA +3.67 mV, GABA-A -0.00 mV
+held at -60 mV: 180 pA +2.83 mV, AMPA +2.75 mV, GABA-A -0.92 mV
+held at -40 mV: 180 pA +2.83 mV, AMPA +1.84 mV, GABA-A -1.84 mV
+held at -20 mV: 180 pA +2.83 mV, AMPA +0.92 mV, GABA-A -2.75 mV
+held at   0 mV: 180 pA +2.83 mV, AMPA +0.00 mV, GABA-A -3.67 mV
+```
+
+At −60 mV the AMPA input lifts the membrane by 2.75 mV, a little less than the current's 2.83 mV, because as the membrane rises its distance from 0 mV shrinks.
+
+## NMDA: a receptor that needs two signals
+
+Glutamate opens a second receptor beside AMPA. The NMDA receptor's channel also reverses near 0 mV, but at negative potentials magnesium ions from outside the cell are drawn into its pore and block it (Mayer, Westbrook and Guthrie; Nowak et al., both 1984). Jahr and Stevens fitted the fraction of channels left unblocked at a magnesium concentration $[\text{Mg}]$ in mM and a membrane potential $v$ in mV:
+
+$$
+B(v) = \frac{1}{1 + e^{-0.062\,v}\,[\text{Mg}] / 3.57}
+$$
+
+<NmdaChart />
+
+Between −80 mV and about −27 mV, depolarizing the membrane increases the NMDA current, though the distance from its reversal potential falls. So the receptor passes current only when glutamate has bound and the membrane is already depolarized, by other inputs or by the neuron's own spike. It signals that a neuron's input and its activity coincided, the coincidence chapter 7's STDP rewards. sparx gates any receptor named `nmda` by `MgBlock()`, 1 mM by default, at the voltage at the start of each step.
+
+## Where the spike comes from
+
+Every neuron so far has had a threshold written into it. Real neurons have none. Their spike comes from two more conductances, sodium and potassium, which open and close with the voltage. Hodgkin and Huxley measured them in the squid's giant axon and wrote them down in 1952:
+
+$$
+C \frac{\mathrm{d}v}{\mathrm{d}t} = -\bar g_\text{Na}\, m^3 h\, (v - E_\text{Na}) - \bar g_\text{K}\, n^4 (v - E_\text{K}) - g_L (v - E_L) + I
+$$
+
+$$
+\frac{\mathrm{d}x}{\mathrm{d}t} = \alpha_x(v)\,(1 - x) - \beta_x(v)\, x, \qquad x \in \{m, h, n\}
+$$
+
+Each gate $x$ is the fraction of its subunits in the open position, and its rates $\alpha_x$ and $\beta_x$ depend on the voltage. Sodium's activation $m$ is fast and opens as the membrane depolarizes. Sodium's inactivation $h$ and potassium's activation $n$ are slow: $h$ closes with depolarization and $n$ opens. A small depolarization opens a few sodium channels, sodium flows in, the membrane depolarizes further, and more channels open: a runaway toward sodium's reversal potential at +50 mV. Then $h$ shuts the sodium channels while $n$ opens potassium's, and the membrane is pulled back down toward potassium's reversal potential at −77 mV, below where it started.
+
+<HodgkinHuxley />
+
+Watch a spike unfold. The sodium conductance, orange, rises first, to about 2,200 nS at 800 pA. The potassium conductance, violet, rises after it to about 1,200 nS and outlasts it, and the membrane undershoots to −75 mV before it recovers.
+
+Then lower the current, 10 pA at a time. The neuron keeps firing down to 630 pA, at about 50 Hz, and at 620 pA it stops. From rest the boundary is the same: press "Start from rest" at 620 pA and it fires three spikes and falls silent, at 630 pA it fires steadily at 52 Hz. But a run that raises the current slowly from rest, 10 pA every 200 ms, does not start firing until 1,040 pA. Between 630 and 1,040 pA the neuron can rest or fire, depending on how it got there: a sudden step throws it into firing, and a slow ramp does not.
+
+<CodeBlock code={hodgkin} colab={colab('biology')} source={source('src/sparx/dynamics/neurons.py')} />
+
+Each current is a step from rest, and the rate is counted over the second second. Up to 600 pA it is 0 Hz. At 650 pA it is 55 Hz, and it rises only to 79 Hz at 1,500 pA. Chapter 3's leaky integrate-and-fire neuron starts at 0 Hz at its rheobase and fires as slowly as you like just above it. Hodgkin and Huxley's never fired steadily below 50 Hz in these runs.
+
+sparx's `HodgkinHuxley` uses NEST's `hh_psc_alpha` parameters, for a 100 pF membrane. It steps in substeps of 0.01 ms, and in each it solves the gates with the voltage held and the voltage with the gates held, each exactly. Chapter 11 looks at why that matters.
+
+## Simpler neurons that keep what matters
+
+Hodgkin and Huxley's equations cost about a hundred times what chapter 3's Izhikevich neuron does. Brette and Gerstner's adaptive exponential integrate-and-fire neuron, AdEx, keeps the start of the sodium runaway as an exponential term and folds the slow currents into one adaptation current $w$:
+
+$$
+C \frac{\mathrm{d}v}{\mathrm{d}t} = -g_L (v - E_L) + g_L \Delta_T\, e^{(v - V_T)/\Delta_T} - w + I, \qquad \tau_w \frac{\mathrm{d}w}{\mathrm{d}t} = a\,(v - E_L) - w
+$$
+
+At each spike $v$ resets and $w$ grows by $b$. Fitted to a detailed conductance-based model, it predicted 96% of that model's spikes within 2 ms. Naud et al. gave parameters for eight firing patterns, from tonic spiking to bursts to chaos. sparx's `AdEx` fires seven of them within 0.8 ms of NEST's spikes over 500 ms, and the eighth, which is chaotic, irregularly, as NEST does.
+
+## From parts to circuits
+
+Chapter 9 wired neurons at random. Real circuits are wired by measurement. Potjans and Diesmann built 1 mm² of cortex from anatomical and physiological data: 77,169 neurons in eight populations, an excitatory and an inhibitory one in each of four layers, joined by about 0.3 billion synapses with connection probabilities measured for each pair of populations. `sparx.graph.models.microcircuit` builds it. At a fifth of its size, 15,435 neurons and 12 million synapses, sparx and NEST fire the same 12,689 spikes in its first 300 ms, in float64, when NEST is given the network sparx draws, edge by edge. The fly brain of chapter 9 goes further: its wiring is FlyWire's, a whole adult fly brain reconstructed synapse by synapse from electron microscope images.
+
+## Try this
+
+1. At what held potential does the GABA-A input do nothing? Why does that make it different from a negative current?
+2. Hold the membrane at −60 mV and raise the background to 40 nS. By what factor does the time constant fall? Why does the current input shrink, when nothing about it changed?
+3. With 1 mM of magnesium, what fraction of NMDA channels conduct at −80 mV? What would a neuron at rest need before its NMDA synapses matter?
+4. In the Hodgkin-Huxley figure, set 620 pA and press "Start from rest", then do the same at 630 pA. What changes? Can you find a current at which it fires steadily at 10 Hz?
+
+<details>
+<summary>Answers</summary>
+
+1. At −80 mV, its reversal potential, where no current flows through the open channels. A negative current would pull the membrane down at any potential; the conductance pulls it toward −80 mV, so above −80 mV it inhibits and below it, it excites.
+2. Five times, from $200 / 10 = 20$ ms to $200 / 50 = 4$ ms. The current input injects the same charge, but the membrane now has five times the conductance to lose it through, so the charge leaves almost as fast as it arrives and the peak is far lower.
+3. 2.4%, $B(-80) = 1 / (1 + e^{4.96} / 3.57)$. Depolarization, from other inputs or its own spike: at −40 mV nearly a quarter of the channels conduct.
+4. At 620 pA it fires three spikes and stops; at 630 pA it fires steadily at about 52 Hz. No current gives 10 Hz. Its rhythm is set by how fast its channels open and close after a spike, not by how long the input takes to charge the membrane, so firing starts near that rhythm. A leaky integrate-and-fire neuron's interval is the time its input takes to charge the membrane to threshold, which grows without limit as the current falls to the rheobase.
+
+</details>
+
+## Summary
+
+A synapse opens channels, and the current through them depends on how far the membrane is from their reversal potential. Excitation weakens as the membrane depolarizes, inhibition near its reversal potential divides rather than subtracts, and NMDA receptors conduct only when the membrane is already depolarized. The spike itself is two voltage-gated conductances, sodium then potassium, and AdEx keeps their effect at a fraction of the cost. The next chapter asks how a simulator steps all of this through time, and how to tell whether two simulators agree.
+
+## References
+
+<ul class="references">
+<li>A. L. Hodgkin and A. F. Huxley, "A quantitative description of membrane current and its application to conduction and excitation in nerve", <em>The Journal of Physiology</em> 117, 1952, <a href="https://doi.org/10.1113/jphysiol.1952.sp004764">doi:10.1113/jphysiol.1952.sp004764</a>.</li>
+<li>M. L. Mayer, G. L. Westbrook and P. B. Guthrie, "Voltage-dependent block by Mg<sup>2+</sup> of NMDA responses in spinal cord neurones", <em>Nature</em> 309, 1984, <a href="https://doi.org/10.1038/309261a0">doi:10.1038/309261a0</a>.</li>
+<li>L. Nowak, P. Bregestovski, P. Ascher, A. Herbet and A. Prochiantz, "Magnesium gates glutamate-activated channels in mouse central neurones", <em>Nature</em> 307, 1984, <a href="https://doi.org/10.1038/307462a0">doi:10.1038/307462a0</a>.</li>
+<li>C. E. Jahr and C. F. Stevens, "Voltage dependence of NMDA-activated macroscopic conductances predicted by single-channel kinetics", <em>Journal of Neuroscience</em> 10, 1990, <a href="https://doi.org/10.1523/JNEUROSCI.10-09-03178.1990">doi:10.1523/JNEUROSCI.10-09-03178.1990</a>. Equation 5.</li>
+<li>A. Destexhe and D. Paré, "Impact of network activity on the integrative properties of neocortical pyramidal neurons in vivo", <em>Journal of Neurophysiology</em> 81, 1999, <a href="https://doi.org/10.1152/jn.1999.81.4.1531">doi:10.1152/jn.1999.81.4.1531</a>.</li>
+<li>R. Brette and W. Gerstner, "Adaptive exponential integrate-and-fire model as an effective description of neuronal activity", <em>Journal of Neurophysiology</em> 94, 2005, <a href="https://doi.org/10.1152/jn.00686.2005">doi:10.1152/jn.00686.2005</a>.</li>
+<li>R. Naud, N. Marcille, C. Clopath and W. Gerstner, "Firing patterns in the adaptive exponential integrate-and-fire model", <em>Biological Cybernetics</em> 99, 2008, <a href="https://doi.org/10.1007/s00422-008-0264-7">doi:10.1007/s00422-008-0264-7</a>.</li>
+<li>R. Brette et al., "Simulation of networks of spiking neurons: a review of tools and strategies", <em>Journal of Computational Neuroscience</em> 23, 2007, <a href="https://doi.org/10.1007/s10827-007-0038-6">doi:10.1007/s10827-007-0038-6</a>.</li>
+<li>T. C. Potjans and M. Diesmann, "The cell-type specific cortical microcircuit: relating structure and activity in a full-scale spiking network model", <em>Cerebral Cortex</em> 24, 2014, <a href="https://doi.org/10.1093/cercor/bhs358">doi:10.1093/cercor/bhs358</a>.</li>
+<li>S. Dorkenwald et al., "Neuronal wiring diagram of an adult brain", <em>Nature</em> 634, 2024, <a href="https://doi.org/10.1038/s41586-024-07558-y">doi:10.1038/s41586-024-07558-y</a>.</li>
+</ul>
