@@ -3,8 +3,8 @@ import jax
 import jax.numpy as jnp
 import nir
 
-from sparx.nn import LI, LIF
 from sparx.nir import from_nir, to_nir
+from sparx.nn import LI, LIF
 
 pilot = nn.Sequential([nn.Dense(64), LIF(tau=3.0, reset="zero"),
                        nn.Dense(64), LIF(tau=3.0, reset="zero"),

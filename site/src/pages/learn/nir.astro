@@ -3,7 +3,7 @@ import CodeBlock from '../../components/CodeBlock.astro';
 import LearnPage from '../../components/learn/LearnPage.astro';
 import { colab, source } from '../../data/site.mjs';
 import graph from '../../../public/pilot/nir.json';
-import code from '../../../snippets/nir.py?raw';
+import code from '../../../snippets/export.py?raw';
 
 const order = ['input', '0', '1', '2', '3', '4', '5', 'output'];
 const nodes = order.map((name) => graph.nodes.find((n) => n.name === name)).filter((n) => n !== undefined);

@@ -78,6 +78,16 @@ export function overlay(canvas: HTMLCanvasElement) {
 		};
 		line(c.theirs.v, alpha(colors.spike, 0.9), 3.5, []);
 		line(c.sparx.v, colors.membrane, 1.25, []);
+		ctx.textAlign = 'left';
+		const legend: [string, string][] = [[c.reference.split(' (')[0], colors.spike], ['sparx', colors.membrane]];
+		let lx = left + 8;
+		for (const [label, color] of legend) {
+			ctx.fillStyle = color;
+			ctx.fillRect(lx, top + 2, 14, 3);
+			ctx.fillStyle = colors.ink2;
+			ctx.fillText(label, lx + 20, top + 7);
+			lx += ctx.measureText(label).width + 40;
+		}
 		const bottom = height - 18;
 		const ly = (e: number) => bottom - ((Math.log10(Math.max(e, 1e-16)) + 16) / 16) * (bottom - split - 6);
 		ctx.strokeStyle = alpha(colors.ink, 0.1);

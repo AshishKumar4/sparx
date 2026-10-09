@@ -27,7 +27,7 @@ NOTEBOOKS = {
     "delays": ("Learned delays", "delays", ["delays"]),
     "stdp": ("STDP in a network", "plasticity", ["stdp"]),
     "brunel": ("Brunel's balanced network", "networks", ["brunel"]),
-    "nir": ("NIR export", "nir", ["nir"]),
+    "nir": ("NIR export", "nir", ["export"]),
 }
 
 

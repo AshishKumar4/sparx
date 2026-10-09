@@ -201,10 +201,16 @@ const kinds = { exact: 'Same numbers', tolerance: 'Within a tolerance', statisti
 	}
 	.row {
 		display: grid;
-		grid-template-columns: 1fr;
-		gap: 0.25rem;
-		padding: 0.75rem 1rem;
+		grid-template-columns: auto 1fr;
+		gap: 0.125rem 0.5rem;
+		padding: 0.625rem 0.875rem;
 		border-top: 1px solid var(--sx-line);
+	}
+	.row .result {
+		grid-column: 1 / -1;
+	}
+	.row .reference::before {
+		content: '· ';
 	}
 	.row.head {
 		display: none;
@@ -248,6 +254,13 @@ const kinds = { exact: 'Same numbers', tolerance: 'Within a tolerance', statisti
 		.row {
 			grid-template-columns: 1.1fr 1fr 1.4fr;
 			gap: 1rem;
+			padding: 0.75rem 1rem;
+		}
+		.row .result {
+			grid-column: auto;
+		}
+		.row .reference::before {
+			content: none;
 		}
 		.row.head {
 			display: grid;
