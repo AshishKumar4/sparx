@@ -34,7 +34,7 @@ NOTEBOOKS = {
     "networks": ("Networks and dynamics", "networks", ["brunel", "regimes"]),
     "biology": ("Physical units and biology", "biology", ["conductance", "hodgkin"]),
     "simulators": ("Simulators and fidelity", "simulators", ["convergence"]),
-    "nir": ("NIR export", "nir", ["export"]),
+    "hardware": ("Hardware and events", "hardware", ["export"]),
 }
 
 

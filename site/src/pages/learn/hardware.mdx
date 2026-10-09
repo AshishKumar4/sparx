@@ -1,0 +1,95 @@
+---
+layout: ../../layouts/Chapter.astro
+title: Hardware and events
+description: Spikes save energy only on hardware that does nothing when nothing happens. This chapter looks at the two halves of such a system, a camera that sends changes instead of frames and chips that compute with events, and at NIR, the format that moves a trained network from sparx onto them.
+---
+
+import CodeBlock from '../../components/CodeBlock.astro';
+import NirGraph from '../../components/learn/NirGraph.astro';
+import EventCamera from '../../components/live/EventCamera.astro';
+import { colab, source } from '../../data/site.mjs';
+import graph from '../../../public/pilot/nir.json';
+import exported from '../../../snippets/export.py?raw';
+
+## Where spikes pay off
+
+Chapter 0 counted what a synapse costs: in a spiking network, work happens only when a spike arrives. A GPU does not exploit that. It computes every synapse at every step, and a silent neuron costs as much as a busy one. The saving is real only on hardware built around events, from the sensor that produces them to the chip that computes with them.
+
+## A camera that sends changes
+
+A frame camera sends the brightness of every pixel, every frame, whether anything changed or not. An event camera's pixels work independently. Each remembers the logarithm of the brightness at its last event, and when the brightness it sees has moved by a threshold $C$ from there, it sends an event: its position, the time, and whether the brightness rose (ON) or fell (OFF).
+
+$$
+\log I(t) - \log I(t_\text{last}) \ge C \;\Rightarrow\; \text{ON}, \qquad \log I(t_\text{last}) - \log I(t) \ge C \;\Rightarrow\; \text{OFF}
+$$
+
+This is chapter 4's send-on-delta, at every pixel, on the logarithm of the brightness. The logarithm makes the threshold a fraction of the brightness rather than an amount, so the pixel responds to contrast in shadow and in sunlight alike. Gallego et al.'s survey puts the resulting sensors at a time resolution of microseconds and a dynamic range of 140 dB, against 60 dB for frame cameras.
+
+<EventCamera />
+
+The left half is what a frame camera at 1,000 frames a second would send, every pixel, every millisecond. The right half is what the event camera sends: only the edges of the moving blades, orange where they bring light and blue where they take it away. The striped wall behind the fan is as detailed as the fan, and sends nothing, because it does not move. At one turn a second and a threshold of 0.15, the event camera sends about 46,000 events a second, 1.6% of the frame camera's 2.88 million values.
+
+Stop the fan and the events stop. Halve the threshold and the camera sends about twice as many, 96,000 a second, since every edge now crosses twice as many steps of log brightness. Double the speed and the events double too: they measure motion, not time.
+
+## Chips that compute with events
+
+A neuromorphic chip divides its neurons among many cores. Each core keeps its neurons' state and synapses in memory beside the circuits that update them, and spikes travel between cores as messages over a network on the chip, so the work a synapse costs is paid when a spike crosses it.
+
+IBM's TrueNorth (Merolla et al. 2014) put 4,096 such cores on one chip, with 1 million spiking neurons and 256 million synapses, and consumed 63 milliwatts running a network on 400 by 240 pixel video at 30 frames a second. Intel's Loihi (Davies et al. 2018) brought synaptic delays, dendritic compartments and programmable learning rules onto the chip; solving LASSO problems with a spiking network, it reached an energy-delay product over a thousand times better than conventional solvers on a CPU.
+
+Each chip has its own neuron models, number formats and tools. A network trained in software reaches one only if it can be described in terms the chip's tools understand.
+
+## NIR: a network as a graph of equations
+
+The Neuromorphic Intermediate Representation, NIR (Pedersen et al. 2024), stores a spiking network as a graph of nodes, each a primitive with its parameters: affine maps, convolutions, and neurons such as LIF, written as differential equations in seconds. It leaves the step to whoever reads it. Its authors ran three networks through it on seven simulators and four digital hardware platforms.
+
+A sparx `LIF` is the discrete update $v \leftarrow \lambda v + x$, so exporting one says how time was discretized. By default sparx treats $\lambda$ as the leak's exact solution over a step $\Delta t$, as chapter 2 derived it, and writes NIR's continuous LIF, $\tau\, \mathrm{d}v/\mathrm{d}t = (v_\text{leak} - v) + R\,I$, with
+
+$$
+\lambda = e^{-\Delta t / \tau} \;\Rightarrow\; \tau = -\frac{\Delta t}{\ln \lambda}, \qquad R = \frac{1}{1 - \lambda}
+$$
+
+so that a constant input settles the membrane at the same level in both, $x / (1 - \lambda) = R\, I$.
+
+## The drone's network, exported
+
+This is the network flying the drone on the front page, as `sparx.nir.to_nir` writes it with a step of 10 ms. Its LIF neurons' time constant of 3 steps becomes 30 ms, and $R = 1 / (1 - e^{-1/3}) \approx 3.53$.
+
+<NirGraph />
+
+<a href="/pilot/pilot.nir" download>Download pilot.nir</a> ({Math.round(graph.bytes / 1024)} KB, HDF5). `sparx.nir.from_nir` reads it back into an `nn.Sequential` of the same layers. Run on {graph.round_trip.steps} steps of random input, the network read back gives the original's output exactly, a largest difference of {graph.round_trip.largest_difference}.
+
+<CodeBlock code={exported} colab={colab('hardware')} source={source('src/sparx/nir.py')} />
+
+What exports: `nn.Sequential` stacks of dense, convolution and flatten layers, hard-reset `LIF` and `IF` with one threshold and time constant, `LI`, and dense recurrent `LIF`. Soft reset, adaptive and physical neurons, sparse or plastic recurrence and learned delays have no NIR form in sparx, and `SpikingMLP` and `SEWResNet` do not export as models ([status](/docs/status/)). The drone's network was built from exportable layers on purpose: its LIF neurons reset to zero. sparx's export and import are checked against snnTorch's: the node types sparx writes run spike for spike in snnTorch, and stacks round-trip bit for bit.
+
+## Try this
+
+1. Stop the fan. Why does the event camera go silent while the wall behind it stays as detailed as ever?
+2. Set the threshold to 0.6. Which parts of the fan still send events, and why?
+3. A sparx `LIF` has $\lambda = 0.5$ at a step of 1 ms. What $\tau$ and $R$ does NIR record?
+4. Why does a soft-reset LIF, which subtracts the threshold at a spike, have no NIR form in sparx while a hard-reset one does?
+
+<details>
+<summary>Answers</summary>
+
+1. A pixel sends an event only when its log brightness has moved by the threshold since its last event. The wall's brightness never changes, so its pixels never fire, however much detail it has. A frame camera sends that detail again every frame.
+2. A pixel now needs its brightness to change by a factor of $e^{0.6} \approx 1.8$. The blade is three to five times as bright as the wall behind it, so its edges still fire, but each pixel a blade crosses sends one or two events instead of seven to eleven.
+3. $\tau = -1 / \ln 0.5 \approx 1.44$ ms, and $R = 1 / (1 - 0.5) = 2$.
+4. NIR's LIF node resets the membrane to a value, `v_reset`. A soft reset subtracts the threshold and keeps the overshoot, which no field of the node describes.
+
+</details>
+
+## Summary
+
+Spikes save energy only on hardware that is idle when nothing happens. Event cameras send a pixel only when its log brightness changes, so a still scene costs nothing, and neuromorphic chips such as TrueNorth and Loihi compute only where spikes arrive. NIR describes a trained network in continuous time, so sparx can hand it to their tools; exporting fixes how sparx's discrete steps map to time constants. The next chapter follows one network from training to flight: the drone on the front page.
+
+## References
+
+<ul class="references">
+<li>G. Gallego et al., "Event-based vision: a survey", <em>IEEE Transactions on Pattern Analysis and Machine Intelligence</em> 44, 2022, <a href="https://doi.org/10.1109/TPAMI.2020.3008413">doi:10.1109/TPAMI.2020.3008413</a>.</li>
+<li>P. Lichtsteiner, C. Posch and T. Delbruck, "A 128×128 120 dB 15 μs latency asynchronous temporal contrast vision sensor", <em>IEEE Journal of Solid-State Circuits</em> 43, 2008, <a href="https://doi.org/10.1109/JSSC.2007.914337">doi:10.1109/JSSC.2007.914337</a>.</li>
+<li>P. A. Merolla et al., "A million spiking-neuron integrated circuit with a scalable communication network and interface", <em>Science</em> 345, 2014, <a href="https://doi.org/10.1126/science.1254642">doi:10.1126/science.1254642</a>.</li>
+<li>M. Davies et al., "Loihi: a neuromorphic manycore processor with on-chip learning", <em>IEEE Micro</em> 38, 2018, <a href="https://doi.org/10.1109/MM.2018.112130359">doi:10.1109/MM.2018.112130359</a>.</li>
+<li>J. E. Pedersen et al., "Neuromorphic intermediate representation: a unified instruction set for interoperable brain-inspired computing", <em>Nature Communications</em> 15, 2024, <a href="https://doi.org/10.1038/s41467-024-52259-9">doi:10.1038/s41467-024-52259-9</a>.</li>
+</ul>

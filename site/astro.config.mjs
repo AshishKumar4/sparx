@@ -47,6 +47,7 @@ const fonts = [
 export default defineConfig({
 	site: 'https://sparxml.dev',
 	trailingSlash: 'always',
+	redirects: { '/learn/nir/': '/learn/hardware/' },
 	fonts,
 	markdown: {
 		remarkPlugins: [remarkMath],
