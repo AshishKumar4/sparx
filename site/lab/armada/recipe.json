@@ -1,0 +1,1 @@
+{ "base": "cloudflare/debian-trixie", "setup": "setup.sh", "install": "install.sh", "size": "small" }
