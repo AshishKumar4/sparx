@@ -15,6 +15,7 @@
 		"check": "astro check && tsc --noEmit -p .",
 		"test": "bun test test/",
 		"shots": "node scripts/shots.mjs",
+		"og": "node scripts/og.mjs",
 		"deploy": "wrangler deploy && wrangler deploy -c deploy/redirect/wrangler.jsonc",
 		"deploy:preview": "wrangler deploy -c deploy/preview/wrangler.jsonc"
 	},
