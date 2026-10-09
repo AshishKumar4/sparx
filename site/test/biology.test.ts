@@ -11,24 +11,27 @@ function worst(got: number[], expected: number[]): number {
 
 const times = (fired: number[]) => fired.flatMap((s, t) => (s ? [t] : []));
 
-test('PointNeuron with a current synapse and AMPA, GABA-A and NMDA conductances', () => {
-	const { receptors, current, arrivals, v: expected, spikes } = biology.point;
-	const kinds = Object.fromEntries(
-		Object.entries(receptors as Record<string, [number, Receptor['kind']]>).map(([name, [tau, kind]]) => [name, { tau, kind }]),
-	);
-	const point = new PointNeuron(new LeakyIntegrateAndFire(), kinds);
-	const v: number[] = [];
-	const fired = current.map((pA: number, t: number) => {
-		const s = point.step(pA, Object.fromEntries(Object.keys(kinds).map((name) => [name, arrivals[name][t]])), dt);
-		v.push(point.cell.v);
-		return s;
+for (const hold of ['mean', 'start'] as const) {
+	test(`PointNeuron with a current synapse and AMPA, GABA-A and NMDA conductances, hold="${hold}"`, () => {
+		const { receptors, current, arrivals } = biology.point;
+		const { v: expected, spikes } = hold === 'mean' ? biology.point : biology.point.start;
+		const kinds = Object.fromEntries(
+			Object.entries(receptors as Record<string, [number, Receptor['kind']]>).map(([name, [tau, kind]]) => [name, { tau, kind }]),
+		);
+		const point = new PointNeuron(new LeakyIntegrateAndFire(), kinds, hold);
+		const v: number[] = [];
+		const fired = current.map((pA: number, t: number) => {
+			const s = point.step(pA, Object.fromEntries(Object.keys(kinds).map((name) => [name, arrivals[name][t]])), dt);
+			v.push(point.cell.v);
+			return s;
+		});
+		expect(times(fired)).toEqual(spikes);
+		const error = worst(v, expected);
+		console.log(`PointNeuron, hold ${hold}: ${spikes.length} spikes matched, membrane within ${error.toExponential(1)} mV`);
+		expect(spikes.length).toBeGreaterThan(10);
+		expect(error).toBeLessThan(1e-11);
 	});
-	expect(times(fired)).toEqual(spikes);
-	const error = worst(v, expected);
-	console.log(`PointNeuron: ${spikes.length} spikes matched, membrane within ${error.toExponential(1)} mV`);
-	expect(spikes.length).toBeGreaterThan(10);
-	expect(error).toBeLessThan(1e-11);
-});
+}
 
 test('LeakyIntegrateAndFire on held AMPA, GABA-A and NMDA conductances', () => {
 	const { current } = biology.point;

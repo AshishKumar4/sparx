@@ -98,13 +98,15 @@ export interface Receptor {
 }
 
 /** `sparx.dynamics.PointNeuron` of a `LeakyIntegrateAndFire` and exponential synapses, by receptor name, with
- * each conductance held at its mean over the step (`hold="mean"`). `held` adds conductances of its own, as a
- * `SynapticInput` takes them. */
+ * each conductance held over the step at its mean (`hold="mean"`, second order) or at its value at the step's
+ * start (`"start"`, Brian2's `exponential_euler`). `held` adds conductances of its own, as a `SynapticInput`
+ * takes them. */
 export class PointNeuron {
 	readonly synapses: Record<string, number> = {};
 	constructor(
 		readonly cell: LeakyIntegrateAndFire,
 		readonly receptors: Record<string, Receptor>,
+		readonly hold: 'mean' | 'start' = 'mean',
 	) {
 		for (const name in receptors) this.synapses[name] = 0;
 	}
@@ -115,7 +117,7 @@ export class PointNeuron {
 		for (const [name, { tau, kind }] of Object.entries(this.receptors)) {
 			const term = { amplitude: this.synapses[name], slope: 0, tau };
 			if (kind === 'current') currents.push(term);
-			else conductance.push([name, 0 + mean(term, dt)]);
+			else conductance.push([name, 0 + (this.hold === 'start' ? term.amplitude : mean(term, dt))]);
 		}
 		const fired = this.cell.step({ current, currents, conductance: [...conductance, ...held], jump: 0 }, dt);
 		for (const [name, { tau }] of Object.entries(this.receptors))

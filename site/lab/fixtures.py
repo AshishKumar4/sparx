@@ -378,6 +378,8 @@ def biology(rng: np.random.Generator) -> dict:
         "v": np.asarray(v).tolist(),
         "spikes": np.flatnonzero(np.asarray(out.value)).tolist(),
     }
+    (out, v), _ = run(cell.replace(hold="start"), inputs, dt=dt, record=lambda s: s.neuron.v)
+    point["start"] = {"v": np.asarray(v).tolist(), "spikes": np.flatnonzero(np.asarray(out.value)).tolist()}
     scale = {"ampa": 6.0, "gaba_a": 12.0, "nmda": 4.0}
     conductance = {name: g * rng.random(steps) for name, g in scale.items()}
     received = SynapticInput(

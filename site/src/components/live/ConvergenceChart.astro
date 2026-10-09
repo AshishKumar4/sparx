@@ -1,0 +1,52 @@
+---
+// How far a conductance-based membrane lands from the truth against the step, with each conductance held at
+// its value at the step's start or at its mean over the step (src/engines/biology.ts, held to sparx's
+// PointNeuron), computed when the site is built: snippets/convergence.py's run, in the browser's engine.
+import { LeakyIntegrateAndFire, PointNeuron } from '../../engines/biology';
+import Chart from '../Chart.astro';
+
+function membrane(dt: number, hold: 'mean' | 'start'): number[] {
+	const point = new PointNeuron(
+		new LeakyIntegrateAndFire(20, 200, -60, Number.POSITIVE_INFINITY),
+		{ ampa: { tau: 2, kind: 'conductance' }, gaba_a: { tau: 5, kind: 'conductance' } },
+		hold,
+	);
+	const per = Math.round(1 / dt);
+	const out: number[] = [];
+	for (let i = 0; i < 200 * per; i++) {
+		const edge = i % per === per - 1;
+		const ms = Math.floor(i / per) + 1;
+		point.step(0, edge ? { ampa: ms % 3 === 0 ? 6 : 0, gaba_a: ms % 7 === 0 ? 20 : 0 } : {}, dt);
+		if (edge) out.push(point.cell.v);
+	}
+	return out;
+}
+
+const truth = membrane(1 / 1024, 'mean');
+const steps = [1 / 2, 1 / 4, 1 / 8, 1 / 16];
+const error = (hold: 'mean' | 'start') =>
+	steps.map((dt) => [Math.log2(dt), Math.log10(Math.max(...membrane(dt, hold).map((v, k) => Math.abs(v - truth[k]))))] as [number, number]);
+const start = error('start');
+const mean = error('mean');
+const all = [...start, ...mean].map((p) => p[1]);
+const low = Math.floor(Math.min(...all));
+const high = Math.ceil(Math.max(...all));
+const ticks = Array.from({ length: high - low + 1 }, (_, k) => low + k);
+const show = (p: [number, number]) => `${(10 ** p[1]).toExponential(1)} mV`;
+---
+
+<Chart
+	title="The largest error of a conductance-based membrane over 200 ms against the step size, on log scales, for a conductance held at the step's start and at its mean over the step"
+	series={[
+		{ points: start, role: 'spike' },
+		{ points: start, role: 'spike', dots: true },
+		{ points: mean, role: 'membrane' },
+		{ points: mean, role: 'membrane', dots: true },
+	]}
+	x={{ label: 'step (ms)', ticks: [-4, -3, -2, -1], min: -4.2, max: -0.8, format: (v) => `1/${2 ** -v}` }}
+	y={{ label: 'largest error (mV)', ticks, min: low, max: high, format: (v) => `1e${v}` }}
+>
+	Orange holds each conductance at its value at the start of the step, Brian2's <code>exponential_euler</code>: from {show(start[0])} at
+	1/2 ms to {show(start[3])} at 1/16 ms. Blue holds it at its exact mean over the step, sparx's default: from {show(mean[0])} to {show(mean[3])}.
+	The truth is the mean scheme at 1/1024 ms.
+</Chart>

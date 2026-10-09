@@ -8,7 +8,7 @@ interface Series {
 }
 interface Props {
 	series: Series[];
-	x: { label: string; min?: number; max?: number; ticks: number[] };
+	x: { label: string; min?: number; max?: number; ticks: number[]; format?: (v: number) => string };
 	y: { label: string; min?: number; max?: number; ticks: number[]; format?: (v: number) => string };
 	title: string;
 	height?: number;
@@ -24,6 +24,7 @@ const y1 = y.max ?? Math.max(...all.map((p) => p[1]));
 const sx = (v: number) => pad.left + ((v - x0) / (x1 - x0)) * (width - pad.left - pad.right);
 const sy = (v: number) => height - pad.bottom - ((v - y0) / (y1 - y0)) * (height - pad.top - pad.bottom);
 const format = y.format ?? ((v: number) => String(v));
+const formatX = x.format ?? ((v: number) => v.toLocaleString('en-US'));
 const path = (points: [number, number][]) => points.map(([a, b], k) => `${k ? 'L' : 'M'}${sx(a).toFixed(1)},${sy(b).toFixed(1)}`).join('');
 ---
 
@@ -31,7 +32,7 @@ const path = (points: [number, number][]) => points.map(([a, b], k) => `${k ? 'L
 	<svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title}>
 		{y.ticks.map((t) => <line class="grid" x1={pad.left} x2={width - pad.right} y1={sy(t)} y2={sy(t)} />)}
 		{y.ticks.map((t) => <text class="tick" x={pad.left - 8} y={sy(t) + 4} text-anchor="end">{format(t)}</text>)}
-		{x.ticks.map((t) => <text class="tick" x={sx(t)} y={height - pad.bottom + 18} text-anchor="middle">{t.toLocaleString('en-US')}</text>)}
+		{x.ticks.map((t) => <text class="tick" x={sx(t)} y={height - pad.bottom + 18} text-anchor="middle">{formatX(t)}</text>)}
 		<text class="axis" x={(pad.left + width - pad.right) / 2} y={height - 6} text-anchor="middle">{x.label}</text>
 		<text class="axis" x={14} y={(pad.top + height - pad.bottom) / 2} text-anchor="middle" transform={`rotate(-90 14 ${(pad.top + height - pad.bottom) / 2})`}>{y.label}</text>
 		{
