@@ -9,7 +9,8 @@ How to pick sparx up. [status.md](status.md) is the one ledger of what sparx sup
      evaluation (test 9.8% to 70.8%), then its report raised `KeyError: 'val/accuracy'` under
      `--validation 0`, fixed in `d838e7e`; their side never started. Its files are under
      `~/.cache/dew/integration/7ca258a09bc9d17d5e93de05743742b5158de164/BigEarwig/dew-gpu-sparx-shd-pilot-job-1/outputs/content/out/sparx-shd-pilot/`.
-   - The re-pilot at `d838e7e` is queued with UnnecessaryMeadowlark, behind their priority jobs:
+   - The re-pilot at `d838e7e` was queued with UnnecessaryMeadowlark, now retired; Colab GPU jobs go
+     to EquivalentTurkey, so re-request it there:
      sparx in an isolated venv (`python3 -m venv`, without system site packages, since Colab's
      `jax_cuda13_plugin` 0.11.1 leaked in beside `jax-cuda12-plugin==0.11.2`), their code in Colab's
      own Python and torch with `dcls==0.1.1 h5py tqdm wandb`, 4 epochs each, seed 0. In the same
