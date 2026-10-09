@@ -65,7 +65,7 @@ const kinds = { exact: 'Same numbers', tolerance: 'Within a tolerance', statisti
 			<p>
 				The network flying the drone at the top of this page is three sparx layers: 7 readings in, 64 and 64 LIF neurons, and two leaky
 				integrators whose membranes set the rotors' thrust. Nothing showed it how to fly. Each training step flew {trained.batch} drones
-				for {trained.horizon / 100} s through a model of their physics in JAX, and took the gradient of their distance to their targets,
+				for {trained.horizon / 100} s through a model of their physics in JAX, and took the gradient of a cost led by their distance to their targets,
 				through the spikes and through the physics.
 			</p>
 			<p>
@@ -77,7 +77,7 @@ const kinds = { exact: 'Same numbers', tolerance: 'Within a tolerance', statisti
 			<a class="more" href="/learn/pilot/">Training, lesions and the check against sparx</a>
 			<figure slot="figure" class="numbers">
 				<div><strong>{percent(evaluation.arrived)}</strong><span>of 1,000 flights reach the target and stay</span></div>
-				<div><strong>{percent(evaluation.arrived_thrown)}</strong><span>of 1,000 thrown at 4 m/s and spun at 15 rad/s</span></div>
+				<div><strong>{percent(evaluation.arrived_thrown)}</strong><span>of 1,000 thrown and spun at random, about 4 m/s and 15 rad/s</span></div>
 				<div><strong>{evaluation.median_time_s.toFixed(2)} s</strong><span>median time to arrive</span></div>
 				<div><strong>{(evaluation.final_distance_median_m * 100).toFixed(1)} cm</strong><span>median distance after 6 s</span></div>
 			</figure>
@@ -90,8 +90,8 @@ const kinds = { exact: 'Same numbers', tolerance: 'Within a tolerance', statisti
 				change. The figure steps the network <code>brunel(250)</code> builds, in a worker in your browser.
 			</p>
 			<p>
-				Where the dynamics are deterministic, sparx matches NEST and Brian2 spike for spike. Where they are chaotic, as here, it matches
-				them in rate, irregularity and synchrony over seeds.
+				Current-based LIF, Izhikevich, STDP and the cortical microcircuit on one drawn network match NEST spike for spike. Conductance and
+				adaptive models agree within stated margins. Chaotic networks, like this one, match in rate, irregularity and synchrony over seeds.
 			</p>
 			<CodeBlock code={brunel} colab={colab('brunel')} source={source('src/sparx/graph/models.py')} />
 			<a class="more" href="/learn/networks/">Brunel's regimes, and the whole fly brain</a>

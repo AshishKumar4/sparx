@@ -8,10 +8,10 @@ export const checks = [
 	{ model: 'Pair, triplet and dopamine STDP', reference: 'NEST stdp_*_synapse', result: 'Every transmitted weight within 1e-10 relative', kind: 'exact' },
 	{ model: 'Cortical microcircuit, a fifth', reference: 'NEST on the network sparx draws', result: '12,689 spikes alike over 300 ms, float64', kind: 'exact' },
 	{ model: 'DelayedDense (learned delays)', reference: "DCLS, as SNN-delays uses it", result: 'Outputs within 2.4e-7; gradients within 1.4e-6', kind: 'tolerance' },
-	{ model: 'Conductance LIF', reference: 'NEST iaf_cond_* (RK45)', result: 'Within 2e-3 mV; error falls 4x when dt halves', kind: 'tolerance' },
+	{ model: 'Conductance LIF', reference: 'NEST iaf_cond_* (RK45)', result: 'Within 2e-3 mV, spike for spike until a crossing within that margin; error falls 4x when dt halves', kind: 'tolerance' },
 	{ model: 'AdEx, Naud et al.\u2019s eight patterns', reference: 'NEST aeif_* (RK45)', result: 'Same spike counts; every spike within 0.8 ms', kind: 'tolerance' },
 	{ model: 'Brunel (2000), four regimes', reference: "NEST's brunel_delta_nest.py", result: 'Rate, CV and Fano factor within NEST\u2019s spread over 8 seeds', kind: 'statistics' },
-	{ model: 'FlyWire whole brain (Shiu et al.)', reference: 'Their published Brian2 runs', result: 'Rates correlate at 0.9989; MN9 at 67.1 Hz vs 67.0 ± 6.6', kind: 'statistics' },
+	{ model: 'FlyWire whole brain (Shiu et al.)', reference: 'Their published Brian2 runs', result: 'At 100 Hz activation: rates correlate at 0.9989; MN9 at 67.1 Hz vs 67.0 ± 6.6', kind: 'statistics' },
 ];
 
 // The README's results: short, untuned runs on a 4-core CPU.

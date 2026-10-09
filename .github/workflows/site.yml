@@ -1,0 +1,75 @@
+# The site's checks: sparx's float64 runs regenerated from this commit, the browser's engines held to them,
+# every snippet the pages show run, and the site built. A change to a model the site mirrors fails here.
+
+name: Site
+
+on:
+  push:
+    branches: [ "main", "ci/**", "site" ]
+    paths: [ "site/**", "src/sparx/**", "constraints.txt", "pyproject.toml", ".github/workflows/site.yml" ]
+  pull_request:
+    branches: [ "main" ]
+    paths: [ "site/**", "src/sparx/**" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        cache: pip
+        cache-dependency-path: |
+          pyproject.toml
+          constraints.txt
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.4.0
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 11.17.0
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+        cache-dependency-path: site/pnpm-lock.yaml
+    - name: Install
+      run: |
+        python -m pip install --upgrade pip uv
+        pip install -e ".[test]" -c constraints.txt
+    - name: Lint
+      run: uvx ruff@0.14.3 check site/lab site/snippets
+    - name: Regenerate sparx's runs
+      env:
+        JAX_PLATFORMS: cpu
+      run: |
+        python site/lab/fixtures.py --out site/test/fixtures/sparx.json
+        python site/lab/pilot.py record --out site/test/fixtures/pilot.json
+        git diff --stat -- site/test/fixtures
+    - name: The browser's engines against them
+      working-directory: site
+      run: bun test test/
+    - name: Every snippet runs
+      env:
+        JAX_PLATFORMS: cpu
+      run: python site/lab/notebooks.py run
+    - name: Notebooks are the snippets'
+      run: |
+        python site/lab/notebooks.py write
+        git diff --exit-code -- site/notebooks
+    - name: Build
+      working-directory: site
+      run: |
+        pnpm install --frozen-lockfile
+        pnpm build

@@ -88,7 +88,7 @@ const lesionMeans = lesions.rows.map((r) => [r.silenced, (r.arrived.reduce((a, b
 	<p>
 		On 1,000 flights of 6 s to a fixed target from random starts, half of them at any angle, it arrived within 15 cm and stayed there on{' '}
 		{percent(evaluation.arrived)}, in a median of {evaluation.median_time_s.toFixed(2)} s. That includes all {evaluation.inverted_starts} starts more
-		than a quarter turn from upright. On 1,000 more, thrown at about 4 m/s and spun at about 15 rad/s, it arrived on{' '}
+		than a quarter turn from upright. On 1,000 more, thrown and spun at random, with speeds of 4 m/s and spins of 15 rad/s as standard deviations, it arrived on{' '}
 		{percent(evaluation.arrived_thrown)}. After 6 s the median drone was {(evaluation.final_distance_median_m * 100).toFixed(1)} cm from its target.
 	</p>
 
