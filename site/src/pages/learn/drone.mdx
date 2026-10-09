@@ -1,0 +1,108 @@
+---
+layout: ../../layouts/Chapter.astro
+title: 'Case study: the drone'
+description: The drone on the front page is flown by 128 spiking neurons that learned with nothing to imitate, by gradients through their own spikes and through the drone's physics. This chapter puts the course to work on it, from the equations of the drone to what the network does in a recovery, and how much of it the flying needs.
+---
+
+import CodeBlock from '../../components/CodeBlock.astro';
+import DroneCharts from '../../components/learn/DroneCharts.astro';
+import DroneParity from '../../components/learn/DroneParity.astro';
+import Recovery from '../../components/live/Recovery.astro';
+import { colab, source } from '../../data/site.mjs';
+import model from '../../../public/pilot/pilot.json';
+import pilot from '../../../snippets/pilot.py?raw';
+
+## The task
+
+A drone hangs in a vertical plane: a bar with a rotor at each end, which can only push along the bar's up axis. To move sideways it must tilt, to tilt it must push harder on one side, and every tilt costs it lift. Gravity never stops. A network that flies it reads where the target is and how the drone moves, and sets the two rotors' thrust 100 times a second.
+
+Nobody shows it how. There are no recorded flights to imitate and no reward to estimate. The network learns from one number, how far the drone ends up from its target, and from the derivative of that number with respect to each of its weights, carried back through two seconds of flight.
+
+## The drone
+
+The drone has a mass $m$ of 1 kg, arms $\ell$ of 25 cm, a moment of inertia $I$ of 0.04 kg m², and rotors that push at most 12 N each. Its state is its position, velocity, angle $\theta$ and spin $\omega$. With thrusts $T_L$ and $T_R$, and some air drag:
+
+$$
+m \frac{\mathrm{d}\mathbf v}{\mathrm{d}t} = (T_L + T_R) \begin{pmatrix} -\sin\theta \\ \cos\theta \end{pmatrix} - c\, \mathbf v - m \begin{pmatrix} 0 \\ g \end{pmatrix}, \qquad I \frac{\mathrm{d}\omega}{\mathrm{d}t} = (T_R - T_L)\,\ell - c_\omega\, \omega
+$$
+
+Every 10 ms the physics takes one semi-implicit Euler step: velocity and spin first, then position and angle from the new ones. A drone that hits the edge of its box bounces off at 30% of its speed.
+
+## The network
+
+The network reads seven numbers each step: the way to the target, clipped to 1.5 m so that a far target reads as "that way", the velocity, the sine and cosine of the angle, and the spin. They enter a dense layer as currents. Two layers of 64 LIF neurons follow, with a time constant of 3 steps and a reset to zero, then two leaky integrators. Each integrator's membrane $u$ sets one rotor's thrust,
+
+$$
+T = T_\text{max}\, \sigma(u + b), \qquad \sigma(b) = \frac{m g}{2\, T_\text{max}}
+$$
+
+so a membrane of zero holds the drone in a hover. Nothing else carries memory: the membranes are the network's whole state.
+
+<CodeBlock code={pilot} colab={colab('drone')} source={source('site/lab/pilot.py')} />
+
+## Learning through the physics
+
+The physics is written in JAX, like the network, so a whole flight is one differentiable function. Each training step flies {model.meta.trained.batch} drones for {model.meta.trained.horizon / 100} s from random states, 40% of them at any angle, in boxes from a phone's shape to an ultrawide's, chasing targets that jump every 1.2 s on average, through gusts. The loss averages over drones and steps:
+
+$$
+L = \overline{\lVert \mathbf p_t - \mathbf p^\ast_t \rVert} + 0.05\, \overline{1 - \cos\theta_t} + 0.002\, \overline{\omega_t^2} + 10\, \overline{(r_i - 0.3)_+^2 + (0.02 - r_i)_+^2}
+$$
+
+The first term is the distance to the target. The next two discourage tilt and spin. The last averages over neurons, with $r_i$ the share of steps on which neuron $i$ fired: it penalizes a rate outside 2% to 30% of steps, which keeps every neuron in use and none saturated. JAX differentiates $L$ through all 200 steps: through the drone's equations, and through the spikes by their surrogate, chapter 5's stand-in for the threshold's missing derivative. This is chapter 6's backpropagation through time with the world inside the loop. Adam follows the gradient, clipped to a norm of 1, which keeps an occasional exploding one from undoing the rest.
+
+<DroneCharts show="training" />
+
+## Inside a recovery
+
+Pick a start and watch one flight of 3 s to the green circle. On the right are the spikes of all 128 neurons over the flight, and below them each rotor's thrust, with the thrust that hovers dashed.
+
+<Recovery />
+
+From upside down, the drone is upright within 0.81 s and stays within 15 cm of the target from 1.55 s. For about half of its first 0.8 s each rotor is within 0.5 N of a limit, 0 or 12 N, against about a tenth of the last 1.5 s. The network fires most while it turns over. In the first half second it fires 2,010 spikes, 31 a second per neuron, and in a steady hover about 860, 13 a second. Thrown and spinning at 12 rad/s, it arrives in 1.31 s; falling sideways, in 0.95 s.
+
+## How well it flies
+
+On 1,000 flights of 6 s to a fixed target from random starts, half of them at any angle, it arrived within 15 cm and stayed there on {Math.round(model.evaluation.arrived * 1000) / 10}%, in a median of {model.evaluation.median_time_s.toFixed(2)} s. That includes all {model.evaluation.inverted_starts} starts more than a quarter turn from upright. On 1,000 more, thrown and spun at random, with speeds of 4 m/s and spins of 15 rad/s as standard deviations, it arrived on {Math.round(model.evaluation.arrived_thrown * 1000) / 10}%. After 6 s the median drone was {(model.evaluation.final_distance_median_m * 100).toFixed(1)} cm from its target.
+
+## Silencing neurons
+
+On the front page you can silence neurons and watch the flying get worse. Here is the same experiment in sparx: silence neurons at random from both layers, five times for each count, and fly 500 flights each time.
+
+<DroneCharts show="lesions" />
+
+The network is not uniformly redundant. Most sets of 8 or 16 silenced neurons leave it flying, but one set of 8 grounded it entirely: some neurons carry something the rest cannot replace. By 48 the drone mostly falls, and past 64 it never arrives.
+
+## The browser runs sparx's network
+
+<DroneParity />
+
+sparx also exports the network through NIR, which chapter 12 showed node by node.
+
+## Try this
+
+1. In the recovery figure, why do the rotors sit at 0 or 12 N for much of a recovery, instead of in between?
+2. The loss never asks the drone to stay upright when far from its target. What in it does, and why is its weight small?
+3. Why does the network need the sine and cosine of the angle, rather than the angle itself?
+4. Training flew 200 steps at a time. What would go wrong with 2,000?
+
+<details>
+<summary>Answers</summary>
+
+1. Rolling over or stopping a throw needs the largest torque and force the drone has, and the loss rewards arriving sooner. Gradient descent pushes the readout membranes far past the sigmoid's middle, where the thrust saturates.
+2. The tilt term, $0.05\,(1 - \cos\theta)$. To move sideways the drone must tilt, so a large weight would fight the distance term; a small one breaks ties in favour of flying level.
+3. An angle wraps: $\pi$ and $-\pi$ are the same attitude, but as numbers they are far apart, and a turn of $2\pi$ changes the number without changing the drone. The sine and cosine are the same for the same attitude and change smoothly.
+4. The gradient would pass back through ten times as many steps of the drone and the network, multiplying ten times as many Jacobians. Chapter 6 showed what that does: it explodes or vanishes, and the memory to store the flight grows tenfold.
+
+</details>
+
+## Summary
+
+A spiking network learned to fly a drone from one signal, its distance to the target, by gradients carried back through two seconds of its own spikes and the drone's physics. It recovers from any attitude, firing hardest while it does, and it still flies with a few neurons silenced, though not with any few. The browser runs the same network, spike for spike.
+
+## References
+
+<ul class="references">
+<li>E. O. Neftci, H. Mostafa and F. Zenke, "Surrogate gradient learning in spiking neural networks", <em>IEEE Signal Processing Magazine</em> 36, 2019, <a href="https://doi.org/10.1109/MSP.2019.2931595">doi:10.1109/MSP.2019.2931595</a>.</li>
+<li>D. P. Kingma and J. Ba, "Adam: a method for stochastic optimization", International Conference on Learning Representations, 2015, <a href="https://arxiv.org/abs/1412.6980">arXiv:1412.6980</a>.</li>
+<li>R. Pascanu, T. Mikolov and Y. Bengio, "On the difficulty of training recurrent neural networks", International Conference on Machine Learning, 2013, <a href="https://arxiv.org/abs/1211.5063">arXiv:1211.5063</a>.</li>
+</ul>

@@ -1,0 +1,39 @@
+---
+// The drone's training curve and its lesion experiment (public/pilot/pilot.json, lesions.json, from
+// site/lab/pilot.py), drawn when the site is built.
+import lesions from '../../../public/pilot/lesions.json';
+import model from '../../../public/pilot/pilot.json';
+import Chart from '../Chart.astro';
+
+interface Props {
+	show: 'training' | 'lesions';
+}
+const { show } = Astro.props;
+const meta = model.meta as { trained: Record<string, number>; history: { step: number; distance: number; seconds: number }[] };
+const minutes = Math.round(meta.history.at(-1)!.seconds / 60);
+const lesionPoints = lesions.rows.flatMap((r) => r.arrived.map((a) => [r.silenced, a * 100] as [number, number]));
+const lesionMeans = lesions.rows.map((r) => [r.silenced, (r.arrived.reduce((a, b) => a + b, 0) / r.arrived.length) * 100] as [number, number]);
+---
+
+{
+	show === 'training' ? (
+		<Chart
+			title="Mean distance to the target during training"
+			series={[{ points: meta.history.map((h) => [h.step, h.distance] as [number, number]), role: 'learn' }]}
+			x={{ label: 'training step', ticks: [0, 1000, 2000, 3000, 4000], min: 0, max: meta.trained.steps }}
+			y={{ label: 'distance (m)', ticks: [0, 1, 2], min: 0, max: 2.5, format: (v) => v.toFixed(0) }}
+		>
+			Mean distance to the target over training flights, which keep moving the target and pushing the drone, so it never reaches zero.
+			{meta.trained.steps.toLocaleString('en-US')} steps took {minutes} minutes on a CPU.
+		</Chart>
+	) : (
+		<Chart
+			title="Share of flights that reach the target, against the number of silenced neurons"
+			series={[{ points: lesionPoints, role: 'spike', dots: true }, { points: lesionMeans, role: 'ink' }]}
+			x={{ label: 'neurons silenced, of 128', ticks: [0, 16, 32, 48, 64, 80, 96, 112], min: 0, max: 112 }}
+			y={{ label: 'flights arriving (%)', ticks: [0, 50, 100], min: 0, max: 100 }}
+		>
+			Each dot is one random set of silenced neurons, flown 500 times; the line is their mean.
+		</Chart>
+	)
+}

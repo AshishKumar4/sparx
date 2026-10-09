@@ -35,6 +35,7 @@ NOTEBOOKS = {
     "biology": ("Physical units and biology", "biology", ["conductance", "hodgkin"]),
     "simulators": ("Simulators and fidelity", "simulators", ["convergence"]),
     "hardware": ("Hardware and events", "hardware", ["export"]),
+    "drone": ("Case study: the drone", "drone", ["pilot"]),
 }
 
 

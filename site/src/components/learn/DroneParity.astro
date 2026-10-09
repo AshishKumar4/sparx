@@ -1,0 +1,36 @@
+---
+// The check site/test/pilot.test.ts makes, made again when the site is built, so the page states what the build
+// saw: the browser's pilot against sparx's two recorded float64 flights.
+import { readFileSync } from 'node:fs';
+import { Pilot, type PilotModel } from '../../engines/pilot';
+import model from '../../../public/pilot/pilot.json';
+
+const pilotModel = model as unknown as PilotModel;
+const weights = pilotModel.layers.reduce((n, l) => n + (l.kind === 'dense' ? l.inputs * l.outputs + l.outputs : 0), 0);
+const recorded = JSON.parse(readFileSync(new URL('../../../test/fixtures/pilot.json', import.meta.url), 'utf8'));
+let spikes = 0;
+let mismatched = 0;
+let state = 0;
+let steps = 0;
+for (const flight of recorded.flights) {
+	const pilot = new Pilot(pilotModel);
+	pilot.state.set(flight.start);
+	for (let t = 0; t < flight.targets.length; t++) {
+		for (let i = 0; i < 6; i++) pilot.state[i] += flight.kicks[t][i];
+		pilot.step(flight.targets[t][0], flight.targets[t][1], flight.box[0], flight.box[1]);
+		const fired = [...pilot.spikes.keys()].filter((i) => pilot.spikes[i]);
+		spikes += fired.length;
+		if (fired.join() !== flight.spikes[t].join()) mismatched++;
+		for (let i = 0; i < 6; i++) state = Math.max(state, Math.abs(pilot.state[i] - flight.states[t][i]));
+		steps++;
+	}
+}
+if (mismatched) throw new Error(`the browser's pilot fired differently from sparx's on ${mismatched} steps`);
+---
+
+<p>
+	The front page loads the trained weights, {weights.toLocaleString('en-US')} numbers, and steps the network and the physics in TypeScript, in
+	double precision, with the same operations in the same order as sparx. When this page was built, it flew sparx's two recorded float64
+	flights, {steps.toLocaleString('en-US')} steps with targets, gusts and spins, and fired the same {spikes.toLocaleString('en-US')} spikes, every
+	one at the same step. The drone's state stayed within {state.toExponential(0)} of sparx's.
+</p>
