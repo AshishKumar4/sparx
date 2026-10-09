@@ -10,7 +10,9 @@
 - delays: `delay_kernel` and the gradient of the delays page's readout through `DelayedDense`;
 - stdp: `PairSTDP.step` on recorded pre- and postsynaptic spikes, additive and multiplicative;
 - brunel: a Brunel network `sparx.graph.Network` builds and steps, its edges read back, with its
-  external input recorded as `ArrivalInput`s.
+  external input recorded as `ArrivalInput`s;
+- biology: a `PointNeuron` with a current synapse and AMPA, GABA-A and NMDA conductances, the
+  `LeakyIntegrateAndFire` alone on held conductances, and `HodgkinHuxley` on a stepped current.
 """
 
 from __future__ import annotations
@@ -29,10 +31,15 @@ from sparx import surrogate as surrogates
 from sparx.dynamics import (
     IZHIKEVICH_2003,
     ALIFCell,
+    Arrivals,
+    Exponential,
+    HodgkinHuxley,
     Izhikevich,
     LeakyIntegrateAndFire,
     LIFCell,
     PairSTDP,
+    PointNeuron,
+    Receptor,
     SynapticInput,
     decay,
     run,
@@ -345,6 +352,59 @@ def brunel(rng: np.random.Generator) -> dict:
     }
 
 
+def biology(rng: np.random.Generator) -> dict:
+    steps, dt = 3000, 0.1
+    receptors = {
+        "ex": (5.0, "current"),
+        "ampa": (5.0, "conductance"),
+        "gaba_a": (10.0, "conductance"),
+        "nmda": (100.0, "conductance"),
+    }
+    cell = PointNeuron(
+        LeakyIntegrateAndFire(),
+        {name: Receptor(Exponential(tau), kind) for name, (tau, kind) in receptors.items()},
+    )
+    weights = {"ex": 120.0, "ampa": 2.0, "gaba_a": 4.0, "nmda": 0.5}
+    arrivals = {
+        name: (rng.random(steps) < 0.03) * weight * rng.random(steps) for name, weight in weights.items()
+    }
+    current = 120.0 + 100.0 * rng.random(steps)
+    inputs = Arrivals(jnp.asarray(current), {name: jnp.asarray(a) for name, a in arrivals.items()})
+    (out, v), _ = run(cell, inputs, dt=dt, record=lambda s: s.neuron.v)
+    point = {
+        "receptors": receptors,
+        "current": current.tolist(),
+        "arrivals": {name: a.tolist() for name, a in arrivals.items()},
+        "v": np.asarray(v).tolist(),
+        "spikes": np.flatnonzero(np.asarray(out.value)).tolist(),
+    }
+    scale = {"ampa": 6.0, "gaba_a": 12.0, "nmda": 4.0}
+    conductance = {name: g * rng.random(steps) for name, g in scale.items()}
+    received = SynapticInput(
+        current=jnp.asarray(current), conductance={name: jnp.asarray(g) for name, g in conductance.items()}
+    )
+    (out, v), _ = run(LeakyIntegrateAndFire(), received, dt=dt, record=lambda s: s.v)
+    held = {
+        "conductance": {name: g.tolist() for name, g in conductance.items()},
+        "v": np.asarray(v).tolist(),
+        "spikes": np.flatnonzero(np.asarray(out.value)).tolist(),
+    }
+    k = np.arange(steps)
+    stepped = np.where(k < 1000, 300.0, np.where(k < 2000, 700.0, 1200.0))
+    (out, (v, m, h, n)), _ = run(
+        HodgkinHuxley(),
+        SynapticInput(current=jnp.asarray(stepped)),
+        dt=dt,
+        record=lambda s: (s.v, s.m, s.h, s.n),
+    )
+    hodgkin = {
+        "current": stepped.tolist(),
+        "spikes": np.flatnonzero(np.asarray(out.value)).tolist(),
+        **{name: np.asarray(x).tolist() for name, x in (("v", v), ("m", m), ("h", h), ("n", n))},
+    }
+    return {"dt": dt, "point": point, "held": held, "hodgkin": hodgkin}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -361,6 +421,7 @@ def main() -> None:
         "encoders": encoders,
         "bptt": bptt,
         "eprop": eprop,
+        "biology": biology,
     }
     with jax.enable_x64(new_val=True):
         data = {

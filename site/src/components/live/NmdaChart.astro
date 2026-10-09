@@ -1,0 +1,26 @@
+---
+// The current through 1 nS of NMDA receptors against the membrane potential, without magnesium and with
+// 1 mM of it (Jahr and Stevens's block, as sparx.dynamics.MgBlock), computed when the site is built.
+import { mgBlock } from '../../engines/biology';
+import Chart from '../Chart.astro';
+
+const potentials = Array.from({ length: 281 }, (_, k) => -100 + k / 2);
+const current = (mg: number) => potentials.map((v) => [v, mgBlock(v, mg) * (0 - v)] as [number, number]);
+const blocked = current(1);
+const [top, most] = blocked.reduce((best, point) => (point[1] > best[1] ? point : best));
+const percent = (v: number) => `${(100 * mgBlock(v)).toFixed(1)}%`;
+---
+
+<Chart
+	title="Current into a neuron through 1 nS of NMDA receptors against its membrane potential, without magnesium, a straight line, and with 1 mM of magnesium, which blocks most of the current below about −40 mV"
+	series={[
+		{ points: current(0), role: 'ink' },
+		{ points: blocked, role: 'membrane' },
+	]}
+	x={{ label: 'membrane potential (mV)', ticks: [-100, -80, -60, -40, -20, 0, 20, 40], min: -100, max: 40 }}
+	y={{ label: 'current in (pA)', ticks: [-40, 0, 40, 80], min: -40, max: 100 }}
+>
+	The grey line is the receptor without magnesium: the current falls in proportion to the distance from 0 mV. The blue curve is with
+	1 mM of magnesium outside the cell. At −80 mV only {percent(-80)} of the channels conduct, at −40 mV {percent(-40)}, and the current
+	grows as the membrane depolarizes until {most.toFixed(1)} pA at {top.toFixed(1)} mV.
+</Chart>

@@ -1,0 +1,112 @@
+---
+// Three neurons held at one potential, each receiving one kind of synapse every 150 ms: a current, an AMPA
+// conductance and a GABA-A conductance (src/engines/biology.ts, held to sparx's PointNeuron).
+import Figure from './Figure.astro';
+import Slider from './Slider.astro';
+---
+
+<div data-conductance>
+	<Figure engine="PointNeuron(LeakyIntegrateAndFire)" height="16rem">
+		<canvas role="img" aria-label="How far one synaptic input moves three membranes held at the same potential: a current synapse, an AMPA conductance and a GABA-A conductance, each drawn as its change from the held potential"></canvas>
+		<Fragment slot="controls">
+			<Slider name="held" label="Held at" min={-90} max={0} step={1} value={-60} unit="mV" digits={0} />
+			<Slider name="tonic" label="Background inhibition" min={0} max={40} step={1} value={0} unit="nS" digits={0} />
+		</Fragment>
+		<p slot="after" class="readout">
+			Peak change: <span class="current">180 pA current <b data-peak="0">…</b></span> · <span class="ampa">3 nS AMPA <b data-peak="1">…</b></span> ·
+			<span class="gaba">3 nS GABA-A <b data-peak="2">…</b></span> · membrane time constant <b data-tau>20.0 ms</b>
+		</p>
+	</Figure>
+</div>
+
+<script>
+	import { LeakyIntegrateAndFire, PointNeuron } from '../../engines/biology';
+	import { controls } from '../../widgets/controls';
+	import { traces } from '../../widgets/traces';
+
+	const inputs = [
+		['ex', 'current', 180],
+		['ampa', 'conductance', 3],
+		['gaba_a', 'conductance', 3],
+	] as const;
+	const dt = 0.1;
+	const every = 1500;
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-conductance]')) {
+		const cells = inputs.map(([name, kind]) => new PointNeuron(new LeakyIntegrateAndFire(20, 200, -60, Infinity), { [name]: { tau: 5, kind } }));
+		const peaks = root.querySelectorAll<HTMLElement>('[data-peak]');
+		const tau = root.querySelector<HTMLElement>('[data-tau]') as HTMLElement;
+		const before = [0, 0, 0];
+		const peak = [0, 0, 0];
+		let held = -60;
+		let tonic: [string, number][] = [];
+		let current = 0;
+		let t = 0;
+		const settle = () => {
+			held = ui.read('held');
+			const g = ui.read('tonic');
+			tonic = [['gaba_a', g]];
+			// The current that holds the membrane at `held` against its leak and the background conductance.
+			current = 10 * (held + 60) + g * (held + 80);
+			for (const cell of cells) cell.cell.v = held;
+			tau.textContent = `${(200 / (10 + g)).toFixed(1)} ms`;
+		};
+		const ui = controls(root, () => {
+			settle();
+			view.redraw();
+		});
+		settle();
+		const view = traces(
+			root.querySelector('canvas') as HTMLCanvasElement,
+			[
+				{
+					weight: 1,
+					range: [-4.5, 4.5],
+					lines: ['ink', 'membrane', 'learn'],
+					guides: [{ at: 0, label: 'held potential' }],
+				},
+			],
+			() => {
+				const arrives = t % every === every - 1;
+				const values = cells.map((point, k) => {
+					const [name, , weight] = inputs[k];
+					point.step(current, arrives ? { [name]: weight } : {}, dt, tonic);
+					const v = point.cell.v;
+					if (Math.abs(v - before[k]) > Math.abs(peak[k])) peak[k] = v - before[k];
+					if (arrives) {
+						if (t > every) peaks[k].textContent = `${peak[k] >= 0 ? '+' : '−'}${Math.abs(peak[k]).toFixed(2)} mV`;
+						before[k] = v;
+						peak[k] = 0;
+					}
+					return v - held;
+				});
+				t++;
+				return { values, event: arrives };
+			},
+			{ steps: 6000, perFrame: 25 },
+		);
+	}
+</script>
+
+<style>
+	.readout {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+	}
+	.readout b {
+		font-weight: 500;
+		color: var(--sx-ink-2);
+	}
+	.current b {
+		color: var(--sx-ink);
+	}
+	.ampa b {
+		color: var(--sx-membrane);
+	}
+	.gaba b {
+		color: var(--sx-learn);
+	}
+</style>

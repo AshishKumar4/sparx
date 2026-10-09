@@ -1,0 +1,80 @@
+---
+// One sparx.dynamics.HodgkinHuxley neuron on a constant current, its membrane above its sodium and potassium
+// conductances, stepped live (src/engines/biology.ts, held to sparx).
+import Figure from './Figure.astro';
+import Slider from './Slider.astro';
+---
+
+<div data-hodgkin>
+	<Figure engine="HodgkinHuxley" height="19rem">
+		<canvas role="img" aria-label="A Hodgkin-Huxley neuron's membrane potential firing on a constant current, and below it the sodium conductance rising at each spike's start and the potassium conductance rising after it"></canvas>
+		<Fragment slot="controls">
+			<Slider name="current" label="Current" min={0} max={1500} step={10} value={800} unit="pA" digits={0} />
+		</Fragment>
+		<p slot="after" class="readout">
+			<span class="na">sodium</span> · <span class="k">potassium</span> conductance · 100 pF · dt 0.1 ms in substeps of 0.01 ms · <b data-rate>…</b>
+		</p>
+	</Figure>
+</div>
+
+<script>
+	import { HodgkinHuxley } from '../../engines/biology';
+	import { controls } from '../../widgets/controls';
+	import { traces } from '../../widgets/traces';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-hodgkin]')) {
+		const cell = new HodgkinHuxley();
+		const rate = root.querySelector<HTMLElement>('[data-rate]') as HTMLElement;
+		let t = 0;
+		let last = Number.NEGATIVE_INFINITY;
+		let interval = Number.NaN;
+		const ui = controls(root, () => view.redraw());
+		const view = traces(
+			root.querySelector('canvas') as HTMLCanvasElement,
+			[
+				{
+					weight: 3,
+					range: [-85, 55],
+					lines: ['membrane'],
+					guides: [
+						{ at: 50, label: 'sodium reversal +50 mV', role: 'spike' },
+						{ at: 0, label: '0 mV' },
+						{ at: -77, label: 'potassium reversal −77 mV', role: 'learn' },
+					],
+				},
+				{ weight: 2, range: [0, 4000], lines: ['spike', 'learn'], guides: [{ at: 4000, label: '4,000 nS' }] },
+			],
+			() => {
+				const fired = cell.step(ui.read('current'), 0.1);
+				t++;
+				if (fired) {
+					if (Number.isFinite(last)) interval = (t - last) * 0.1;
+					last = t;
+				}
+				if (t % 50 === 0) rate.textContent = t - last > 1000 || Number.isNaN(interval) ? 'silent' : `${Math.round(1000 / interval)} Hz`;
+				return { values: [cell.v, ...cell.conductances], event: fired === 1 };
+			},
+			{ steps: 800, perFrame: 2 },
+		);
+	}
+</script>
+
+<style>
+	.readout {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+	}
+	.readout b {
+		font-weight: 500;
+		color: var(--sx-ink-2);
+	}
+	.na {
+		color: var(--sx-spike);
+	}
+	.k {
+		color: var(--sx-learn);
+	}
+</style>
