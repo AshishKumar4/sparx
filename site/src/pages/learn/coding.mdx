@@ -58,7 +58,7 @@ Every encoder in `sparx.encode` is a frozen dataclass called as `encoder(key, x)
 
 <CodeBlock code={coding} colab={colab('coding')} source={source('src/sparx/encode.py')} />
 
-The rate code reads 0.95 as 15 spikes out of 16 and 0.05 as none; another key gives other counts. The latency code fires the four values at steps 1, 6, 10 and 14, and reads them back to within $1/30$. The delta code fires once, at the jump; the ramp before it, 0.0128 a step, never reaches the threshold of 0.1.
+The rate code drew 16, 10, 3 and 3 spikes, so 0.05 came back as 0.19: sixteen coin flips are that noisy. Another key gives other counts. The latency code fires the four values at steps 1, 6, 10 and 14, and reads them back to within $1/30$. The delta code fires once, at the jump; the ramp before it, 0.0128 a step, never reaches the threshold of 0.1.
 
 There is a fourth option this chapter has not drawn. A direct encoder, `sparx.encode.DirectEncoder`, sends the real values themselves at every step and lets the network's first layer of spiking neurons do the encoding. It is common for images, where it trains well with few steps, but its first layer does multiply-adds, not additions. The drone on the front page reads its sensors this way.
 

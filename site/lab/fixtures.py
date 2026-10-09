@@ -182,6 +182,43 @@ def bptt(rng: np.random.Generator) -> dict:
     return {"x": x.tolist(), "tau": 10.0, "cases": cases}
 
 
+def eprop(rng: np.random.Generator) -> dict:
+    """sparx.learn.eprop's gradients and BPTT's through `bptt_loss`, for a small recurrent LIF layer."""
+    from sparx.learn import EPropParams, bptt_loss, eprop as eprop_gradients
+
+    inputs, size, outputs, steps = 6, 10, 2, 60
+    u = (rng.random((steps, 1, inputs)) < 0.2).astype(np.float64)
+    t = np.arange(steps)
+    target = np.stack([np.sin(2 * np.pi * t / 30), 0.5 * np.cos(2 * np.pi * t / 20)], -1)[:, None, :]
+    params = EPropParams(
+        rng.normal(0, 0.8, (inputs, size)),
+        rng.normal(0, 0.3, (size, size)),
+        rng.normal(0, 0.4, (size, outputs)),
+        np.zeros(outputs),
+    )
+    params = EPropParams(*(jnp.asarray(a) for a in params))
+    cell = LIFCell(
+        decay=decay(tau=10.0), threshold=1.0, surrogate=surrogates.Triangle(scale=0.3), detach_reset=True
+    )
+
+    def loss(y, target):
+        return 0.5 * jnp.sum((y - target) ** 2)
+
+    total, online = eprop_gradients(cell, params, jnp.asarray(u), jnp.asarray(target), loss, tau=20.0)
+    full = jax.grad(lambda p: bptt_loss(cell, p, jnp.asarray(u), jnp.asarray(target), loss, tau=20.0))(params)
+    names = EPropParams._fields
+    return {
+        "inputs": u[:, 0].tolist(),
+        "target": target[:, 0].tolist(),
+        "tau": 10.0,
+        "readout_tau": 20.0,
+        "params": {n: np.asarray(a).tolist() for n, a in zip(names, params, strict=True)},
+        "loss": float(total),
+        "eprop": {n: np.asarray(a).tolist() for n, a in zip(names, online, strict=True)},
+        "bptt": {n: np.asarray(a).tolist() for n, a in zip(names, full, strict=True)},
+    }
+
+
 def delays(rng: np.random.Generator) -> dict:
     """Three inputs that each fire once, delayed onto one leaky integrator; the loss is minus its peak, or
     minus its value at step 50, the delays page's (`read_at`)."""
@@ -323,6 +360,7 @@ def main() -> None:
         "brunel": brunel,
         "encoders": encoders,
         "bptt": bptt,
+        "eprop": eprop,
     }
     with jax.enable_x64(new_val=True):
         data = {

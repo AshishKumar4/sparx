@@ -3,6 +3,7 @@
 import { expect, test } from 'bun:test';
 import { unroll } from '../src/engines/bptt';
 import { kernel, peak } from '../src/engines/delays';
+import { gradients, type Params } from '../src/engines/eprop';
 import { delta, latency } from '../src/engines/encode';
 import { PairSTDP } from '../src/engines/stdp';
 import { surrogates } from '../src/engines/surrogate';
@@ -79,5 +80,32 @@ test('backpropagation through an autapse LIFCell', () => {
 		const worst = Math.max(...c.grad.map((g: number, t: number) => Math.abs(g - out.grad[t])));
 		console.log(`autapse w=${c.w} ${c.surrogate}${c.detach ? ' detached' : ''}: ${c.spikes.length} spikes, gradient within ${worst.toExponential(1)} of a largest ${scale.toExponential(1)}`);
 		expect(worst).toBeLessThan(1e-10 * Math.max(scale, 1));
+	}
+});
+
+test('e-prop and BPTT through a recurrent LIF layer', () => {
+	if (!fixtures.eprop) throw new Error('fixtures.eprop is missing: run site/lab/fixtures.py --only eprop');
+	const e = fixtures.eprop;
+	const flat = (a: number[] | number[][]) => Float64Array.from((a as number[][]).flat ? (a as number[][]).flat() : (a as number[]));
+	const params: Params = {
+		inputs: e.params.w_in.length,
+		size: e.params.w_rec.length,
+		outputs: e.params.b_out.length,
+		wIn: flat(e.params.w_in),
+		wRec: flat(e.params.w_rec),
+		wOut: flat(e.params.w_out),
+		bOut: flat(e.params.b_out),
+	};
+	const triangle = surrogates().find((s) => s.name === 'Triangle')?.derivative as (x: number) => number;
+	const pass = gradients(params, { beta: Math.exp(-1 / e.tau), kappa: Math.exp(-1 / e.readout_tau), threshold: 1, surrogate: (x) => 0.3 * triangle(x) }, e.inputs, e.target);
+	expect(Math.abs(pass.loss - e.loss)).toBeLessThan(1e-10);
+	for (const [rule, mine] of [['eprop', pass.eprop], ['bptt', pass.bptt]] as const) {
+		let worst = 0;
+		for (const [key, name] of [['wIn', 'w_in'], ['wRec', 'w_rec'], ['wOut', 'w_out'], ['bOut', 'b_out']] as const) {
+			const expected = flat(e[rule][name]);
+			for (let k = 0; k < expected.length; k++) worst = Math.max(worst, Math.abs(mine[key][k] - expected[k]));
+		}
+		console.log(`${rule}: every gradient within ${worst.toExponential(1)} of sparx's`);
+		expect(worst).toBeLessThan(1e-10);
 	}
 });
