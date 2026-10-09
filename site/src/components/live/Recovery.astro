@@ -1,0 +1,80 @@
+---
+// The trained pilot's flight from a start the reader picks: its path, its 128 neurons' spikes and its rotors'
+// thrust (src/widgets/pilot/recovery.ts, on the network the front page flies).
+import Figure from './Figure.astro';
+
+const starts = [
+	['upside', 'Upside down'],
+	['thrown', 'Thrown and spinning'],
+	['falling', 'Falling sideways'],
+];
+---
+
+<div data-recovery>
+	<Figure engine="Pilot" height="20rem">
+		<canvas role="img" aria-label="A drone's flight to a target circle from a hard start, beside the spikes of its network's 128 neurons over the flight and the thrust of its two rotors"></canvas>
+		<div slot="controls" class="buttons">
+			{starts.map(([value, label]) => <button type="button" data-start={value}>{label}</button>)}
+		</div>
+		<p slot="after" class="readout">
+			3 s from the start · <span class="left">left</span> and <span class="right">right</span> rotor, dashed at hover · <b data-arrived>…</b>
+		</p>
+	</Figure>
+</div>
+
+<script>
+	import { arrival, type Flight, recovery } from '../../widgets/pilot/recovery';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-recovery]')) {
+		const arrived = root.querySelector<HTMLElement>('[data-arrived]') as HTMLElement;
+		const report = (flight: Flight) => {
+			const t = arrival(flight);
+			const spikes = flight.spikes.reduce((n, row) => n + row.reduce((a, b) => a + b, 0), 0);
+			arrived.textContent = `${t === null ? 'not there yet' : `within 15 cm from ${(t / 100).toFixed(2)} s`} · ${spikes.toLocaleString('en-US')} spikes`;
+		};
+		new IntersectionObserver(async ([entry], observer) => {
+			if (!entry.isIntersecting) return;
+			observer.disconnect();
+			const model = await (await fetch('/pilot/pilot.json')).json();
+			const figure = recovery(root.querySelector('canvas') as HTMLCanvasElement, model, report);
+			for (const button of root.querySelectorAll<HTMLButtonElement>('[data-start]')) button.addEventListener('click', () => figure.start(button.dataset.start as string));
+		}, { rootMargin: '300px' }).observe(root);
+	}
+</script>
+
+<style>
+	.buttons {
+		display: flex;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+	button {
+		font: inherit;
+		font-size: 0.875rem;
+		font-weight: 550;
+		height: 2.25rem;
+		padding-inline: 1rem;
+		border-radius: 0.5rem;
+		border: 1px solid var(--sx-line-strong);
+		background: var(--sx-page);
+		color: var(--sx-ink);
+		cursor: pointer;
+	}
+	.readout {
+		margin: 0;
+		padding: 0 1rem 0.875rem;
+		font-family: var(--sx-mono);
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+	}
+	.readout b {
+		font-weight: 500;
+		color: var(--sx-ink-2);
+	}
+	.left {
+		color: var(--sx-membrane);
+	}
+	.right {
+		color: var(--sx-learn);
+	}
+</style>
