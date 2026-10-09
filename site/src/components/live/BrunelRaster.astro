@@ -8,9 +8,15 @@ interface Props {
 	order?: number;
 	height?: string;
 	sliders?: boolean;
+	sizes?: boolean;
 }
-const { order = 250, height = '19rem', sliders = false } = Astro.props;
+const { order = 250, height = '19rem', sliders = false, sizes = false } = Astro.props;
 const neurons = (5 * order).toLocaleString('en-US');
+const sizeOptions = [
+	{ value: '250', label: '1,250' },
+	{ value: '500', label: '2,500' },
+	{ value: '2500', label: "12,500, the paper's" },
+];
 const regimes = [
 	{ value: '5,2', label: 'Asynchronous irregular' },
 	{ value: '3,2', label: 'Synchronous regular' },
@@ -24,11 +30,12 @@ const regimes = [
 		<canvas role="img" aria-label={`Spikes of 200 of the network's ${neurons} neurons over the last 400 ms, excitatory above and inhibitory below, with the excitatory population's rate`}></canvas>
 		<Fragment slot="controls">
 			<Choice name="regime" label="Regime" value="5,2" options={regimes} />
+			{sizes && <Choice name="order" label="Neurons" value={String(order)} options={sizeOptions} />}
 			{sliders && <Slider name="g" label="Inhibition g" min={2} max={8} step={0.1} value={5} digits={1} />}
 			{sliders && <Slider name="eta" label="External drive η" min={0.5} max={4} step={0.05} value={2} digits={2} />}
 		</Fragment>
 		<p slot="after" class="readout">
-			{neurons} LIF neurons, {(order * 4 * 0.1 + order * 0.1).toLocaleString('en-US')} inputs each, 0.1 ms steps · excitatory rate <span data-rate>…</span>
+			<span data-size>{neurons} LIF neurons, {(order * 0.5).toLocaleString('en-US')} inputs each</span>, 0.1 ms steps · excitatory rate <span data-rate>…</span>
 		</p>
 	</Figure>
 </div>
@@ -52,9 +59,15 @@ const regimes = [
 			observer.disconnect();
 		}, { rootMargin: '200px' }).observe(root);
 		const hasSliders = root.querySelector('input[name="g"]') !== null;
+		const size = root.querySelector<HTMLElement>('[data-size]');
 		const ui = controls(root, (name) => {
 			const sim = begin();
-			if (name === 'regime') {
+			if (name === 'order') {
+				const n = Number(ui.choice('order'));
+				const [g, eta] = hasSliders ? [ui.read('g'), ui.read('eta')] : ui.choice('regime').split(',').map(Number);
+				sim.set(g, eta, n);
+				if (size) size.textContent = `${(5 * n).toLocaleString('en-US')} LIF neurons, ${(n / 2).toLocaleString('en-US')} inputs each`;
+			} else if (name === 'regime') {
 				const [g, eta] = ui.choice('regime').split(',').map(Number);
 				if (hasSliders) {
 					for (const [key, value] of [['g', g], ['eta', eta]] as const) {

@@ -17,8 +17,8 @@ import physical from '../../../snippets/physical.py?raw';
 >
 	<h2>The leaky integrate-and-fire neuron</h2>
 	<p>
-		Each step, the membrane keeps a fraction of its charge and adds the step's input: <code>v = decay * v + x</code>. When
-		<code>v</code> reaches the threshold, the neuron emits a spike, a 1, and resets. Otherwise it emits 0. The decay is
+		Each step, the membrane keeps a fraction of its charge and adds the step's input: <code>v = decay * v + x</code>. When{' '}
+		<code>v</code> reaches the threshold, the neuron emits a spike, a 1, and resets. Otherwise it emits 0. The decay is{' '}
 		<code>exp(-1 / tau)</code>, so a time constant of 12 steps keeps 92% of the charge each step.
 	</p>
 	<div class="wide"><LifScope height="17rem" /></div>
@@ -29,14 +29,14 @@ import physical from '../../../snippets/physical.py?raw';
 	</p>
 	<p>
 		The reset matters. <code>"subtract"</code> takes the threshold away and keeps whatever overshoot there was, so a strong input fires at a
-		rate proportional to its size. <code>"zero"</code> forgets the overshoot. These are <code>LIFCell</code>'s; the layer
+		rate proportional to its size. <code>"zero"</code> forgets the overshoot. These are <code>LIFCell</code>'s; the layer{' '}
 		<code>sparx.nn.LIF</code> builds the same cell for every feature of a Flax model.
 	</p>
 	<CodeBlock code={neuron} colab={colab('neuron')} source={source('src/sparx/dynamics/ml.py')} />
 
 	<h2>A neuron in millivolts</h2>
 	<p>
-		The physical models run in ms, mV, pA, nS and pF. <code>LeakyIntegrateAndFire</code> solves its membrane exactly over each step, as NEST's
+		The physical models run in ms, mV, pA, nS and pF. <code>LeakyIntegrateAndFire</code> solves its membrane exactly over each step, as NEST's{' '}
 		<code>iaf_psc_*</code> neurons do, and after a spike holds the reset for <code>t_ref</code>. Below 100 pA this cell never fires: a
 		current lifts its membrane by at most the current over its leak conductance, 10 nS, and it takes 100 pA to lift it the 10 mV from rest
 		to threshold.
@@ -46,7 +46,7 @@ import physical from '../../../snippets/physical.py?raw';
 
 	<h2>Two variables, many patterns</h2>
 	<p>
-		Izhikevich's model adds a recovery variable <code>u</code> that the membrane pushes up and that pulls the membrane down. Four numbers,
+		Izhikevich's model adds a recovery variable <code>u</code> that the membrane pushes up and that pulls the membrane down. Four numbers,{' '}
 		<code>a</code>, <code>b</code>, <code>c</code> and <code>d</code>, set how fast it recovers, how much it follows the voltage, where a spike
 		resets the voltage, and how much each spike adds to it. Together they give the cortical cell classes of his 2003 paper: pick one, and
 		change the current.

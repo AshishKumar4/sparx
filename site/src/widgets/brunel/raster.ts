@@ -3,14 +3,15 @@ import { alpha, fit, onTheme, type Palette } from '../theme';
 import type { Batch, Setup } from './worker';
 
 export interface Raster {
-	set(g: number, eta: number): void;
+	set(g: number, eta: number, order?: number): void;
 	rate(): number;
 }
 
-export function raster(canvas: HTMLCanvasElement, { order = 250, g = 5, eta = 2, window = 400, rows = 200, speed = 120 } = {}): Raster {
-	const excitatory = 4 * order;
+export function raster(canvas: HTMLCanvasElement, { order: initial = 250, g = 5, eta = 2, window = 400, rows = 200, speed = 120 } = {}): Raster {
+	let order = initial;
+	let excitatory = 4 * order;
 	const shownE = Math.round(rows * 0.8);
-	const shown = [...Array.from({ length: shownE }, (_, k) => k), ...Array.from({ length: rows - shownE }, (_, k) => excitatory + k)];
+	const shownOf = () => [...Array.from({ length: shownE }, (_, k) => k), ...Array.from({ length: rows - shownE }, (_, k) => excitatory + k)];
 	const dt = 0.1;
 	const capacity = Math.round(window / dt);
 	const times: number[] = [];
@@ -35,7 +36,7 @@ export function raster(canvas: HTMLCanvasElement, { order = 250, g = 5, eta = 2,
 		ids.length = 0;
 		rate.fill(0);
 		now = 0;
-		const setup: Setup = { order, g: gg, eta: ee, seed: 7, shown, speed };
+		const setup: Setup = { order, g: gg, eta: ee, seed: 7, shown: shownOf(), speed };
 		worker.postMessage(setup);
 	};
 	worker.onmessage = (event: MessageEvent<Batch>) => {
@@ -115,7 +116,11 @@ export function raster(canvas: HTMLCanvasElement, { order = 250, g = 5, eta = 2,
 	requestAnimationFrame(draw);
 
 	return {
-		set(gg, ee) {
+		set(gg, ee, size) {
+			if (size) {
+				order = size;
+				excitatory = 4 * order;
+			}
 			start(gg, ee);
 		},
 		rate() {

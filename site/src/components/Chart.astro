@@ -1,0 +1,105 @@
+---
+// A small line chart drawn at build time as SVG, in the theme's colors.
+interface Series {
+	points: [number, number][];
+	role?: 'spike' | 'membrane' | 'bio' | 'learn' | 'ink';
+	label?: string;
+	dots?: boolean;
+}
+interface Props {
+	series: Series[];
+	x: { label: string; min?: number; max?: number; ticks: number[] };
+	y: { label: string; min?: number; max?: number; ticks: number[]; format?: (v: number) => string };
+	title: string;
+	height?: number;
+}
+const { series, x, y, title, height = 220 } = Astro.props;
+const width = 640;
+const pad = { left: 52, right: 16, top: 16, bottom: 40 };
+const all = series.flatMap((s) => s.points);
+const x0 = x.min ?? Math.min(...all.map((p) => p[0]));
+const x1 = x.max ?? Math.max(...all.map((p) => p[0]));
+const y0 = y.min ?? Math.min(...all.map((p) => p[1]));
+const y1 = y.max ?? Math.max(...all.map((p) => p[1]));
+const sx = (v: number) => pad.left + ((v - x0) / (x1 - x0)) * (width - pad.left - pad.right);
+const sy = (v: number) => height - pad.bottom - ((v - y0) / (y1 - y0)) * (height - pad.top - pad.bottom);
+const format = y.format ?? ((v: number) => String(v));
+const path = (points: [number, number][]) => points.map(([a, b], k) => `${k ? 'L' : 'M'}${sx(a).toFixed(1)},${sy(b).toFixed(1)}`).join('');
+---
+
+<figure class="chart">
+	<svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title}>
+		{y.ticks.map((t) => <line class="grid" x1={pad.left} x2={width - pad.right} y1={sy(t)} y2={sy(t)} />)}
+		{y.ticks.map((t) => <text class="tick" x={pad.left - 8} y={sy(t) + 4} text-anchor="end">{format(t)}</text>)}
+		{x.ticks.map((t) => <text class="tick" x={sx(t)} y={height - pad.bottom + 18} text-anchor="middle">{t.toLocaleString('en-US')}</text>)}
+		<text class="axis" x={(pad.left + width - pad.right) / 2} y={height - 6} text-anchor="middle">{x.label}</text>
+		<text class="axis" x={14} y={(pad.top + height - pad.bottom) / 2} text-anchor="middle" transform={`rotate(-90 14 ${(pad.top + height - pad.bottom) / 2})`}>{y.label}</text>
+		{
+			series.map((s) => (
+				<g class={`series ${s.role ?? 'membrane'}`}>
+					{!s.dots && <path d={path(s.points)} />}
+					{s.dots && s.points.map(([a, b]) => <circle cx={sx(a)} cy={sy(b)} r="3.5" />)}
+				</g>
+			))
+		}
+	</svg>
+	<figcaption><slot /></figcaption>
+</figure>
+
+<style>
+	.chart {
+		margin: 0;
+		padding: 1rem 1rem 0.75rem;
+		border: 1px solid var(--sx-line);
+		border-radius: 0.75rem;
+		background: var(--sx-panel);
+	}
+	svg {
+		width: 100%;
+		height: auto;
+		display: block;
+	}
+	.grid {
+		stroke: var(--sx-line);
+	}
+	.tick,
+	.axis {
+		font-family: var(--sx-mono);
+		font-size: 11px;
+		fill: var(--sx-muted);
+	}
+	.series path {
+		fill: none;
+		stroke-width: 2;
+	}
+	.series circle {
+		fill-opacity: 0.75;
+	}
+	.membrane path {
+		stroke: var(--sx-membrane);
+	}
+	.membrane circle {
+		fill: var(--sx-membrane);
+	}
+	.spike path {
+		stroke: var(--sx-spike);
+	}
+	.spike circle {
+		fill: var(--sx-spike);
+	}
+	.learn path {
+		stroke: var(--sx-learn);
+	}
+	.learn circle {
+		fill: var(--sx-learn);
+	}
+	.ink path {
+		stroke: var(--sx-ink-2);
+	}
+	figcaption {
+		margin-top: 0.5rem;
+		font-size: 0.8125rem;
+		line-height: 1.5;
+		color: var(--sx-muted);
+	}
+</style>

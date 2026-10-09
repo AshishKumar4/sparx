@@ -1,0 +1,88 @@
+---
+// Izhikevich's twenty firing patterns, as sparx runs them beside his own code's runs (site/lab/parity.py).
+import data from '../../../public/data/parity.json';
+
+const names = data.patterns.map((p) => p.pattern.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase()));
+---
+
+<figure class="patterns" data-patterns>
+	<ol>
+		{
+			data.patterns.map((p, k) => (
+				<li>
+					<canvas data-panel={k} role="img" aria-label={`${names[k]}: sparx's trace over his code's`} />
+					<span class="name">{p.panel}. {names[k]}</span>
+					<span class="fact">{p.same_spikes ? `${p.spikes} ${p.spikes === 1 ? 'spike' : 'spikes'} on his steps` : 'spikes differ'} · {p.error.toExponential(0)} mV</span>
+				</li>
+			))
+		}
+	</ol>
+	<figcaption>
+		Blue is sparx's <code>izhikevich_2004(pattern)</code>, orange his <code>figure1.m</code> run in GNU Octave, each with its own current, step and
+		start. The voltages differ by at most the figure under each panel, between spikes. In class 2 excitability, Octave's <code>V^2</code> rounds
+		differently from <code>v * v</code> in about one value in a thousand, and the slow ramp through the bifurcation grows that to 0.012 mV.
+	</figcaption>
+</figure>
+
+<script>
+	import { type Panel, panels } from '../../widgets/parity';
+
+	const root = document.querySelector<HTMLElement>('[data-patterns]');
+	if (root) {
+		new IntersectionObserver(async ([entry], observer) => {
+			if (!entry.isIntersecting) return;
+			observer.disconnect();
+			const data: { patterns: Panel[] } = await (await fetch('/data/parity.json')).json();
+			panels(root, data.patterns);
+		}, { rootMargin: '300px' }).observe(root);
+	}
+</script>
+
+<style>
+	.patterns {
+		margin: 0;
+	}
+	ol {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+		gap: 0.5rem;
+	}
+	li {
+		display: grid;
+		gap: 0.25rem;
+		padding: 0.5rem 0.625rem 0.625rem;
+		border: 1px solid var(--sx-line);
+		border-radius: 0.5rem;
+		background: var(--sx-panel);
+	}
+	canvas {
+		width: 100%;
+		height: 4.5rem;
+		background: var(--sx-page);
+		border-radius: 0.25rem;
+	}
+	.name {
+		font-size: 0.8125rem;
+		font-weight: 550;
+		color: var(--sx-ink);
+	}
+	.fact {
+		font-family: var(--sx-mono);
+		font-size: 0.6875rem;
+		color: var(--sx-muted);
+	}
+	figcaption {
+		margin-top: 0.75rem;
+		font-size: 0.875rem;
+		line-height: 1.5;
+		color: var(--sx-muted);
+	}
+	figcaption code {
+		font-size: 0.8125rem;
+		background: none;
+		color: var(--sx-ink-2);
+	}
+</style>

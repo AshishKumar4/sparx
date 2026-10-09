@@ -1,0 +1,120 @@
+---
+import CodeBlock from '../../components/CodeBlock.astro';
+import LearnPage from '../../components/learn/LearnPage.astro';
+import { colab, source } from '../../data/site.mjs';
+import graph from '../../../public/pilot/nir.json';
+import code from '../../../snippets/nir.py?raw';
+
+const order = ['input', '0', '1', '2', '3', '4', '5', 'output'];
+const nodes = order.map((name) => graph.nodes.find((n) => n.name === name)).filter((n) => n !== undefined);
+const fmt = (v: number) => (Math.abs(v) >= 100 || (Math.abs(v) < 0.01 && v !== 0) ? v.toExponential(2) : v.toPrecision(3));
+const kb = Math.round(graph.bytes / 1024);
+---
+
+<LearnPage
+	slug="nir"
+	title="NIR export"
+	description="A trained spiking network is only useful where it can run. NIR describes one in continuous time, so another simulator, or a neuromorphic chip's toolchain, can read it."
+>
+	<h2>A network as a graph of equations</h2>
+	<p>
+		The Neuromorphic Intermediate Representation (Pedersen et al., Nature Communications 2024) stores a spiking network as a graph of nodes,
+		each a primitive with its parameters: affine maps, convolutions, and neurons such as LIF written as differential equations in seconds.
+		It leaves the step to the reader. A sparx <code>LIF</code> is the discrete <code>v = decay * v + x</code>, so exporting one names how time
+		was discretized: by default the leak's exact solution over a step, which gives <code>tau = -dt / ln(decay)</code> and{' '}
+		<code>r = 1 / (1 - decay)</code>.
+	</p>
+
+	<h2>The pilot, exported</h2>
+	<p>
+		This is the network flying the drone on the front page, as <code>sparx.nir.to_nir</code> writes it with a step of 10 ms. Its LIF neurons'
+		time constant of 3 steps becomes 30 ms.
+	</p>
+	<ol class="wide graph">
+		{
+			nodes.map((n) => (
+				<li class={n.type.toLowerCase()}>
+					<span class="type">{n.type}</span>
+					<span class="name">{n.name === 'input' || n.name === 'output' ? n.name : `node ${n.name}`}</span>
+					{Object.entries(n.fields).map(([key, f]) => (
+						<span class="field">
+							<code>{key}</code> [{f.shape.join(' × ')}] {f.min === f.max ? fmt(f.mean) : `${fmt(f.min)} to ${fmt(f.max)}`}
+						</span>
+					))}
+				</li>
+			))
+		}
+	</ol>
+	<p>
+		<a href="/pilot/pilot.nir" download>Download pilot.nir</a> ({kb} KB, HDF5). <code>sparx.nir.from_nir</code> reads it back into an{' '}
+		<code>nn.Sequential</code> of the same layers: run on 200 steps of random input, the network read back gives exactly the original's output,
+		a largest difference of {graph.round_trip.largest_difference}.
+	</p>
+	<CodeBlock code={code} colab={colab('nir')} source={source('src/sparx/nir.py')} />
+
+	<h2>What exports</h2>
+	<p>
+		<code>nn.Sequential</code> stacks of dense, convolution and flatten layers, hard-reset <code>LIF</code> and <code>IF</code> with one
+		threshold and time constant, <code>LI</code>, and dense recurrent <code>LIF</code>. Soft reset, adaptive and physical neurons, sparse or
+		plastic recurrence and learned delays have no NIR form here, and <code>SpikingMLP</code> and <code>SEWResNet</code> do not export as models
+		(<a href="/docs/status/">status</a>). The pilot was built from exportable layers on purpose: its LIF neurons reset to zero.
+	</p>
+
+	<h2>Checked</h2>
+	<div class="checked">
+		<p>
+			sparx's export and import are checked against snnTorch (<code>tests/test_nir.py</code>): the node types sparx writes run spike for spike in
+			snnTorch, and stacks round-trip bit for bit through both discretizations. The pilot's own round trip above ran in{' '}
+			<code>site/lab/pilot.py nir</code>, with NIR {graph.nir}.
+		</p>
+	</div>
+</LearnPage>
+
+<style>
+	.graph {
+		list-style: none;
+		padding: 0;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		align-items: stretch;
+	}
+	.graph li {
+		position: relative;
+		display: grid;
+		align-content: start;
+		gap: 0.25rem;
+		min-width: 9rem;
+		flex: 1;
+		padding: 0.75rem 0.875rem;
+		border: 1px solid var(--sx-line);
+		border-radius: 0.5rem;
+		background: var(--sx-panel);
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+	}
+	.graph li.lif {
+		border-color: color-mix(in srgb, var(--sx-spike) 50%, var(--sx-line));
+	}
+	.graph li.li {
+		border-color: color-mix(in srgb, var(--sx-membrane) 50%, var(--sx-line));
+	}
+	.type {
+		font-weight: 650;
+		font-size: 0.9375rem;
+		color: var(--sx-ink);
+	}
+	.name {
+		font-family: var(--sx-mono);
+	}
+	.field {
+		font-family: var(--sx-mono);
+		font-size: 0.6875rem;
+		line-height: 1.5;
+	}
+	.field code {
+		color: var(--sx-ink-2);
+		background: none;
+		padding: 0;
+	}
+</style>

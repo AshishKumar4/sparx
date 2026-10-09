@@ -1,0 +1,125 @@
+---
+import { readFileSync } from 'node:fs';
+import Chart from '../../components/Chart.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import LearnPage from '../../components/learn/LearnPage.astro';
+import { source } from '../../data/site.mjs';
+import { Pilot, type PilotModel } from '../../engines/pilot';
+import lesions from '../../../public/pilot/lesions.json';
+import model from '../../../public/pilot/pilot.json';
+import pilotCode from '../../../snippets/pilot.py?raw';
+
+const pilotModel = model as unknown as PilotModel;
+const evaluation = model.evaluation as Record<string, number>;
+const meta = model.meta as { trained: Record<string, number>; history: { step: number; distance: number; rate: number; seconds: number }[] };
+const trained = meta.trained;
+const minutes = Math.round(meta.history.at(-1)!.seconds / 60);
+const percent = (x: number) => `${Math.round(x * 1000) / 10}%`;
+const weights = pilotModel.layers.reduce((n, l) => n + (l.kind === 'dense' ? l.inputs * l.outputs + l.outputs : 0), 0);
+
+// The check site/test/pilot.test.ts makes, made again here so the page states what the build saw.
+const recorded = JSON.parse(readFileSync(new URL('../../../test/fixtures/pilot.json', import.meta.url), 'utf8'));
+let spikes = 0;
+let mismatched = 0;
+let state = 0;
+let steps = 0;
+for (const flight of recorded.flights) {
+	const pilot = new Pilot(pilotModel);
+	pilot.state.set(flight.start);
+	for (let t = 0; t < flight.targets.length; t++) {
+		for (let i = 0; i < 6; i++) pilot.state[i] += flight.kicks[t][i];
+		pilot.step(flight.targets[t][0], flight.targets[t][1], flight.box[0], flight.box[1]);
+		const fired = [...pilot.spikes.keys()].filter((i) => pilot.spikes[i]);
+		spikes += fired.length;
+		if (fired.join() !== flight.spikes[t].join()) mismatched++;
+		for (let i = 0; i < 6; i++) state = Math.max(state, Math.abs(pilot.state[i] - flight.states[t][i]));
+		steps++;
+	}
+}
+if (mismatched) throw new Error(`the browser's pilot fired differently from sparx's on ${mismatched} steps`);
+const lesionPoints = lesions.rows.flatMap((r) => r.arrived.map((a) => [r.silenced, a * 100] as [number, number]));
+const lesionMeans = lesions.rows.map((r) => [r.silenced, (r.arrived.reduce((a, b) => a + b, 0) / r.arrived.length) * 100] as [number, number]);
+---
+
+<LearnPage
+	slug="pilot"
+	title="The pilot"
+	description="How the network on the front page learned to fly a drone with nothing to imitate, how much of it it needs, and how the browser runs the network sparx trained."
+>
+	<h2>The drone</h2>
+	<p>
+		The drone is a bar with a rotor at each end, in a vertical plane: mass 1 kg, arms of 25 cm, at most 12 N per rotor, with some air drag. Its
+		state is where it is, how fast it moves, its angle and its spin. Every 10 ms the physics takes one semi-implicit Euler step: the two
+		thrusts push along the drone's up axis, their difference turns it, and gravity pulls it down. A drone that hits the edge of its box
+		bounces off at 30% of its speed.
+	</p>
+	<p>
+		The pilot reads seven numbers each step: the way to its target (clipped to 1.5 m, so a far target reads as "that way"), its velocity, the
+		sine and cosine of its angle, and its spin. They enter a dense layer as currents. Two layers of 64 LIF neurons follow, then two leaky
+		integrators whose membranes set the rotors' thrust through a sigmoid. Hovering is a membrane of zero. Nothing else carries memory: the
+		membranes are the network's whole state.
+	</p>
+	<CodeBlock code={pilotCode} source={source('site/lab/pilot.py')} />
+
+	<h2>Learning by gradients through physics</h2>
+	<p>
+		The physics is written in JAX, so a flight is differentiable end to end: through the drone, and through the spikes by their surrogate.
+		Each training step flies {trained.batch} drones for {trained.horizon / 100} s from random states, 40% of them at any angle, in boxes from a
+		phone's shape to an ultrawide's, chasing targets that jump every 1.2 s on average, through gusts. The loss is their mean distance to their
+		targets, plus small penalties on tilt and spin, and on neurons firing outside a band of rates. Adam follows its gradient.
+	</p>
+	<div class="wide">
+		<Chart
+			title="Mean distance to the target during training"
+			series={[{ points: meta.history.map((h) => [h.step, h.distance] as [number, number]), role: 'learn' }]}
+			x={{ label: 'training step', ticks: [0, 1000, 2000, 3000, 4000], min: 0, max: trained.steps }}
+			y={{ label: 'distance (m)', ticks: [0, 1, 2], min: 0, max: 2.5, format: (v) => v.toFixed(0) }}
+		>
+			Mean distance to the target over training flights, which keep moving the target and pushing the drone, so it never reaches zero.
+			{trained.steps.toLocaleString('en-US')} steps took {minutes} minutes on a 4-vCPU container.
+		</Chart>
+	</div>
+	<p>
+		There is no expert to copy and no reward to estimate: just the derivative of the distance with respect to every weight, through two
+		seconds of flight. The gradient is clipped to a norm of 1, which keeps an occasional exploding one from undoing the rest.
+	</p>
+
+	<h2>How well it flies</h2>
+	<p>
+		On 1,000 flights of 6 s to a fixed target from random starts, half of them at any angle, it arrived within 15 cm and stayed there on{' '}
+		{percent(evaluation.arrived)}, in a median of {evaluation.median_time_s.toFixed(2)} s. That includes all {evaluation.inverted_starts} starts more
+		than a quarter turn from upright. On 1,000 more, thrown at about 4 m/s and spun at about 15 rad/s, it arrived on{' '}
+		{percent(evaluation.arrived_thrown)}. After 6 s the median drone was {(evaluation.final_distance_median_m * 100).toFixed(1)} cm from its target.
+	</p>
+
+	<h2>Silencing neurons</h2>
+	<p>
+		On the front page you can silence neurons and watch the flying get worse. Here is the same experiment in sparx: silence neurons at random
+		from both layers, five times for each count, and fly 500 flights each time.
+	</p>
+	<div class="wide">
+		<Chart
+			title="Share of flights that reach the target, against the number of silenced neurons"
+			series={[{ points: lesionPoints, role: 'spike', dots: true }, { points: lesionMeans, role: 'ink' }]}
+			x={{ label: 'neurons silenced, of 128', ticks: [0, 16, 32, 48, 64, 80, 96, 112], min: 0, max: 112 }}
+			y={{ label: 'flights arriving (%)', ticks: [0, 50, 100], min: 0, max: 100 }}
+		>
+			Each dot is one random set of silenced neurons; the line is their mean.
+		</Chart>
+	</div>
+	<p>
+		The network is not uniformly redundant. Most sets of 8 or 16 silenced neurons leave it flying, but one set of 8 grounded it entirely: some
+		neurons carry something the rest cannot replace. By 48 the drone mostly falls, and past 64 it never arrives.
+	</p>
+
+	<h2>The browser runs sparx's network</h2>
+	<p>
+		The front page loads the trained weights, {weights.toLocaleString('en-US')} numbers, and steps the network and the physics in TypeScript, in double precision, with
+		the same operations in the same order as sparx. When this page was built, it flew sparx's two recorded float64 flights,{' '}
+		{steps.toLocaleString('en-US')} steps with targets, gusts and spins, and fired the same {spikes.toLocaleString('en-US')} spikes, every one
+		at the same step. The drone's state stayed within {state.toExponential(0)} of sparx's.
+	</p>
+	<p>
+		sparx exports the same network through NIR, the format neuromorphic hardware and other simulators read: <a href="/learn/nir/">NIR export</a>.
+	</p>
+</LearnPage>

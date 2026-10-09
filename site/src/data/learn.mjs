@@ -8,5 +8,5 @@ export const explainers = [
 	{ slug: 'networks', title: 'Networks', summary: "Brunel's balanced network in each of its regimes, simulated as sparx simulates it.", role: 'bio' },
 	{ slug: 'simulators', title: 'sparx, NEST and Brian2', summary: 'The same neurons in three simulators, overlaid, with the differences measured and named.', role: 'bio' },
 	{ slug: 'pilot', title: 'The pilot', summary: 'How the drone on the front page learned to fly, what silencing its neurons does, and how the browser matches sparx.', role: 'spike' },
-	{ slug: 'nir', title: 'NIR export', summary: 'The pilot as a NIR graph that snnTorch, Norse, Lava and neuromorphic chips read.', role: 'spike' },
+	{ slug: 'nir', title: 'NIR export', summary: 'The pilot as a NIR graph, the format other simulators and neuromorphic hardware toolchains read.', role: 'spike' },
 ];

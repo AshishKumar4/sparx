@@ -15,7 +15,7 @@ import code from '../../../snippets/stdp.py?raw';
 	<h2>Spike-timing-dependent plasticity</h2>
 	<p>
 		When an input spikes shortly before its neuron does, it probably helped, and STDP strengthens the synapse. When it spikes shortly after, it
-		didn't, and STDP weakens it. The closer the two spikes, the larger the change. <code>sparx.dynamics.PairSTDP</code> is NEST's
+		didn't, and STDP weakens it. The closer the two spikes, the larger the change. <code>sparx.dynamics.PairSTDP</code> is NEST's{' '}
 		<code>stdp_synapse</code>: each neuron keeps a trace of its recent spikes, and each spike reads the other side's trace.
 	</p>
 	<div class="wide"><StdpWindow /></div>
@@ -48,7 +48,7 @@ import code from '../../../snippets/stdp.py?raw';
 	<div class="checked">
 		<p>
 			The browser's <code>PairSTDP</code> runs on recorded spikes beside sparx's in <code>site/test/learning.test.ts</code>: twelve synapses
-			for 3,000 steps, additive and multiplicative, agree to 2e-15. Its neuron is the <code>LeakyIntegrateAndFire</code> that
+			for 3,000 steps, additive and multiplicative, agree to 2e-15. Its neuron is the <code>LeakyIntegrateAndFire</code> that{' '}
 			<a href="/learn/neuron/">Neurons</a> checks.
 		</p>
 		<p>

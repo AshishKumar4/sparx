@@ -25,7 +25,7 @@ import teach from '../../../snippets/teach.py?raw';
 	</p>
 	<div class="wide"><SurrogatePlot height="16rem" /></div>
 	<p>
-		<code>sparx.spike</code> is a <code>jax.custom_jvp</code>, so the same rule serves <code>jax.grad</code>, <code>jax.jvp</code> and
+		<code>sparx.spike</code> is a <code>jax.custom_jvp</code>, so the same rule serves <code>jax.grad</code>, <code>jax.jvp</code> and{' '}
 		<code>vmap</code>. Every neuron takes its surrogate as an argument: <code>sparx.nn.LIF(surrogate=FastSigmoid(100.0))</code>.
 	</p>
 
@@ -54,7 +54,7 @@ import teach from '../../../snippets/teach.py?raw';
 	<div class="checked">
 		<p>
 			The figure computes its gradient by hand in the browser. <code>site/test/learning.test.ts</code> compares it with <code>jax.grad</code>
-			through <code>sparx.run</code> on the same inputs, weights and targets, for <code>ATan</code>, <code>FastSigmoid</code> and
+			through <code>sparx.run</code> on the same inputs, weights and targets, for <code>ATan</code>, <code>FastSigmoid</code> and{' '}
 			<code>Triangle</code>. Every entry agrees to within 5e-16.
 		</p>
 		<p>

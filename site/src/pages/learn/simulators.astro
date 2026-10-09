@@ -1,0 +1,73 @@
+---
+import LearnPage from '../../components/learn/LearnPage.astro';
+import Parity from '../../components/live/Parity.astro';
+import Patterns from '../../components/live/Patterns.astro';
+---
+
+<LearnPage
+	slug="simulators"
+	title="sparx, NEST and Brian2"
+	description="A simulator is only as good as its agreement with the ones neuroscientists already trust. Here are sparx's voltages over NEST's, Brian2's and Izhikevich's own, and how far apart they are."
+>
+	<h2>Three kinds of agreement</h2>
+	<p>
+		Two simulators that integrate the same equations the same way, in the same precision, should produce the same numbers to rounding. Where
+		they integrate differently, the right claim is a measured tolerance, and the reason for it. Where the system is chaotic, as large random
+		networks are, the last bit of rounding grows into different spikes, and the right comparison is statistics over many runs. sparx states
+		which of the three each check is.
+	</p>
+	<p>
+		Below, sparx runs the inputs of the committed reference fixtures, the same ones its parity tests run: 300 ms of random excitatory and
+		inhibitory spike trains and a constant current, in float64. Orange is the reference, blue is sparx drawn over it, and the dots below are
+		their difference on a log scale.
+	</p>
+	<div class="wide"><Parity /></div>
+	<ul>
+		<li>
+			<strong>Current synapses:</strong> NEST and sparx both solve the membrane and the synaptic currents exactly over each step, so they agree
+			to rounding, 1e-13 mV.
+		</li>
+		<li>
+			<strong>Conductance synapses:</strong> NEST integrates adaptively to within 1e-9 mV of the truth. sparx holds each conductance at its
+			exact mean over the step, a second-order scheme, and stays within about 1e-3 mV; halve the step and its error falls fourfold. Run as
+			Brian2's <code>exponential_euler</code> holds the conductance, sparx is Brian2 to rounding.
+		</li>
+		<li>
+			<strong>Izhikevich:</strong> compiled, XLA fuses the quadratic's arithmetic and rounds its last bit differently, and the membrane
+			amplifies that until a spike moves by a step. Run op by op, sparx is NEST's run to the last bit.
+		</li>
+	</ul>
+
+	<h2>Izhikevich's twenty patterns</h2>
+	<p>
+		Izhikevich's 2004 paper shows twenty behaviours of one neuron model with four parameters, from tonic spiking to inhibition-induced
+		bursting, each made by his own short MATLAB script. sparx runs each panel with his current, step and starting state.
+	</p>
+	<div class="wide"><Patterns /></div>
+
+	<h2>Where it does not match, and what is unmeasured</h2>
+	<ul>
+		<li>AdEx: every spike within 0.8 ms of NEST's adaptive solver at ten substeps, within 0.1 ms at a hundred; not to rounding.</li>
+		<li>Hodgkin-Huxley: every spike within one step of NEST's, and within 0.02 mV with <code>rk4</code> at 0.025 ms.</li>
+		<li>
+			Chaotic networks (Brunel, CUBA, COBA, the microcircuit's own draws): rates, irregularity and synchrony within the references' spread over
+			seeds, not spikes.
+		</li>
+		<li>
+			Speed, on a 4-core CPU: a simulated second of Brunel's network takes sparx 9.6 s, NEST 7.5 s and Brian2 11.8 s; the cortical
+			microcircuit, sparx 8.8 s and NEST 2.9 s. No GPU or TPU numbers exist yet.
+		</li>
+	</ul>
+	<p>
+		The <a href="/docs/fidelity/">fidelity ledger</a> lists every model's checks, the observed error and every known difference, and{' '}
+		<a href="/docs/performance/">performance</a> the measurements.
+	</p>
+
+	<h2>Checked</h2>
+	<div class="checked">
+		<p>
+			Every trace here comes from <code>site/lab/parity.py</code>, which runs the helpers of sparx's <code>tests/test_simulators.py</code> on
+			the fixtures NEST 3.10, Brian2 2.10 and GNU Octave produced, and saves both traces and their largest difference.
+		</p>
+	</div>
+</LearnPage>

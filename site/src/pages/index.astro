@@ -52,7 +52,7 @@ const kinds = { exact: 'Same numbers', tolerance: 'Within a tolerance', statisti
 		<Section id="train" label="Training" role="learn" title="Layers that train like any Flax module" flip>
 			<p>
 				A spike is a step function, so its derivative is zero almost everywhere and gradients cannot pass it. sparx keeps the spike exact
-				on the way forward and uses a smooth surrogate's slope on the way back. Its layers are Flax modules over time-major arrays,
+				on the way forward and uses a smooth surrogate's slope on the way back. Its layers are Flax modules over time-major arrays,{' '}
 				<code>[T, B, ...]</code>, so <code>jit</code>, <code>grad</code>, <code>vmap</code>, optax and sharding work as they do for any
 				network.
 			</p>

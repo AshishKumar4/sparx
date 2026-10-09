@@ -19,5 +19,5 @@ def step(params, carried, readings):
 
 params = pilot.init(jax.random.key(0), jnp.zeros((1, 1, 7)))["params"]
 membranes, carried = step(params, {}, jnp.zeros((256, 7)))   # 256 drones, every neuron at rest
-# Training scans step() and the drone's physics over 3 s of flight and takes jax.grad of the
+# Training scans step() and the drone's physics over 2 s of flight and takes jax.grad of the
 # distance to the target: through the spikes by their surrogate, and through the physics.

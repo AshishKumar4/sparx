@@ -1,0 +1,88 @@
+---
+// sparx beside NEST, Brian2 and Izhikevich's code on the committed fixtures' inputs (site/lab/parity.py).
+import data from '../../../public/data/parity.json';
+import Choice from './Choice.astro';
+import Figure from './Figure.astro';
+import Slider from './Slider.astro';
+
+const cases = data.cases;
+const kind = { exact: 'same numbers', tolerance: 'within a tolerance' } as Record<string, string>;
+const describe = (c: (typeof cases)[number]) =>
+	`${c.same_spikes ? `the same ${c.sparx.spikes.length} spikes` : 'spikes differ'}; voltages within ${c.error === 0 ? '0, to the last bit' : `${c.error.toExponential(1)} mV`}`;
+---
+
+<div data-parity>
+	<Figure engine="recorded runs" height="20rem">
+		<canvas role="img" aria-label="sparx's membrane voltage drawn over the reference simulator's on the same input, and the size of their difference on a log scale"></canvas>
+		<Fragment slot="controls">
+			<Choice name="case" label="Model and reference" value={cases[0].name} options={cases.map((c) => ({ value: c.name, label: `${c.title.split(',')[0]} · ${c.reference.split(' (')[0]}` }))} />
+			<Slider name="zoom" label="Zoom" min={1} max={20} step={1} value={1} unit="×" digits={0} />
+		</Fragment>
+		<div slot="after" class="facts">
+			{
+				cases.map((c, k) => (
+					<div data-case={c.name} hidden={k !== 0}>
+						<p>
+							<strong>{c.title}</strong> against {c.reference}: <span class:list={['kind', c.kind]}>{kind[c.kind]}</span> {describe(c)}.
+						</p>
+						<p>{c.note} Test: <code>{c.test}</code>.</p>
+					</div>
+				))
+			}
+		</div>
+	</Figure>
+</div>
+
+<script>
+	import { controls } from '../../widgets/controls';
+	import { overlay, type Case } from '../../widgets/parity';
+
+	const roots = document.querySelectorAll<HTMLElement>('[data-parity]');
+	const data: { cases: Case[] } = roots.length ? await (await fetch('/data/parity.json')).json() : { cases: [] };
+	for (const root of roots) {
+		const figure = overlay(root.querySelector('canvas') as HTMLCanvasElement);
+		const show = () => {
+			const name = ui.choice('case');
+			figure.show(data.cases.find((c) => c.name === name) as Case);
+			for (const el of root.querySelectorAll<HTMLElement>('[data-case]')) el.hidden = el.dataset.case !== name;
+		};
+		const ui = controls(root, (what) => {
+			if (what === 'zoom') {
+				const z = ui.read('zoom');
+				figure.zoom([0, 1 / z]);
+			} else show();
+		});
+		show();
+	}
+</script>
+
+<style>
+	.facts {
+		padding: 0 1rem 0.875rem;
+		font-size: 0.8125rem;
+		line-height: 1.5;
+		color: var(--sx-ink-2);
+	}
+	.facts p {
+		margin: 0 0 0.375rem;
+	}
+	.facts code {
+		font-size: 0.75rem;
+		color: var(--sx-muted);
+		background: none;
+	}
+	.kind {
+		font-family: var(--sx-mono);
+		font-size: 0.6875rem;
+		padding: 0.05rem 0.375rem;
+		border-radius: 0.25rem;
+	}
+	.kind.exact {
+		color: var(--sx-bio);
+		background: var(--sx-bio-soft);
+	}
+	.kind.tolerance {
+		color: var(--sx-membrane);
+		background: var(--sx-membrane-soft);
+	}
+</style>
