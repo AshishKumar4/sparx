@@ -26,9 +26,8 @@ import brunel from '../../../snippets/brunel.py?raw';
 	<p>
 		Each dot is a spike: 160 excitatory neurons above, 40 inhibitory below, over the last 400 ms; the trace is the excitatory population's rate.
 		The network runs in a worker in your browser with sparx's step: membranes solved exactly over 0.1 ms, delta synapses arriving 1.5 ms after
-		the spike and landing before the threshold test, and a reset held for 2 ms. Brunel's regimes need his in-degree of 1,000 to be clean; at
-		2,500 neurons each one receives 250 inputs, and the states are blurrier. Choose 12,500 neurons for the paper's network, at the cost of
-		speed.
+		the spike and landing before the threshold test, and a reset held for 2 ms. Brunel's figures use 12,500 neurons, each receiving 1,250 inputs;
+		at 2,500 each receives 250, and the regimes are less distinct than his. The 5,000-neuron network gives each 500, and runs slower.
 	</p>
 	<CodeBlock code={brunel} colab={colab('brunel')} source={source('src/sparx/graph/models.py')} />
 

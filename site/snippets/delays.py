@@ -6,17 +6,19 @@ from sparx.nn import LI, DelayedDense
 
 x = jnp.zeros((80, 1, 3)).at[jnp.array([5, 18, 30]), 0, jnp.arange(3)].set(1.0)  # A, B, C fire once
 layer, readout = DelayedDense(1, max_delay=45, use_bias=False), LI(tau=4.0)
-params = layer.init(jax.random.key(0), x, 8.0)["params"]
+kernel = jnp.full((3, 1), 0.6)
+delay = jnp.array([[4.0], [16.0], [22.0]])
 
 
-def loss(params, sigma):                     # minus the readout at step 50
-    return -readout.apply({}, layer.apply({"params": params}, x, sigma))[50, 0, 0]
+def loss(delay, sigma):                      # minus the readout at step 50
+    y = layer.apply({"params": {"kernel": kernel, "delay": delay}}, x, sigma)
+    return -readout.apply({}, y)[50, 0, 0]
 
 
-adam = optax.masked(optax.adam(0.6), {"kernel": False, "delay": True})   # learn the delays only
-state = adam.init(params)
+adam = optax.adam(0.6)
+state = adam.init(delay)
 grad = jax.jit(jax.grad(loss))
 for sigma in jnp.geomspace(8.0, 0.5, 260):   # the Gaussians narrow as they train
-    updates, state = adam.update(grad(params, sigma), state)
-    params = optax.apply_updates(params, updates)
-print(params["delay"][:, 0].round(), -loss(params, 0))   # deployed: each delay rounded
+    updates, state = adam.update(grad(delay, sigma), state)
+    delay = jnp.clip(optax.apply_updates(delay, updates), 0, 45)
+print(delay[:, 0].round(), -loss(delay.round(), 0))   # deployed: each delay rounded

@@ -40,17 +40,19 @@ export class DeltaNetwork {
 		this.v = new Float64Array(n).fill(spec.e_l);
 		this.refractory = new Float64Array(n);
 		this.fired = new Uint8Array(n);
+		// Each neuron's out-edges, laid end to end in the order they were given: a counting sort by `pre`.
 		const { pre, post, weight } = spec.edges;
-		const order = Array.from(pre.keys()).sort((a, b) => pre[a] - pre[b] || a - b);
 		this.start = new Int32Array(n + 1);
-		this.targets = new Int32Array(order.length);
-		this.weights = new Float64Array(order.length);
-		for (const [k, e] of order.entries()) {
+		for (const i of pre) this.start[i + 1]++;
+		for (let i = 0; i < n; i++) this.start[i + 1] += this.start[i];
+		const next = this.start.slice(0, n);
+		this.targets = new Int32Array(pre.length);
+		this.weights = new Float64Array(pre.length);
+		for (let e = 0; e < pre.length; e++) {
+			const k = next[pre[e]]++;
 			this.targets[k] = post[e];
 			this.weights[k] = weight[e];
-			this.start[pre[e] + 1]++;
 		}
-		for (let i = 0; i < n; i++) this.start[i + 1] += this.start[i];
 		this.ring = Array.from({ length: spec.delay + 1 }, () => new Float64Array(n));
 		this.leak = Math.exp(-spec.dt / spec.tau_m);
 	}
