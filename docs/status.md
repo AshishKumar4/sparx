@@ -57,7 +57,7 @@ sparx uses dew wherever dew has the concept; changes dew needs go to dew as pull
 | What | Where it helps |
 | --- | --- |
 | `Supervised`'s metrics in the validation pass | `examples/pattern_completion.py` scores its holdout's zeroed bits itself after `fit` |
-| Logical-axis declarations scoped to the class that declares them | sparx's module names (`readout`, `dense_0`, ...) declare axes for any model in the process with a module of that name |
+| Boxed logical axes recorded with a checkpoint | dew `7ca258a0` places a parameter by its own `nn.with_logical_partitioning` names inside the trainer only, so a restore onto a mesh would lose them; sparx keeps `(module, parameter)` suffix declarations, which also place any other model's module of that name |
 
 Landed in dew and taken here: `Objective.with_gradients` leaves the rule out of a value-only pass, `Dataset.validation` reads a held-out split alone, `OMITTED`, `Omitted`, `Artifact` and `logical_axes` are exported (`b255a88d`), and `Objective.row_weights` gives a rule its rows' weights (`7e13c23a`).
 
