@@ -44,11 +44,14 @@ for (const size of widths) {
 		page.on('console', (message) => message.type() === 'error' && notes.push(message.text()));
 		for (const path of pages) {
 			await page.goto(base + path, { waitUntil: 'networkidle' });
-			// Figures start when they near the screen, as a reader scrolls to them; scroll through so each has.
+			// Figures start when they near the screen, as a reader scrolls to them, and some load data first;
+			// scroll through twice, so each has started and then drawn while on screen.
 			await page.evaluate(async () => {
-				for (let y = 0; y < document.documentElement.scrollHeight; y += innerHeight * 0.8) {
-					scrollTo(0, y);
-					await new Promise((done) => setTimeout(done, 100));
+				for (const pass of [0, 1]) {
+					for (let y = 0; y < document.documentElement.scrollHeight; y += innerHeight * 0.8) {
+						scrollTo(0, y);
+						await new Promise((done) => setTimeout(done, pass ? 60 : 100));
+					}
 				}
 				scrollTo(0, 0);
 			});

@@ -25,7 +25,8 @@ The car is a kinematic bicycle: a wheelbase $L$ of 0.4 m, steering $\delta$ of a
 $$
 \begin{gathered}
 \delta = 0.6 \tanh u_1, \qquad v^\ast = 6\,\sigma(u_2) \\
-v \leftarrow v + \frac{\Delta t}{0.5}\,(v^\ast - v), \qquad \psi \leftarrow \psi + \Delta t\, \frac{v \tan\delta}{L}, \qquad (x, y) \leftarrow (x, y) + \Delta t\, v\, (\cos\psi, \sin\psi)
+v \leftarrow v + \frac{\Delta t}{0.5}\,(v^\ast - v), \qquad \psi \leftarrow \psi + \Delta t\, \frac{v \tan\delta}{L} \\
+(x, y) \leftarrow (x, y) + \Delta t\, v\, (\cos\psi, \sin\psi)
 \end{gathered}
 $$
 
