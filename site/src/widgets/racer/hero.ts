@@ -78,6 +78,7 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 	const racer = new Racer(model, track);
 	const pixels = racer.pixels;
 	const hidden = racer.network.neurons;
+	if (!model.layers) throw new Error('the hero draws a dense stack');
 	const [first] = model.layers.flatMap((l) => (l.kind === 'dense' ? [l.outputs] : []));
 	const seen = new Float32Array(2 * pixels);
 	const flash = new Float32Array(hidden);
