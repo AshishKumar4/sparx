@@ -28,11 +28,13 @@ activity at each layer. From commit 290780a frames are standardized per image an
 membranes average their input (`configs/phase2b.json`). That restart stopped too: C seed 1 started
 healthy, its random readout spinning the cars backwards at 1.27 m/s, and within 50 steps learned to stand
 still, where neither the off-road nor the reverse penalty costs anything and a still camera's frame never
-changes; by step 250 its gradient norm had fallen below 1e-3, and it finished no track. C seed 2, from
+changes; by step 300 its gradient norm had fallen below 1e-3, and it finished no track. C seed 2, from
 another random readout, finished 197 of 200. So from commit 673c337 every arm's readout starts at zero
-(`configs/phase2c.json`, the whole comparison again): each car starts straight at 3 m/s, every arm's first
-step has a mean speed of 2.14 m/s at seed 1 and 1.89 at seed 2 and a gradient norm of 54 to 79
-(`configs/phase2-start.json`), and C at seeds 1 and 2 drove at 4.3 to 5.6 m/s from step 50 on. Phase 2
+(`configs/phase2c.json`, the whole comparison again): each car steers straight with a target speed of
+3 m/s, every arm's first step has a mean speed of 2.14 m/s at seed 1 and 1.89 at seed 2 and a gradient norm
+of 54 to 79 (`configs/phase2-start.json`). Trained for about 900 steps on the 4080, C at seeds 1 and 2 had
+mean speeds of 4.3 and 5.0 m/s at step 50 and 5.35 and 5.17 at step 250, never fell below 1.9 m/s at a
+logged step, and scored 1.83 and 1.77 laps on its held-out tracks at step 250. Phase 2
 and 2b's results stay in `results/phase2.json` and `results/phase2b.json` on the `racer-phase2` branch.
 
 ## Why the first published racer was weak

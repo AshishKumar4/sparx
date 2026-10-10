@@ -640,6 +640,11 @@ def fixture(args: argparse.Namespace) -> None:
     world = World(columns=16, rows=8, supersample=2, sees=args.sees)
     net = vision(world, args.neuron)
     params = net.init(jax.random.key(args.seed), jnp.zeros((1, 1, world.features)))["params"]
+    # Training starts the readout at zero; the fixture's is random, so the car depends on every unit.
+    readout = max(name for name in params if name.startswith("Dense_"))
+    kernel = params[readout]["kernel"]
+    params = {**params, readout: {**params[readout], "kernel": jax.nn.initializers.lecun_normal()(
+        jax.random.key(args.seed + 1), kernel.shape, kernel.dtype)}}
     model = json.loads(json.dumps(model_json(net, params, world, {"fixture": True})))
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
