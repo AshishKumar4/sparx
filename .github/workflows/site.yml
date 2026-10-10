@@ -11,6 +11,11 @@ on:
     branches: [ "main" ]
     paths: [ "site/**", "src/sparx/**" ]
   workflow_dispatch:
+    inputs:
+      shoot:
+        description: "A deployed site to screenshot instead, such as https://sparxml.dev"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -21,6 +26,7 @@ concurrency:
 
 jobs:
   site:
+    if: ${{ !inputs.shoot }}
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -92,4 +98,33 @@ jobs:
       with:
         name: dist
         path: site/dist
+        retention-days: 14
+
+  # Every page of a deployed site at 1440 and 390, dark and light, as the build's own are shot.
+  deployed:
+    if: ${{ inputs.shoot }}
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 11.17.0
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+        cache-dependency-path: site/pnpm-lock.yaml
+    - name: Shoot
+      working-directory: site
+      env:
+        BASE: ${{ inputs.shoot }}
+      run: |
+        pnpm install --frozen-lockfile
+        paths=$(curl -sf "$BASE/sitemap-0.xml" | grep -o '<loc>[^<]*</loc>' | sed -e 's|<loc>[^/]*//[^/]*||' -e 's|</loc>||' | grep -v '^/docs/api/')
+        CHROME=$(command -v google-chrome) node scripts/shots.mjs shots $paths
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: deployed-shots
+        path: site/shots
         retention-days: 14
