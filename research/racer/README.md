@@ -24,11 +24,16 @@ Phase 2 stopped after 9 runs because arm C, seed 1, never moved: its frames reac
 brightness, and from the first step the speed readout's sigmoid sat at zero, with gradient norms falling to
 1e-12. The graded arms on events started slow too, at 0.08 to 0.48 m/s on the first step against the
 spiking arms' 1.9 to 2.1, because a graded unit's summing membrane, with no reset to bound it, grows its
-activity at each layer. From commit 290780a on, frames are standardized per image and the graded units'
-membranes average their input (`configs/phase2b.json`, the same runs). Every arm's first step, at seeds 1
-and 2, then has a finite gradient of norm 54 to 431 (`configs/phase2-start.json`). The runs of seed 1's
-spiking arms and seed 2's A, whose code did not change, stand; B, C and sigma-delta of seed 1 and B of
-seed 2 run again.
+activity at each layer. From commit 290780a frames are standardized per image and the graded units'
+membranes average their input (`configs/phase2b.json`). That restart stopped too: C seed 1 started
+healthy, its random readout spinning the cars backwards at 1.27 m/s, and within 50 steps learned to stand
+still, where neither the off-road nor the reverse penalty costs anything and a still camera's frame never
+changes; by step 250 its gradient norm had fallen below 1e-3, and it finished no track. C seed 2, from
+another random readout, finished 197 of 200. So from commit 673c337 every arm's readout starts at zero
+(`configs/phase2c.json`, the whole comparison again): each car starts straight at 3 m/s, every arm's first
+step has a mean speed of 2.14 m/s at seed 1 and 1.89 at seed 2 and a gradient norm of 54 to 79
+(`configs/phase2-start.json`), and C at seeds 1 and 2 drove at 4.3 to 5.6 m/s from step 50 on. Phase 2
+and 2b's results stay in `results/phase2.json` and `results/phase2b.json` on the `racer-phase2` branch.
 
 ## Why the first published racer was weak
 
