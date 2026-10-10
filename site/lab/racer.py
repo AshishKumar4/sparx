@@ -479,7 +479,8 @@ def evaluation(net, params, world: World, ground, points: jax.Array, seconds: fl
         }
         for i, (f, t, o) in enumerate(zip(finished, lap_time, off_road, strict=True))
     ]
-    worst = int(np.argmax(np.where(finished, -1.0, 1.0) * 1000 + off_road))
+    # The hardest track: one it failed, else the one it spent longest off the road, else its slowest lap.
+    worst = int(np.lexsort((np.where(finished, lap_time, np.inf), off_road, ~finished))[-1])
     return {
         "summary": {
             "tracks": tracks,
