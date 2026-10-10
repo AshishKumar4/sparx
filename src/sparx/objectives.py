@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import functools
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
@@ -107,9 +107,8 @@ def _with_rule(objective: Objective[Ratio], stats: Ratio, update: Variables, par
 
 
 def _fields(batch: Batch, *keys: str) -> dict[str, jax.Array]:
-    """The fields `keys` of `batch`, and its `VALID_ROWS` when it has them, as arrays: what a compiled
-    evaluation takes. Dew calls `evaluate` outside `jit`, so each objective compiles its own scoring,
-    which would otherwise dispatch one operation at a time."""
+    """The fields `keys` of `batch`, and its `VALID_ROWS` when it has them, as arrays: what dew's
+    compiled `_evaluation_scores` can take, where a batch's other fields may be host values."""
     keys = (*keys, VALID_ROWS) if VALID_ROWS in batch else keys
     return {key: jnp.asarray(batch[key]) for key in keys}
 
@@ -365,14 +364,11 @@ class ActivityFitObjective(Objective[Ratio]):
         metrics = {"distance": stats.mean()[0], "rate": jnp.mean(spikes), "recorded_rate": jnp.mean(target)}
         return stats, Aux(metrics=metrics)
 
-    @functools.cached_property
-    def _compiled_distances(self) -> Callable[[Variables, Batch], tuple[jax.Array, jax.Array, jax.Array]]:
-        return jax.jit(self._distances)
+    def _evaluation_scores(self, variables: Variables, batch: Batch, key: jax.Array) -> TokenScores:
+        return _per_example(self._distances(variables, batch)[0])
 
     def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
-        fields = _fields(batch, self.stimulus.key, self.recording)
-        per_example, _, _ = self._compiled_distances(self.evaluation_variables(params, step), fields)
-        return _per_example(per_example)
+        return super().evaluate(params, _fields(batch, self.stimulus.key, self.recording), step)
 
 
 type EPropRule = Literal["eprop", "random", "bptt"]
@@ -502,22 +498,17 @@ class EPropObjective(Objective[Ratio]):
         update = self._update(grads, variables["params"])
         return _with_rule(self, stats, update, variables["params"]), Aux(metrics={})
 
-    @functools.cached_property
-    def _scores(self) -> Callable[[Variables, Batch], tuple[jax.Array, jax.Array]]:
-        def scores(params: Variables, batch: Batch) -> tuple[jax.Array, jax.Array]:
-            inputs = jnp.swapaxes(jnp.asarray(batch[self.sample.key], jnp.float32), 0, 1)
-            outputs = self.model.apply({"params": params}, inputs)
-            # `mutable` is unset, so apply returns the outputs alone, not a pair.
-            assert not isinstance(outputs, tuple)
-            labels = batch[self.labels]
-            losses = readout_losses("mean", outputs, labels)
-            return losses, jnp.argmax(readout_logits("mean", outputs), -1) == labels
-
-        return jax.jit(scores)
+    def _evaluation_scores(self, variables: Variables, batch: Batch, key: jax.Array) -> TokenScores:
+        inputs = jnp.swapaxes(jnp.asarray(batch[self.sample.key], jnp.float32), 0, 1)
+        outputs = self.model.apply({"params": variables["params"]}, inputs)
+        # `mutable` is unset, so apply returns the outputs alone, not a pair.
+        assert not isinstance(outputs, tuple)
+        labels = batch[self.labels]
+        correct = jnp.argmax(readout_logits("mean", outputs), -1) == labels
+        return _per_example(readout_losses("mean", outputs, labels), correct)
 
     def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
-        params = self.evaluation_variables(params, step)["params"]
-        return _per_example(*self._scores(params, _fields(batch, self.sample.key, self.labels)))
+        return super().evaluate(params, _fields(batch, self.sample.key, self.labels), step)
 
     def task_record(self) -> Mapping[str, JSON]:
         """The recordings as they are, scored by the readout averaged over time."""
@@ -611,14 +602,12 @@ class PredictiveCodingObjective(Objective[Ratio]):
         update = {f"layers_{k}": grad for k, grad in enumerate(grads) if f"layers_{k}" in held}
         return _with_rule(self, stats, update, held), Aux(metrics=metrics)
 
-    @functools.cached_property
-    def _compiled_scored(self) -> Callable[[Variables, Batch], tuple[jax.Array, ...]]:
-        return jax.jit(self._scored)
+    def _evaluation_scores(self, variables: Variables, batch: Batch, key: jax.Array) -> TokenScores:
+        _, labels, target, output = self._scored(variables, batch)
+        return _per_example(squared_error(output, target), jnp.argmax(output, axis=-1) == labels)
 
     def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
-        fields = _fields(batch, self.sample.key, self.labels)
-        _, labels, target, output = self._compiled_scored(self.evaluation_variables(params, step), fields)
-        return _per_example(squared_error(output, target), jnp.argmax(output, axis=-1) == labels)
+        return super().evaluate(params, _fields(batch, self.sample.key, self.labels), step)
 
 
 
@@ -731,12 +720,10 @@ class RNeuralNetObjective(Objective[Ratio]):
         metrics = {"reward": -stats.mean()[0]}
         return _with_rule(self, stats, {"weight": update}, variables["params"]), Aux(metrics=metrics)
 
-    @functools.cached_property
-    def _compiled_last(self) -> Callable[[jax.Array, Batch], jax.Array]:
-        return jax.jit(self._last)
+    def _evaluation_scores(self, variables: Variables, batch: Batch, key: jax.Array) -> TokenScores:
+        outputs = self._last(variables["params"]["weight"], batch)[:, self.net.outputs]
+        correct = jnp.argmax(outputs, axis=-1) == batch[self.labels]
+        return _per_example(jnp.where(correct, -1.0, 1.0), correct)
 
     def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
-        weight = self.evaluation_variables(params, step)["params"]["weight"]
-        outputs = self._compiled_last(weight, _fields(batch, self.sample.key))[:, self.net.outputs]
-        correct = jnp.argmax(outputs, axis=-1) == jnp.asarray(batch[self.labels])
-        return _per_example(jnp.where(correct, -1.0, 1.0), correct)
+        return super().evaluate(params, _fields(batch, self.sample.key, self.labels), step)
