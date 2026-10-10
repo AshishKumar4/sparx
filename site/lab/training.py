@@ -3,7 +3,8 @@
 Dew builds the optimizer: Adam on a warmup-cosine schedule from 0 to `lr` and
 down to `lr / 20`, warming up over a tenth of the run or 100 steps, whichever
 is fewer, with each gradient clipped to norm 1. The loop minimizes
-`loss(params, key) -> (loss, aux)` on a fresh key each step and logs every
+`loss(params, key, progress) -> (loss, aux)` on a fresh key each step, where
+`progress` runs from 0 to 1 over the run (for a curriculum), and logs every
 `log_every` steps.
 """
 
@@ -14,6 +15,7 @@ import time
 from collections.abc import Callable
 
 import jax
+import jax.numpy as jnp
 import optax
 from dew.config import OptimConfig
 from dew.training.optim import Cosine
@@ -30,8 +32,8 @@ def train(loss: Callable, params, *, lr: float, steps: int, seed: int, log_every
     state = tx.init(params)
 
     @jax.jit
-    def update(params, state, key):
-        (value, aux), grads = jax.value_and_grad(loss, has_aux=True)(params, key)
+    def update(params, state, key, progress):
+        (value, aux), grads = jax.value_and_grad(loss, has_aux=True)(params, key, progress)
         updates, state = tx.update(grads, state, params)
         return optax.apply_updates(params, updates), state, value, aux, optax.global_norm(grads)
 
@@ -39,7 +41,7 @@ def train(loss: Callable, params, *, lr: float, steps: int, seed: int, log_every
     key = jax.random.key(seed)
     for step in range(1, steps + 1):
         key, sub = jax.random.split(key)
-        params, state, value, aux, norm = update(params, state, sub)
+        params, state, value, aux, norm = update(params, state, sub, jnp.float32((step - 1) / steps))
         if step % log_every == 0 or step == 1:
             row = {"step": step, "loss": float(value), "grad_norm": float(norm),
                    "seconds": round(time.time() - start, 1)}

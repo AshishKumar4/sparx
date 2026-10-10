@@ -185,7 +185,7 @@ def train(args: argparse.Namespace) -> None:
     )
     net = network(args.hidden, args.tau, args.readout_tau)
     params = net.init(jax.random.key(args.seed), jnp.zeros((1, 1, 7)))["params"]
-    def loss_fn(params, key):
+    def loss_fn(params, key, _progress):
         s0, targets, kicks, box = flights.draw(drone, key, args.batch)
         states, _, spikes = fly(net, params, drone, s0, targets, kicks, box)
         return flight_cost(states, targets, spikes, (args.rate_low, args.rate_high))

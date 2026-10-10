@@ -12,6 +12,7 @@ middle.
 
     python site/lab/racer.py train --out site/public/racer
     python site/lab/racer.py evaluate
+    python site/lab/racer.py difficulty
     python site/lab/racer.py record --out site/test/fixtures/racer.json
 
 The browser runs the same car, camera and network from racer.json (site/src/engines/racer.ts).
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import itertools
 import json
 from pathlib import Path
 
@@ -166,14 +168,19 @@ def inputs(world: World, on: jax.Array, off: jax.Array, car: jax.Array) -> jax.A
     return jnp.concatenate([on, off, car[:, 3:4] / world.max_speed], -1)
 
 
-def race(net, params, world: World, ground, points, car0, steps: int, noise: float = 0.0, key=None):
-    """Drive each car of `car0` `[B, 4]` around its track `points` `[B, N, 2]` for `steps` steps."""
+def race(net, params, world: World, ground, points, car0, steps: int, truncate: int = 0):
+    """Drive each car of `car0` `[B, 4]` around its track `points` `[B, N, 2]` for `steps` steps. With
+    `truncate`, gradients flow back through at most that many steps: the state is cut from its past at
+    every multiple of it."""
     tables = track_tables(points)
     dashes = jnp.maximum(jnp.round(tables[2].sum(-1) / world.dash_period), 1) / 1.0
     dashes = tables[2].sum(-1) / dashes
     batch = car0.shape[0]
 
     def step(carry, t):
+        if truncate:
+            cut = t % truncate == 0
+            carry = jax.tree.map(lambda c: jnp.where(cut, jax.lax.stop_gradient(c), c), carry)
         car, level, carried = carry
         seen = look(world, ground, points, tables, dashes, car)
         level, on, off = sense(world, level, seen)
@@ -194,19 +201,25 @@ def race(net, params, world: World, ground, points, car0, steps: int, noise: flo
 @dataclasses.dataclass(frozen=True)
 class Tracks:
     """Closed tracks drawn at random: a radius of 6 to 10 m bent by four harmonics, stretched, and run
-    either way round."""
+    either way round. `bend` scales the harmonics; with a `floor`, a track's radius never falls below that
+    fraction of its mean, so it stays a simple loop however hard it bends."""
 
     radius: tuple[float, float] = (6.0, 10.0)
     bend: float = 0.9
     stretch: tuple[float, float] = (0.7, 1.3)
+    floor: float = 0.0
 
-    def draw(self, world: World, key: jax.Array, batch: int) -> jax.Array:
+    def draw(self, world: World, key: jax.Array, batch: int, bend: jax.Array | float | None = None,
+             ) -> jax.Array:
         ks = jax.random.split(key, 6)
         theta = 2 * jnp.pi * jnp.arange(world.points) / world.points
         k = jnp.arange(2, 6)
-        amplitude = jax.random.uniform(ks[0], (batch, 4)) * self.bend / k**1.5
+        amplitude = jax.random.uniform(ks[0], (batch, 4)) * (self.bend if bend is None else bend) / k**1.5
         phase = jax.random.uniform(ks[1], (batch, 4), maxval=2 * jnp.pi)
         r = 1 + jnp.sum(amplitude[:, :, None] * jnp.cos(k[None, :, None] * theta + phase[:, :, None]), 1)
+        if self.floor:
+            dip = 1 - jnp.min(r, -1, keepdims=True)
+            r = 1 + (r - 1) * jnp.minimum(1.0, (1 - self.floor) / jnp.maximum(dip, 1e-6))
         radius = jax.random.uniform(ks[2], (batch, 1), minval=self.radius[0], maxval=self.radius[1])
         stretch = jax.random.uniform(ks[3], (batch, 1), minval=self.stretch[0], maxval=self.stretch[1])
         sign = jnp.where(jax.random.uniform(ks[4], (batch, 1)) < 0.5, 1.0, -1.0)
@@ -236,14 +249,15 @@ def starts(world: World, key: jax.Array, points: jax.Array, scatter: float = 1.0
     return jnp.stack([x, y, psi, v], -1)
 
 
-def cost(world: World, out, rates: tuple[float, float]):
+def cost(world: World, out, rates: tuple[float, float], reverse: float = 0.0):
     _, _, on, off, spikes, distance, _, along = out
     lateral = (distance / world.half_width) ** 2
     beyond = jax.nn.relu(distance - world.half_width) ** 2
     rate = jnp.mean(spikes, axis=(0, 1))
     band = jnp.mean(jax.nn.relu(rate - rates[1]) ** 2 + jax.nn.relu(rates[0] - rate) ** 2)
     progress = jnp.mean(along) / world.max_speed
-    loss = jnp.mean(lateral) + 4.0 * jnp.mean(beyond) - 0.5 * progress + 10.0 * band
+    backward = jnp.mean(jax.nn.relu(-along)) / world.max_speed
+    loss = jnp.mean(lateral) + 4.0 * jnp.mean(beyond) - 0.5 * progress + 10.0 * band + reverse * backward
     return loss, {
         "distance": jnp.mean(distance),
         "speed": jnp.mean(along),
@@ -274,11 +288,18 @@ def train(args: argparse.Namespace) -> None:
     ground = tuple(jnp.asarray(g, jnp.float32) for g in world.ground())
     net = network(tuple(args.hidden), args.tau, args.readout_tau)
     params = net.init(jax.random.key(args.seed), jnp.zeros((1, 1, 2 * world.pixels + 1)))["params"]
-    def loss_fn(params, key):
+    if args.curriculum:
+        easy, hard = args.curriculum
+        tracks = Tracks(bend=hard, floor=args.floor)
+
+    def loss_fn(params, key, progress):
         k1, k2 = jax.random.split(key)
-        points = tracks.draw(world, k1, args.batch)
-        out = race(net, params, world, ground, points, starts(world, k2, points), args.horizon)
-        return cost(world, out, (args.rate_low, args.rate_high))
+        # With a curriculum, the bends grow from `easy` to `hard` over the first half of the run.
+        bend = easy + (hard - easy) * jnp.minimum(1.0, 2 * progress) if args.curriculum else None
+        points = tracks.draw(world, k1, args.batch, bend)
+        car0 = starts(world, k2, points)
+        out = race(net, params, world, ground, points, car0, args.horizon, args.truncate)
+        return cost(world, out, (args.rate_low, args.rate_high), args.reverse)
 
     params, history = training.train(loss_fn, params, lr=args.lr, steps=args.steps, seed=args.seed + 1,
                                      log_every=args.log_every)
@@ -294,19 +315,22 @@ def train(args: argparse.Namespace) -> None:
     }
     model = model_json(net, params, world, meta)
     (out / "racer.json").write_text(json.dumps(model))
-    summary = evaluation(net, params, world, ground, args.seed + 1000, tracks=args.eval_tracks)
+    points = Tracks().draw(world, jax.random.key(args.seed + 1000), args.eval_tracks)
+    summary = evaluation(net, params, world, ground, points)
     (out / "evaluation.json").write_text(json.dumps(summary))
     print(json.dumps(summary["summary"]))
+    if args.difficulty:
+        harder = difficulty(net, params, world, ground, args.seed + 2000, args.eval_tracks)
+        (out / "difficulty.json").write_text(json.dumps(harder))
+        print(json.dumps(harder["by_bend"]))
 
 
-def evaluation(
-    net, params, world: World, ground, seed: int, tracks: int = 200, seconds: float = 30.0
-) -> dict:
-    """Each car starts in the middle of an unseen track, at rest, pointing along it, and drives for `seconds`.
-    A lap counts when the car has gone the track's length forward without leaving the road by more than a
-    metre; a car that does leave it that far has failed."""
+def evaluation(net, params, world: World, ground, points: jax.Array, seconds: float = 30.0) -> dict:
+    """Each car starts in the middle of an unseen track of `points`, at rest, pointing along it, and drives
+    for `seconds`. A lap counts when the car has gone the track's length forward without leaving the road
+    by more than a metre; a car that does leave it that far has failed."""
     steps = round(seconds / world.dt)
-    points = Tracks().draw(world, jax.random.key(seed), tracks)
+    tracks = points.shape[0]
     d = points[:, 1] - points[:, 0]
     car0 = jnp.stack([points[:, 0, 0], points[:, 0, 1], jnp.arctan2(d[:, 1], d[:, 0]), jnp.zeros(tracks)], -1)
     run = jax.jit(lambda p, pts, c: race(net, p, world, tuple(jnp.asarray(g) for g in ground), pts, c, steps))
@@ -319,6 +343,7 @@ def evaluation(
     finished = lap.any(0)
     lap_time = np.where(finished, np.argmax(lap, 0) + 1, -1) * world.dt
     off_road = (distance > world.half_width).mean(0)
+    bend = tightest(np.asarray(points))
     per_track = [
         {
             "finished": bool(f),
@@ -327,6 +352,7 @@ def evaluation(
             "crashed": bool(crashed[-1, i]),
             "length": float(length[i]),
             "covered": float(covered[-1, i]),
+            "tightest": float(bend[i]),
         }
         for i, (f, t, o) in enumerate(zip(finished, lap_time, off_road, strict=True))
     ]
@@ -355,11 +381,58 @@ def evaluation(
     }
 
 
+def tightest(points: np.ndarray) -> np.ndarray:
+    """Each closed track's tightest bend, as the radius in metres of the circle that fits it there: from the
+    turn between neighbouring segments over their mean length, averaged over three points. `[B, N, 2]`."""
+    vectors = np.roll(points, -1, axis=1) - points
+    lengths = np.linalg.norm(vectors, axis=-1)
+    heading = np.arctan2(vectors[..., 1], vectors[..., 0])
+    turn = np.angle(np.exp(1j * (heading - np.roll(heading, 1, axis=1))))
+    curvature = turn / (0.5 * (lengths + np.roll(lengths, 1, axis=1)))
+    smooth = (np.roll(curvature, -1, axis=1) + curvature + np.roll(curvature, 1, axis=1)) / 3
+    return 1 / np.abs(smooth).max(1)
+
+
+BENDS = (0.9, 1.2, 1.5, 1.8)
+"""The bends of the harder sets: the training tracks' 0.9, then tighter, each with a floor of 0.35."""
+
+RADII = (0.0, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, np.inf)
+"""The bins of tightest-bend radius (m) the harder sets are reported in."""
+
+
+def difficulty(net, params, world: World, ground, seed: int, tracks: int = 200) -> dict:
+    """The network on `tracks` unseen tracks at each of `BENDS`, and every track's result by the radius of its
+    tightest bend."""
+    rows, by_bend = [], {}
+    for k, bend in enumerate(BENDS):
+        points = Tracks(bend=bend, floor=0.35).draw(world, jax.random.key(seed + k), tracks)
+        result = evaluation(net, params, world, ground, points)
+        by_bend[str(bend)] = result["summary"]
+        rows += [{"bend": bend, **row} for row in result["tracks"]]
+    radius = np.array([row["tightest"] for row in rows])
+    finished = np.array([row["finished"] for row in rows])
+    by_radius = []
+    for lo, hi in itertools.pairwise(RADII):
+        inside = (radius >= lo) & (radius < hi)
+        if inside.any():
+            by_radius.append({"from": lo, "to": None if np.isinf(hi) else hi, "tracks": int(inside.sum()),
+                              "finished": float(finished[inside].mean())})
+    return {"by_bend": by_bend, "by_radius": by_radius, "tracks": rows}
+
+
 def evaluate(args: argparse.Namespace) -> None:
     net, params, world, ground = from_json(json.loads(Path(args.model).read_text()))
-    summary = evaluation(net, params, world, ground, args.seed, tracks=args.tracks)
+    points = Tracks().draw(world, jax.random.key(args.seed), args.tracks)
+    summary = evaluation(net, params, world, ground, points)
     Path(args.out).write_text(json.dumps(summary))
     print(json.dumps(summary["summary"]))
+
+
+def harder(args: argparse.Namespace) -> None:
+    net, params, world, ground = from_json(json.loads(Path(args.model).read_text()))
+    result = difficulty(net, params, world, ground, args.seed, args.tracks)
+    Path(args.out).write_text(json.dumps(result))
+    print(json.dumps({"by_bend": result["by_bend"], "by_radius": result["by_radius"]}))
 
 
 def record(args: argparse.Namespace) -> None:
@@ -407,6 +480,13 @@ def main() -> None:
     t.add_argument("--seed", type=int, default=0)
     t.add_argument("--eval-tracks", type=int, default=200)
     t.add_argument("--log-every", type=int, default=50)
+    t.add_argument("--truncate", type=int, default=0, help="gradients reach back at most this many steps")
+    t.add_argument("--curriculum", type=float, nargs=2, metavar=("EASY", "HARD"),
+                   help="bend the training tracks from EASY to HARD over the first half of the run")
+    t.add_argument("--floor", type=float, default=0.35, help="with a curriculum, the tracks' radius floor")
+    t.add_argument("--reverse", type=float, default=0.0,
+                   help="the weight of the penalty on driving backwards")
+    t.add_argument("--difficulty", action="store_true", help="also score the harder sets (difficulty.json)")
     t.set_defaults(func=train)
     e = commands.add_parser("evaluate")
     e.add_argument("--model", default="site/public/racer/racer.json")
@@ -414,6 +494,12 @@ def main() -> None:
     e.add_argument("--tracks", type=int, default=200)
     e.add_argument("--seed", type=int, default=1000)
     e.set_defaults(func=evaluate)
+    h = commands.add_parser("difficulty")
+    h.add_argument("--model", default="site/public/racer/racer.json")
+    h.add_argument("--out", default="site/public/racer/difficulty.json")
+    h.add_argument("--tracks", type=int, default=200)
+    h.add_argument("--seed", type=int, default=2000)
+    h.set_defaults(func=harder)
     r = commands.add_parser("record")
     r.add_argument("--model", default="site/public/racer/racer.json")
     r.add_argument("--out", default="site/test/fixtures/racer.json")
