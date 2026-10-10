@@ -162,12 +162,12 @@ The `Trainer` from [dew](https://github.com/AshishKumar4/dew) runs sparx's objec
 | Task | Network | Test accuracy |
 | --- | --- | --- |
 | MNIST, rate-coded, 8 steps | 784-512-512 LIF | 97.5% after 2 epochs |
-| SHD, Hammouamri et al.'s recipe, 20 of 150 epochs | 140-256-256 LIF with learned delays | 91.9% (their code on the same machine: 93.6%) |
+| SHD, Hammouamri et al.'s recipe, 150 epochs, three seeds | 140-256-256 LIF with learned delays | 93.99 ± 0.29% at the last epoch (their code on the same GPU: 93.89 ± 0.26%) |
 | SHD, 140 channels | 140-128 ALIF, with and without learned delays | 74.6% and 64.5% |
 | Fashion-MNIST, Seely and Gould's headline cell | ReLU residual MLP, depth 32 | PC-ALM 75.1%, PC 62.2%, backpropagation 77.8% |
 | Pattern completion, Miconi et al.'s task | plastic recurrent network | 0.3% of bits wrong; 50.1% without fast weights |
 
-These are short, untuned runs on a 4-core CPU. The [guide](https://github.com/AshishKumar4/sparx/blob/main/docs/guide.md#results-in-detail) gives the commands, times and comparisons. No GPU or TPU numbers exist yet, and the full-length, multi-seed SHD comparison is still open ([status](https://github.com/AshishKumar4/sparx/blob/main/docs/status.md)).
+The SHD row is the full recipe beside the authors' code, both on an A100, three seeds each ([research/shd](https://github.com/AshishKumar4/sparx/blob/main/research/shd/README.md)). Both train on every training recording and score the test set after each epoch. The paper's 95.07 ± 0.24% is the best epoch on the test set, which chooses with the test set; their code's best epoch here is 95.17 ± 0.61% and sparx's 94.96 ± 0.89%. With a tenth of the training set held out to choose the epoch, sparx scores 94.14 ± 0.98% on test. The other rows are short, untuned runs on a 4-core CPU; the [guide](https://github.com/AshishKumar4/sparx/blob/main/docs/guide.md#results-in-detail) gives their commands, times and comparisons.
 
 ## Correctness
 

@@ -2,41 +2,23 @@
 
 How to pick sparx up. [status.md](status.md) is the one ledger of what sparx supports, what it does not and what is open, in order. `README.md` introduces the library, `docs/guide.md` covers each part with code, `docs/design.md` its architecture, `docs/fidelity.md` every model's reference and check, and `docs/performance.md` the measurements.
 
-## Open, with exact state (9 October 2026)
+## Open, with exact state (10 October 2026)
 
-1. **The SHD comparison** (`tools/shd_comparison.py`, on `main`; its docstring has the setup and commands).
-   - Pilot 1, at `e196f8c` on a Colab A100: sparx's side trained 4 epochs at about 2.6 s an epoch with
-     evaluation (test 9.8% to 70.8%), then its report raised `KeyError: 'val/accuracy'` under
-     `--validation 0`, fixed in `d838e7e`; their side never started. Its files are under
-     `~/.cache/dew/integration/7ca258a09bc9d17d5e93de05743742b5158de164/BigEarwig/dew-gpu-sparx-shd-pilot-job-1/outputs/content/out/sparx-shd-pilot/`.
-   - The re-pilot at `d838e7e` was queued with UnnecessaryMeadowlark, now retired; Colab GPU jobs go
-     to EquivalentTurkey, so re-request it there:
-     sparx in an isolated venv (`python3 -m venv`, without system site packages, since Colab's
-     `jax_cuda13_plugin` 0.11.1 leaked in beside `jax-cuda12-plugin==0.11.2`), their code in Colab's
-     own Python and torch with `dcls==0.1.1 h5py tqdm wandb`, 4 epochs each, seed 0. In the same
-     session, one short GPU smoke Main approved: `JAX_PLATFORMS=cuda python -m pytest -q -x
-     tests/test_readme.py tests/test_nn.py tests/test_ml.py tests/test_serve.py tests/test_delays.py
-     tests/test_parallel.py`, whose failures may be CPU-tuned tolerances to triage.
-   - Then send Main the per-epoch times of both codes and the total GPU-hour estimate. The full run is
-     approved if it stays under about 8 GPU-hours: seeds 0, 1 and 2 of sparx `--validation 0` (their
-     protocol), sparx `--validation 0.1` (a held-out protocol) and their code, 150 epochs each, nine
-     runs, on two GPUs at once where available; then `tools/shd_comparison.py summarize`. Commit the
-     runs' `result.json` and `summary.json`, and put the mean and deviation per code and protocol in
-     the README's results and `status.md`'s first open item.
-2. **The release, `sparxml` 0.1.0, after the SHD result.** The PyPI trusted publisher for
-   `sparxml` and the repository's `pypi` environment are in place. With the README's SHD number
-   updated (and `CHANGELOG.md` if anything else changed), create the GitHub release tagged `v0.1.0`
-   on `main`; `.github/workflows/python-publish.yml` runs the whole CI, builds, checks the tag
-   against `sparx.__version__`, smokes the very wheel from PyPI's index (`tools/smoke_wheel.py`) and
-   uploads. Until it is published, `pip install git+https://github.com/AshishKumar4/sparx` is the
-   install that works.
+1. **The SHD comparison is done** (`research/shd`): nine runs on Colab A100s, three seeds each of sparx
+   on every training recording, sparx with a tenth held out, and the official SNN-delays code, all at
+   150 epochs through `tools/shd_comparison.py`. sparx's last epoch is 93.99 ± 0.29% against the
+   official code's 93.89 ± 0.26%.
+2. **The release, `sparxml` 0.1.0**, follows it: the GitHub release `v0.1.0` on `main` runs
+   `.github/workflows/python-publish.yml`, which runs the whole CI, builds, checks the tag against
+   `sparx.__version__`, smokes the very wheel from PyPI's index (`tools/smoke_wheel.py`) and uploads
+   through the trusted publisher.
 3. **dew.** sparx is tested against dewml 0.1.0 (`9235af7f`). Open for sparx: `Supervised`'s
    metrics in the validation pass (`status.md`, "dew"). Logical axes stay `(module, parameter)`
    declarations by decision (`status.md` gives the trade); dew's boxed axes would serve too.
 4. **Branches not on `main`:** `ci/shd-comparison` (`3ca2b52`) is superseded by the landed
-   `ci/shd-job` and can be deleted; `site` is the site's own.
-5. **Everything else** is `status.md`'s open work, in order; new learning rules and neuron families
-   wait for item 1.
+   `ci/shd-job` and can be deleted; `site` is the site's own. `racer-phase2` collects the racer's Phase 2 results run by run (`research/racer/queue.sh`).
+5. **Everything else** is `status.md`'s open work, in order. The racer study (`research/racer`) and the
+   proposed continual-learning study (`research/continual`) are the research in flight.
 
 ## State
 

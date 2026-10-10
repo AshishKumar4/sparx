@@ -21,7 +21,9 @@ or newer, over dew 0.1 (`dewml`).
 - Learning: surrogate BPTT, e-prop, OTTT, exact spike-time gradients
   (EventProp), REINFORCE, predictive coding and PC-ALM, reward diffusion,
   ANN-to-SNN conversion, and STDP, triplet, dopamine-modulated and
-  short-term plasticity in simulation.
+  short-term plasticity in simulation; homeostasis by intrinsic plasticity
+  of any spiking model's threshold and by synaptic scaling, with `Rules`
+  to run several plasticity rules on one projection.
 - Circuits: populations and projections on one clock with dense, edge-list
   and event delivery, NEST's connection rules, `simulate` in compiled chunks
   over dew's mesh with checkpoints and continued trials, the cortical
@@ -33,7 +35,9 @@ or newer, over dew 0.1 (`dewml`).
 - Evidence: every model is checked against its reference (NEST, Brian2, the
   authors' code), with fixtures regenerated in locked environments
   (`tools/references.py`); `docs/status.md` states what is supported and
-  what is not.
+  what is not. Hammouamri et al.'s SHD recipe, three seeds beside the
+  authors' code on an A100: 93.99 ± 0.29% at the last epoch against its
+  93.89 ± 0.26% (`research/shd`).
 - [sparxml.dev](https://sparxml.dev): a fifteen-chapter course whose figures
   run sparx's models in the browser, held to sparx's float64 runs, beside the
   docs and an API reference generated from the source.
