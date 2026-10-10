@@ -13,10 +13,12 @@ export interface Trace {
 }
 
 export function scope(canvas: HTMLCanvasElement, trace: Trace, { steps = 360, perFrame = 1 } = {}) {
-	const threshold = { at: trace.threshold, label: '', role: 'spike' as const };
+	// As the scope drew before it drew through traces: a stronger threshold, taller spike marks and an
+	// input band of at least 28 px.
+	const threshold = { at: trace.threshold, label: '', role: 'spike' as const, opacity: 0.7 };
 	const bands: Band[] = [
-		{ weight: 4, range: trace.range, lines: ['membrane'], grid: 4, guides: [threshold] },
-		{ weight: 1, range: trace.inputRange, lines: ['ink'], fill: true },
+		{ weight: 0.82, range: trace.range, lines: ['membrane'], grid: 4, guides: [threshold] },
+		{ weight: 0.18, range: trace.inputRange, lines: ['ink'], fill: true, min: 28 },
 	];
 	let count = 0;
 	const view = traces(
@@ -28,7 +30,7 @@ export function scope(canvas: HTMLCanvasElement, trace: Trace, { steps = 360, pe
 			count += out.fired;
 			return { values: [out.v, out.input], event: out.fired === 1 };
 		},
-		{ steps, perFrame, eventRole: 'spike' },
+		{ steps, perFrame, eventRole: 'spike', marks: 18 },
 	);
 	return {
 		/** Spikes since the last call. */

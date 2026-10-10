@@ -9,8 +9,10 @@ export interface Band {
 	weight: number;
 	range: [number, number];
 	lines: Role[];
-	/** Dashed levels with their labels. */
-	guides?: { at: number; label: string; role?: Role }[];
+	/** Dashed levels with their labels, at `opacity` (0.35 unless given). */
+	guides?: { at: number; label: string; role?: Role; opacity?: number }[];
+	/** The fewest pixels the band may have. */
+	min?: number;
 	/** Faint lines dividing the band into this many parts. */
 	grid?: number;
 	/** Shade each line's area down to zero, or the band's floor, instead of stroking it. */
@@ -27,7 +29,7 @@ export function traces(
 	canvas: HTMLCanvasElement,
 	bands: Band[],
 	step: () => Sample,
-	{ steps = 400, perFrame = 1, eventRole = 'ink' as Role } = {},
+	{ steps = 400, perFrame = 1, eventRole = 'ink' as Role, marks = 12 } = {},
 ) {
 	const width = bands.reduce((n, band) => n + band.lines.length, 0);
 	const values = new Float64Array(steps * width);
@@ -58,7 +60,6 @@ export function traces(
 		if (!colors) return;
 		const { ctx, width: w, height: h } = view;
 		ctx.clearRect(0, 0, w, h);
-		const marks = 12;
 		const gap = 12;
 		const total = bands.reduce((n, band) => n + band.weight, 0);
 		const usable = h - marks - 6 - gap * (bands.length - 1) - 4;
@@ -79,7 +80,7 @@ export function traces(
 		let column = 0;
 		ctx.font = `10px ${getComputedStyle(canvas).getPropertyValue('--sx-mono')}`;
 		for (const band of bands) {
-			const height = (band.weight / total) * usable;
+			const height = Math.max(band.min ?? 0, (band.weight / total) * usable);
 			const [lo, hi] = band.range;
 			const y = (v: number) => top + height - ((Math.min(Math.max(v, lo), hi) - lo) / (hi - lo)) * height;
 			if (band.grid) {
@@ -96,7 +97,7 @@ export function traces(
 			for (const guide of band.guides ?? []) {
 				const yy = Math.round(y(guide.at)) + 0.5;
 				ctx.setLineDash([4, 4]);
-				ctx.strokeStyle = alpha(colors[guide.role ?? 'ink'], 0.35);
+				ctx.strokeStyle = alpha(colors[guide.role ?? 'ink'], guide.opacity ?? 0.35);
 				ctx.lineWidth = 1;
 				ctx.beginPath();
 				ctx.moveTo(0, yy);
