@@ -5,6 +5,8 @@
 
 sparx trains spiking neural networks and simulates circuits of biological neurons, in JAX. Its spiking layers are Flax modules, so they train with optax or [dew](https://github.com/AshishKumar4/dew) and work with `jit`, `grad`, `vmap` and sharding. The same neuron models also run in millivolts and milliseconds, wired into circuits and whole connectomes, and there they match NEST and Brian2.
 
+[sparxml.dev](https://sparxml.dev): a course from one neuron to a spiking network that drives from events, the docs and the API reference.
+
 [Guide](https://github.com/AshishKumar4/sparx/blob/main/docs/guide.md) · [Train, serve and export](https://github.com/AshishKumar4/sparx/blob/main/docs/tutorials/train-and-deploy.md) · [From NEST and Brian2](https://github.com/AshishKumar4/sparx/blob/main/docs/tutorials/nest-and-brian2.md) · [Fit a circuit](https://github.com/AshishKumar4/sparx/blob/main/docs/tutorials/fit-a-circuit.md) · [Units](https://github.com/AshishKumar4/sparx/blob/main/docs/units.md) · [Status](https://github.com/AshishKumar4/sparx/blob/main/docs/status.md) · [Fidelity ledger](https://github.com/AshishKumar4/sparx/blob/main/docs/fidelity.md) · [Design](https://github.com/AshishKumar4/sparx/blob/main/docs/design.md) · [Performance](https://github.com/AshishKumar4/sparx/blob/main/docs/performance.md)
 
 ## Install

@@ -40,8 +40,9 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://sparxml.dev"
 Repository = "https://github.com/AshishKumar4/sparx"
-Documentation = "https://github.com/AshishKumar4/sparx/blob/main/docs/guide.md"
+Documentation = "https://sparxml.dev/docs/"
 Issues = "https://github.com/AshishKumar4/sparx/issues"
 Changelog = "https://github.com/AshishKumar4/sparx/blob/main/CHANGELOG.md"
 

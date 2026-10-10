@@ -34,3 +34,6 @@ or newer, over dew 0.1 (`dewml`).
   authors' code), with fixtures regenerated in locked environments
   (`tools/references.py`); `docs/status.md` states what is supported and
   what is not.
+- [sparxml.dev](https://sparxml.dev): a fifteen-chapter course whose figures
+  run sparx's models in the browser, held to sparx's float64 runs, beside the
+  docs and an API reference generated from the source.
