@@ -15,7 +15,8 @@ at `dt = 1`, per millisecond for the physical ones.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, NamedTuple
+from collections.abc import Mapping
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -63,9 +64,20 @@ class IntrinsicPlasticity[State]:
     def graded(self) -> bool:
         return False
 
+    @property
+    def reversal(self) -> Mapping[str, float]:
+        """The wrapped model's reversal potentials, when it reads conductances, so a `Network` gives it
+        conductances as it would the model alone."""
+        reversal = getattr(self.inner, "reversal", None)
+        if reversal is None:
+            raise AttributeError(f"{type(self.inner).__name__} reads no conductances")
+        return reversal
+
     def shifted(self, state: IntrinsicState[State]) -> NeuronModel[State]:
         """The wrapped model with each neuron's threshold where homeostasis has moved it."""
-        inner: Any = self.inner  # a dataclass, which NeuronModel does not promise
+        inner = self.inner
+        if not dataclasses.is_dataclass(inner) or isinstance(inner, type):
+            raise TypeError(f"{type(inner).__name__} is not a dataclass whose threshold can be moved")
         return dataclasses.replace(inner, **{self.field: getattr(inner, self.field) + state.shift})
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> IntrinsicState[State]:
@@ -79,7 +91,7 @@ class IntrinsicPlasticity[State]:
     def step(self, state: IntrinsicState[State], inputs: SynapticInput,
              dt: float) -> tuple[IntrinsicState[State], Output]:
         inner, out = self.shifted(state).step(state.inner, inputs, dt)
-        shift = state.shift + self.eta * (out.value - self.target * dt)
+        shift = state.shift + self.eta * (out.value.astype(state.shift.dtype) - self.target * dt)
         return IntrinsicState(inner, shift.astype(state.shift.dtype)), out
 
     def is_refractory(self, state: IntrinsicState[State], dt: float) -> jax.Array:

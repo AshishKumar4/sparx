@@ -61,3 +61,25 @@ Accuracy on the last trial at each evaluation during training on four doors:
 - Replay and consolidation, and PC-ALM against BPTT for the slow weights, the notes' later stages.
 - A task whose dynamics change without announcement, the notes' first suggestion for an agent that must retain earlier skills.
 - A faster recurrence over the sparse wiring: since its gathers take rows (`docs/performance.md`), the cores' training steps take 9 and 25 times the dense network's.
+
+## A second study, proposed: forgetting under local rules
+
+The question: when one network learns a stream of tasks in turn, with no replay, do local learning rules
+forget less of the earlier tasks than backpropagation through time, and what do they give up for it? The
+racer study asks whether spikes pay for driving; this one asks whether local rules pay for learning that
+does not stop.
+
+- The stream: SHD's 20 classes in 5 tasks of 4 classes, each trained to convergence before the next, the
+  readout shared across tasks. A second stream changes the inputs instead of the classes: the same 20
+  classes with each task's channels permuted.
+- The learners, on the same recurrent LIF network as `EPropObjective`'s: backpropagation through time with
+  Adam, the baseline; the same with elastic weight consolidation (Kirkpatrick et al. 2017), the standard
+  regularized baseline; e-prop (`sparx.learn.eprop`, Bellec et al. 2020), whose update is an eligibility
+  trace at each synapse times a learning signal broadcast to its neuron; and a three-factor rule on the
+  same traces, gated by a scalar reward instead of a per-neuron error (`sparx.learn.reinforce`).
+- The measures, over three seeds: the accuracy on every task after each task is learned, the mean of the
+  last row, forgetting as each task's best accuracy minus its last (Chaudhry et al. 2018), and backward
+  transfer (Lopez-Paz and Ranzato 2017).
+
+Nothing here predicts the answer. e-prop follows an approximation of the same gradient as backpropagation,
+so it may forget as much; the study measures it. It waits until the racer study is done, and for a go.

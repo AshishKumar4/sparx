@@ -85,7 +85,6 @@ import numpy as np
 from dew.objectives.base import Variables
 
 from sparx.dynamics.core import Gap, NeuronModel, Output, Term
-from sparx.dynamics.homeostasis import IntrinsicPlasticity
 from sparx.dynamics.plasticity import Plasticity, TsodyksMarkram, TsodyksMarkramState
 from sparx.dynamics.synapses import Graded, PointNeuron, PointNeuronState, Receptor, StochasticRelease
 from sparx.graph.connectivity import Connectivity, EdgeList
@@ -643,18 +642,18 @@ def _check_conductances(population: Population) -> None:
     A model reads each conductance against its reversal potential for the
     receptor's name, so a name it lacks would fail at the first step.
     """
-    neuron = population.neuron
-    while isinstance(neuron, IntrinsicPlasticity):  # which passes its inputs to the model it wraps
-        neuron = neuron.inner
-    where, model = f"population {population.name!r}", type(neuron).__name__
+    neuron, model = population.neuron, type(population.neuron).__name__
+    where = f"population {population.name!r}"
     for name, receptor in population.receptors.items():
         if receptor.kind != "conductance" or receptor.synapse.lands != "synapse":
             continue
-        if not isinstance(neuron, Reversing):
+        # A wrapper (`IntrinsicPlasticity`) has reversal potentials when the model it wraps does.
+        reversal: Mapping[str, float] | None = getattr(neuron, "reversal", None)
+        if reversal is None:
             raise ValueError(f"{where}: receptor {name!r} is a conductance, and {model} has no reversal "
                              f"potentials to read it against")
-        if name not in neuron.reversal:
-            known = ", ".join(map(repr, neuron.reversal))
+        if name not in reversal:
+            known = ", ".join(map(repr, reversal))
             raise ValueError(f"{where}: conductance receptor {name!r} has no reversal potential; "
                              f"{model}.reversal has {known}. Name the receptor after one of them, or give "
                              f"{model} a reversal potential for it")

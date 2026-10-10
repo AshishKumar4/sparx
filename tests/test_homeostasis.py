@@ -102,6 +102,9 @@ def test_intrinsic_plasticity_wraps_a_conductance_based_population():
     np.testing.assert_array_equal(spikes(still), plain)
     adapted = spikes(IntrinsicPlasticity(LeakyIntegrateAndFire(), 0.005, 1.0, "v_th"))
     assert plain.sum() > 50 and adapted.sum() < plain.sum()
+    dimensionless = Population("n", 2, IntrinsicPlasticity(LIFCell(0.9), 0.1), receptors)
+    with pytest.raises(ValueError, match="IntrinsicPlasticity has no reversal potentials"):
+        Network((dimensionless,)).init(jax.random.key(0))
 
 
 def test_intrinsic_plasticity_keeps_its_drift_in_the_states_dtype():
@@ -109,6 +112,17 @@ def test_intrinsic_plasticity_keeps_its_drift_in_the_states_dtype():
     neuron = IntrinsicPlasticity(LIFCell(0.9), jnp.full(3, 0.1, jnp.float64), jnp.full(3, 0.01, jnp.float64))
     _, final = run(neuron, jnp.ones((20, 3), jnp.float32))
     assert final.shift.dtype == jnp.float32 and float(final.shift[0]) > 0
+
+
+def test_intrinsic_plasticity_drifts_in_float32_on_low_precision_inputs():
+    # bfloat16 inputs and the same values in float32 give the same spikes and the same drift.
+    inputs = jnp.asarray(np.random.default_rng(8).normal(0.4, 0.5, (200, 4)), jnp.bfloat16)
+    neuron = IntrinsicPlasticity(LIFCell(0.9), 0.1, 0.03)
+    low, low_final = run(neuron, inputs)
+    full, full_final = run(neuron, inputs.astype(jnp.float32))
+    np.testing.assert_array_equal(np.asarray(low.value, np.float32), np.asarray(full.value))
+    assert low_final.shift.dtype == jnp.float32
+    np.testing.assert_array_equal(np.asarray(low_final.shift), np.asarray(full_final.shift))
 
 
 def test_intrinsic_plasticity_refuses_a_graded_model_and_a_missing_field():
