@@ -15,7 +15,7 @@ import Slider from './Slider.astro';
 			<Slider name="x" label="Input per step" min={0} max={1.2} step={0.005} value={0.3} digits={3} />
 			<Choice name="kind" label="Neuron" value="subtract" options={[{ value: 'subtract', label: 'Subtract' }, { value: 'zero', label: 'Reset to zero' }, { value: 'alif', label: 'Adaptive' }]} />
 		</Fragment>
-		<p slot="after" class="readout" data-status aria-live="polite"></p>
+		<p slot="after" class="sx-readout" data-status aria-live="polite"></p>
 	</Figure>
 </div>
 
@@ -59,12 +59,5 @@ import Slider from './Slider.astro';
 			border-left: 0;
 			border-top: 1px solid var(--sx-line);
 		}
-	}
-	.readout {
-		margin: 0;
-		padding: 0 1rem 0.875rem;
-		font-family: var(--sx-mono);
-		font-size: 0.75rem;
-		color: var(--sx-muted);
 	}
 </style>

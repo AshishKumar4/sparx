@@ -12,7 +12,7 @@ import Slider from './Slider.astro';
 			<Slider name="speed" label="Fan speed" min={0} max={3} step={0.1} value={1} unit="turns/s" digits={1} />
 			<Slider name="threshold" label="Threshold" min={0.05} max={0.6} step={0.005} value={0.15} digits={3} />
 		</Fragment>
-		<p slot="after" class="readout">
+		<p slot="after" class="sx-readout">
 			72 × 40 pixels · <b data-rate>…</b> events a second, <b data-share>…</b> of the 2,880,000 values a camera at 1,000 frames a second sends
 		</p>
 	</Figure>
@@ -42,16 +42,5 @@ import Slider from './Slider.astro';
 		[data-events] :global(.live-figure) {
 			--figure-height: 22rem !important;
 		}
-	}
-	.readout {
-		margin: 0;
-		padding: 0 1rem 0.875rem;
-		font-family: var(--sx-mono);
-		font-size: 0.75rem;
-		color: var(--sx-muted);
-	}
-	.readout b {
-		font-weight: 500;
-		color: var(--sx-ink-2);
 	}
 </style>

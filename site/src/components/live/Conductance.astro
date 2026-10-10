@@ -12,7 +12,7 @@ import Slider from './Slider.astro';
 			<Slider name="held" label="Held at" min={-90} max={0} step={1} value={-60} unit="mV" digits={0} />
 			<Slider name="tonic" label="Background inhibition" min={0} max={40} step={1} value={0} unit="nS" digits={0} />
 		</Fragment>
-		<p slot="after" class="readout">
+		<p slot="after" class="sx-readout">
 			Peak change: <span class="current">180 pA current <b data-peak="0">…</b></span> · <span class="ampa">3 nS AMPA <b data-peak="1">…</b></span> ·
 			<span class="gaba">3 nS GABA-A <b data-peak="2">…</b></span> · membrane time constant <b data-tau>20.0 ms</b>
 		</p>
@@ -96,17 +96,6 @@ import Slider from './Slider.astro';
 </script>
 
 <style>
-	.readout {
-		margin: 0;
-		padding: 0 1rem 0.875rem;
-		font-family: var(--sx-mono);
-		font-size: 0.75rem;
-		color: var(--sx-muted);
-	}
-	.readout b {
-		font-weight: 500;
-		color: var(--sx-ink-2);
-	}
 	.current b {
 		color: var(--sx-ink);
 	}

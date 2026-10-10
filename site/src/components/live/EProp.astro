@@ -6,11 +6,11 @@ import Figure from './Figure.astro';
 <div data-eprop>
 	<Figure engine="sparx.learn.eprop · BPTT" height="18rem">
 		<canvas role="img" aria-label="Two copies of a recurrent spiking network learning to draw a target curve, one by e-prop and one by backpropagation through time, with their losses"></canvas>
-		<div slot="controls" class="buttons">
-			<button type="button" data-act="train" class="primary">Train both</button>
-			<button type="button" data-act="reset">Start over</button>
+		<div slot="controls" class="sx-buttons">
+			<button type="button" data-act="train" class="sx-button primary">Train both</button>
+			<button class="sx-button" type="button" data-act="reset">Start over</button>
 		</div>
-		<p slot="after" class="readout" data-status aria-live="off"></p>
+		<p slot="after" class="sx-readout" data-status aria-live="off"></p>
 	</Figure>
 </div>
 
@@ -21,35 +21,10 @@ import Figure from './Figure.astro';
 </script>
 
 <style>
-	.buttons {
-		display: flex;
-		gap: 0.5rem;
+	.sx-buttons {
 		grid-column: 1 / -1;
 	}
-	button {
-		font: inherit;
-		font-size: 0.875rem;
-		font-weight: 550;
-		height: 2.25rem;
-		padding-inline: 1rem;
-		border-radius: 0.5rem;
-		border: 1px solid var(--sx-line-strong);
-		background: var(--sx-page);
-		color: var(--sx-ink);
-		cursor: pointer;
-	}
-	button.primary {
-		background: var(--sx-learn);
-		border-color: var(--sx-learn);
-		color: #fff;
+	.sx-button.primary {
 		min-width: 7rem;
-	}
-	.readout {
-		margin: 0;
-		padding: 0 1rem 0.875rem;
-		font-family: var(--sx-mono);
-		font-size: 0.75rem;
-		line-height: 1.6;
-		color: var(--sx-muted);
 	}
 </style>

@@ -19,7 +19,7 @@ const { height = '15rem' } = Astro.props;
 			<Slider name="tau" label="Time constant" min={2} max={60} step={1} value={12} unit="steps" digits={0} />
 			<Choice name="reset" label="Reset" value="subtract" options={[{ value: 'subtract', label: 'Subtract' }, { value: 'zero', label: 'To zero' }]} />
 		</Fragment>
-		<p slot="after" class="readout"><span data-rate>0</span> spikes per 100 steps</p>
+		<p slot="after" class="sx-readout"><span data-rate>0</span> spikes per 100 steps</p>
 	</Figure>
 </div>
 
@@ -57,13 +57,6 @@ const { height = '15rem' } = Astro.props;
 </script>
 
 <style>
-	.readout {
-		margin: 0;
-		padding: 0 1rem 0.875rem;
-		font-family: var(--sx-mono);
-		font-size: 0.75rem;
-		color: var(--sx-muted);
-	}
 	[data-rate] {
 		color: var(--sx-spike);
 	}

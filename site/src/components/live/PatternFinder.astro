@@ -10,9 +10,9 @@ import Figure from './Figure.astro';
 		<Fragment slot="controls">
 			<Choice name="speed" label="Speed" value="10" options={[{ value: '1', label: 'Real time' }, { value: '10', label: '10×' }, { value: '40', label: '40×' }]} />
 			<Choice name="learning" label="Learning" value="on" options={[{ value: 'on', label: 'Learning' }, { value: 'off', label: 'Frozen' }]} />
-			<div><button type="button" data-act="reset">Start over</button></div>
+			<div><button class="sx-button" type="button" data-act="reset">Start over</button></div>
 		</Fragment>
-		<p slot="after" class="readout" data-status aria-live="off"></p>
+		<p slot="after" class="sx-readout" data-status aria-live="off"></p>
 	</Figure>
 </div>
 
@@ -35,25 +35,3 @@ import Figure from './Figure.astro';
 		root.querySelector('[data-act="reset"]')?.addEventListener('click', () => figure?.reset());
 	}
 </script>
-
-<style>
-	button {
-		font: inherit;
-		font-size: 0.875rem;
-		font-weight: 550;
-		height: 2.25rem;
-		padding-inline: 1rem;
-		border-radius: 0.5rem;
-		border: 1px solid var(--sx-line-strong);
-		background: var(--sx-page);
-		color: var(--sx-ink);
-		cursor: pointer;
-	}
-	.readout {
-		margin: 0;
-		padding: 0 1rem 0.875rem;
-		font-family: var(--sx-mono);
-		font-size: 0.75rem;
-		color: var(--sx-muted);
-	}
-</style>

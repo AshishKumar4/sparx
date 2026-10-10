@@ -11,7 +11,7 @@ import Slider from './Slider.astro';
 			<Slider name="dt" label="Step dt" min={0.5} max={25} step={0.5} value={5} unit="ms" digits={1} />
 			<Slider name="tau" label="Time constant tau" min={2} max={40} step={1} value={10} unit="ms" digits={0} />
 		</Fragment>
-		<p slot="after" class="readout" data-status aria-live="polite"></p>
+		<p slot="after" class="sx-readout" data-status aria-live="polite"></p>
 	</Figure>
 </div>
 
@@ -24,13 +24,3 @@ import Slider from './Slider.astro';
 		const draw = discretize(root, () => ({ m: { tau: ui.read('tau'), drive: 1.2, on: 10, off: 70, span: 120 }, dt: ui.read('dt') }));
 	}
 </script>
-
-<style>
-	.readout {
-		margin: 0;
-		padding: 0 1rem 0.875rem;
-		font-family: var(--sx-mono);
-		font-size: 0.75rem;
-		color: var(--sx-muted);
-	}
-</style>

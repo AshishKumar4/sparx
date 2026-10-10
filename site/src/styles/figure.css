@@ -1,0 +1,36 @@
+/* What the live figures' buttons and readouts share (src/components/live/Figure.astro); a figure styles
+   only what is its own, such as a primary button's colour or a readout's coloured values. */
+.sx-buttons {
+	display: flex;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+}
+.sx-button {
+	font: inherit;
+	font-size: 0.875rem;
+	font-weight: 550;
+	height: 2.25rem;
+	padding-inline: 1rem;
+	border-radius: 0.5rem;
+	border: 1px solid var(--sx-line-strong);
+	background: var(--sx-page);
+	color: var(--sx-ink);
+	cursor: pointer;
+}
+.sx-button.primary {
+	background: var(--sx-learn);
+	border-color: var(--sx-learn);
+	color: #fff;
+}
+.sx-readout {
+	margin: 0;
+	padding: 0 1rem 0.875rem;
+	font-family: var(--sx-mono);
+	font-size: 0.75rem;
+	line-height: 1.6;
+	color: var(--sx-muted);
+}
+.sx-readout b {
+	font-weight: 500;
+	color: var(--sx-ink-2);
+}

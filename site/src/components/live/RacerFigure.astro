@@ -8,12 +8,12 @@ import Figure from './Figure.astro';
 	<Figure engine="Racer" height="26rem">
 		<canvas data-racer-stage role="img" aria-label="A car driven by a spiking network around a closed track from its event camera's output, above the camera's pixels as they fire, the network's 160 neurons as they spike, and its steering and speed"></canvas>
 		<div class="net" data-racer-net aria-hidden="true"></div>
-		<div slot="controls" class="buttons">
-			<button type="button" data-act="track">New track</button>
-			<button type="button" data-act="draw" aria-pressed="false">Draw a track</button>
-			<button type="button" data-act="pause" aria-pressed="false">Pause</button>
+		<div slot="controls" class="sx-buttons">
+			<button class="sx-button" type="button" data-act="track">New track</button>
+			<button class="sx-button" type="button" data-act="draw" aria-pressed="false">Draw a track</button>
+			<button class="sx-button" type="button" data-act="pause" aria-pressed="false">Pause</button>
 		</div>
-		<p slot="after" class="readout">
+		<p slot="after" class="sx-readout">
 			events <b data-events>0</b> · spikes <b data-spikes>0</b> a step · <b data-lap>…</b>
 		</p>
 	</Figure>
@@ -57,36 +57,8 @@ import Figure from './Figure.astro';
 		height: 7.5rem;
 		pointer-events: none;
 	}
-	.buttons {
-		display: flex;
-		gap: 0.5rem;
-		flex-wrap: wrap;
-	}
-	button {
-		font: inherit;
-		font-size: 0.875rem;
-		font-weight: 550;
-		height: 2.25rem;
-		padding-inline: 1rem;
-		border-radius: 0.5rem;
-		border: 1px solid var(--sx-line-strong);
-		background: var(--sx-page);
-		color: var(--sx-ink);
-		cursor: pointer;
-	}
-	button[aria-pressed='true'] {
+	.sx-button[aria-pressed='true'] {
 		border-color: var(--sx-bio);
 		color: var(--sx-bio);
-	}
-	.readout {
-		margin: 0;
-		padding: 0 1rem 0.875rem;
-		font-family: var(--sx-mono);
-		font-size: 0.75rem;
-		color: var(--sx-muted);
-	}
-	.readout b {
-		font-weight: 500;
-		color: var(--sx-ink-2);
 	}
 </style>

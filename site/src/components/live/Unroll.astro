@@ -17,7 +17,7 @@ const names = ['ATan', 'FastSigmoid', 'Triangle', 'StraightThrough'];
 			<Choice name="surrogate" label="Surrogate" value="ATan" options={names.map((n) => ({ value: n, label: n }))} />
 			<Choice name="detach" label="Reset" value="yes" options={[{ value: 'no', label: 'Gradient through reset' }, { value: 'yes', label: 'detach_reset' }]} />
 		</Fragment>
-		<p slot="after" class="readout" data-status aria-live="polite"></p>
+		<p slot="after" class="sx-readout" data-status aria-live="polite"></p>
 	</Figure>
 </div>
 
@@ -113,13 +113,3 @@ const names = ['ATan', 'FastSigmoid', 'Triangle', 'StraightThrough'];
 		});
 	}
 </script>
-
-<style>
-	.readout {
-		margin: 0;
-		padding: 0 1rem 0.875rem;
-		font-family: var(--sx-mono);
-		font-size: 0.75rem;
-		color: var(--sx-muted);
-	}
-</style>

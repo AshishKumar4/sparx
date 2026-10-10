@@ -40,7 +40,7 @@ const synapses = [
 			{sliders && <Slider name="g" label="Inhibition g" min={2} max={8} step={0.1} value={5} digits={1} />}
 			{sliders && <Slider name="eta" label="External drive η" min={0.5} max={4} step={0.05} value={2} digits={2} />}
 		</Fragment>
-		<p slot="after" class="readout">
+		<p slot="after" class="sx-readout">
 			<span data-size></span> · rate <span data-rate>…</span> · CV <span data-cv>…</span> · Fano <span data-fano>…</span>
 		</p>
 	</Figure>
@@ -95,13 +95,6 @@ const synapses = [
 </script>
 
 <style>
-	.readout {
-		margin: 0;
-		padding: 0 1rem 0.875rem;
-		font-family: var(--sx-mono);
-		font-size: 0.75rem;
-		color: var(--sx-muted);
-	}
 	[data-rate] {
 		color: var(--sx-membrane);
 	}
