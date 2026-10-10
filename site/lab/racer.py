@@ -399,7 +399,8 @@ def drives(net, params, world: World, ground, points: jax.Array, car0: jax.Array
     """`race` on each track of `points`, `chunk` tracks at a time, reduced on the device to what an
     evaluation reads, each `[T, B]` unless noted: the cars every fifth step `[T / 5, B, 4]`, the steering
     after the nudge would come `[WINDOW, B]`, the distance from the middle and the speed along the road,
-    the events, the units not silent, and the multiply-adds those inputs and units trigger (`fanouts`)."""
+    the events, the units not silent, and the multiply-adds those inputs and units trigger (`fanouts`): a
+    frame camera sends every pixel every step, whatever its value."""
     image, units, extra = (net.fanouts() if isinstance(net, Vision)
                            else stack_fanouts(net, (2 if world.sees == "events" else 1) * world.pixels))
     extras = world.features - image.size

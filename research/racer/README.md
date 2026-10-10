@@ -95,7 +95,8 @@ on bends tighter than a metre.
 Multiply-adds per step: *dense* counts every connection, which is what a GPU or CPU computes; *triggered*
 counts only those from inputs and units that are not zero, which is what event-driven hardware would
 compute, each input or unit charged the connections it actually has (a pixel at the image's edge reaches
-fewer of a convolution's outputs). A smaller triggered count is not a speed on a GPU.
+fewer of a convolution's outputs). An event arm's inputs are its events; a frame arm's are all its pixels,
+every step, since a frame camera reads every pixel out whatever its value. A smaller triggered count is not a speed on a GPU.
 
 The loss's band on firing rates (`--rate-low`, `--rate-high`) trains the spiking arms, A, the few-bit
 arms and the dendritic arm, through their spikes' surrogate gradients. The graded arms, B, C and
