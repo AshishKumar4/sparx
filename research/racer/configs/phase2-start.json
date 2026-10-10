@@ -1,0 +1,16 @@
+[
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 1 --batch 32 --lr 1e-3 --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --neuron lif --seed 1 --eval-tracks 2 --log-every 1",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 1 --batch 32 --lr 1e-3 --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --neuron relu --seed 1 --eval-tracks 2 --log-every 1",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 1 --batch 32 --lr 1e-3 --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --neuron relu --sees frames --seed 1 --eval-tracks 2 --log-every 1",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 1 --batch 32 --lr 1e-3 --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --neuron lif --bits 2 --seed 1 --eval-tracks 2 --log-every 1",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 1 --batch 32 --lr 1e-3 --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --neuron lif --bits 4 --seed 1 --eval-tracks 2 --log-every 1",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 1 --batch 32 --lr 1e-3 --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --neuron sigma-delta --delta 0.1 --seed 1 --eval-tracks 2 --log-every 1",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 1 --batch 32 --lr 1e-3 --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --neuron dendritic --seed 1 --eval-tracks 2 --log-every 1",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 1 --batch 32 --lr 1e-3 --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --neuron lif --seed 2 --eval-tracks 2 --log-every 1",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 1 --batch 32 --lr 1e-3 --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --neuron relu --seed 2 --eval-tracks 2 --log-every 1",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 1 --batch 32 --lr 1e-3 --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --neuron relu --sees frames --seed 2 --eval-tracks 2 --log-every 1",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 1 --batch 32 --lr 1e-3 --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --neuron lif --bits 2 --seed 2 --eval-tracks 2 --log-every 1",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 1 --batch 32 --lr 1e-3 --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --neuron lif --bits 4 --seed 2 --eval-tracks 2 --log-every 1",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 1 --batch 32 --lr 1e-3 --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --neuron sigma-delta --delta 0.1 --seed 2 --eval-tracks 2 --log-every 1",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 1 --batch 32 --lr 1e-3 --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --neuron dendritic --seed 2 --eval-tracks 2 --log-every 1"
+]
