@@ -249,7 +249,7 @@ def cost(world: World, out, rates: tuple[float, float]):
         "distance": jnp.mean(distance),
         "speed": jnp.mean(along),
         "rate": jnp.mean(rate),
-        "events": jnp.mean(on + off) * world.pixels * 2,
+        "events": jnp.mean(on + off) * world.pixels,
     }
 
 
@@ -367,7 +367,7 @@ def evaluation(
             if finished.any()
             else None,
             "off_road": float(off_road.mean()),
-            "events_per_step": float(np.mean(np.asarray(on) + np.asarray(off)) * world.pixels * 2),
+            "events_per_step": float(np.mean(np.asarray(on) + np.asarray(off)) * world.pixels),
             "spikes_per_step": float(np.mean(np.asarray(spikes)) * np.asarray(spikes).shape[-1]),
         },
         "tracks": per_track,

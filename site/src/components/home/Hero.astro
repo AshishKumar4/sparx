@@ -1,6 +1,6 @@
 ---
 // The front page's hero: two networks sparx trained, live. The racer (src/widgets/racer/hero.ts) drives a
-// car around a track the visitor draws from its event camera's output alone; the drone
+// car around a track the visitor draws, seeing the road only through its event camera; the drone
 // (src/widgets/pilot/hero.ts) flies after the pointer. Each is drawn beside its network.
 import model from '../../../public/pilot/pilot.json';
 import racer from '../../../public/racer/evaluation.json';
@@ -14,7 +14,7 @@ const finished = Math.round(laps.finished * laps.tracks);
 
 <section class="hero" data-hero data-mode="racer">
 	<div class="stage">
-		<canvas class="racer" data-racer-stage role="img" aria-label="A car driven by a spiking network around a closed track, seeing only an event camera's output, beside the camera's pixels lighting as they fire, the network's 160 neurons lighting as they spike, and its steering and speed"></canvas>
+		<canvas class="racer" data-racer-stage role="img" aria-label="A car driven by a spiking network around a closed track, seeing the road only through an event camera, beside the camera's pixels lighting as they fire, the network's 160 neurons lighting as they spike, and its steering and speed"></canvas>
 		<div class="net racer" data-racer-net aria-hidden="true"></div>
 		<canvas class="drone" data-stage role="img" aria-label="A drone flown by a spiking network toward the pointer, beside the network: its seven readings, two layers of 64 neurons that light up as they spike, and two readout neurons wired to the rotors"></canvas>
 		<div class="net drone" data-net aria-hidden="true"></div>
@@ -40,7 +40,7 @@ const finished = Math.round(laps.finished * laps.tracks);
 			<p class="caption">
 				<span class="live" aria-hidden="true"></span>
 				<span>
-					<strong>This car is driven by 160 spiking neurons that see only an event camera's output, live.</strong>{' '}
+					<strong>This car is driven by 160 spiking neurons, live. They see the road only through an event camera.</strong>{' '}
 					<span class="hint desk">Drag a loop anywhere around it to draw a new track.</span>
 					<span class="hint touch">Tap Draw, then draw a loop around the track.</span>
 				</span>

@@ -1,7 +1,7 @@
 ---
 layout: ../../layouts/Chapter.astro
 title: 'Case study: the racer'
-description: A spiking network drives a car around tracks it has never seen, with nothing but an event camera's output to go on. It learned end to end, by gradients through its own spikes, through the car, and through the camera's pixels, whose thresholds are spikes too. This chapter takes it apart, and shows how often such training fails.
+description: A spiking network drives a car around tracks it has never seen, with nothing but an event camera's output and its own speed to go on. It learned end to end, by gradients through its own spikes, through the car, and through the camera's pixels, whose thresholds are spikes too. This chapter takes it apart, and shows how often such training fails.
 ---
 
 import CodeBlock from '../../components/CodeBlock.astro';
@@ -83,7 +83,7 @@ The run with seed 2 ended with gradients of norm $2.7 \times 10^8$ before clippi
 
 Each of 200 tracks it never trained on, drawn by the same rule with another seed, starts the car at rest in the middle of the road, pointing along it, and gives it 30 s. A lap counts when the car has gone the track's length without straying more than a metre beyond the road's edge.
 
-It finished all {evaluation.summary.tracks}, in a median of {evaluation.summary.median_lap_time.toFixed(1)} s for tracks of 40 to 75 m, and never strayed that far. Over the 200 drives it spent {(evaluation.summary.off_road * 100).toFixed(2)}% of its time with its centre off the road, on 26 of the tracks. Each step the camera sent {Math.round(evaluation.summary.events_per_step)} events, of 576 possible, and {evaluation.summary.spikes_per_step.toFixed(1)} of the 160 neurons fired.
+It finished all {evaluation.summary.tracks}, in a median of {evaluation.summary.median_lap_time.toFixed(1)} s for tracks of 40 to 75 m, and never strayed that far. Over the 200 drives it spent {(evaluation.summary.off_road * 100).toFixed(2)}% of its time with its centre off the road, on 26 of the tracks. Each step the camera sent {Math.round(evaluation.summary.events_per_step)} events, of 288 possible, since a pixel fires at most once a step, and {evaluation.summary.spikes_per_step.toFixed(1)} of the 160 neurons fired.
 
 No track failed, so here is the hardest, the one where it spent longest off the road:
 
@@ -113,7 +113,7 @@ The browser drives the same network from the same weights, in double precision, 
 
 ## Summary
 
-A spiking network learned to drive from an event camera's output alone, by gradients through its spikes, the car's motion and the pixels' own thresholds, and finished every one of 200 tracks it had never seen. The same training failed on two other seeds and a smaller learning rate, so the result is one run that worked, not a recipe that always does.
+A spiking network learned to drive from an event camera's output and its own speed, by gradients through its spikes, the car's motion and the pixels' own thresholds, and finished every one of 200 tracks it had never seen. The same training failed on two other seeds and a smaller learning rate, so the result is one run that worked, not a recipe that always does.
 
 ## References
 

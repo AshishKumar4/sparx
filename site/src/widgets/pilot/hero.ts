@@ -561,7 +561,8 @@ export function hero(root: HTMLElement, model: PilotModel): void {
 	if (reduced) {
 		for (let k = 0; k < 150; k++) step();
 	}
-	const loop = animate(root, frame);
+	// The canvas, not the section: on the racer's tab it is hidden and the drone rests.
+	const loop = animate(canvas, frame);
 	onTheme(() => !loop.running() && frame(0));
 	shown();
 }

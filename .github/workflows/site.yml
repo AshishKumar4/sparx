@@ -21,7 +21,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: site-${{ github.ref }}
+  # A screenshot of a deployed site neither cancels nor waits on the checks of a push.
+  group: site-${{ github.ref }}-${{ inputs.shoot && 'shoot' || 'check' }}
   cancel-in-progress: true
 
 jobs:

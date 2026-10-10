@@ -116,8 +116,10 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 	}
 
 	function layout() {
-		view = fit(canvas);
 		const c = canvas.getBoundingClientRect();
+		// Hidden on the drone's tab: keep the last layout until the canvas has a size again.
+		if (!c.width || !c.height) return;
+		view = fit(canvas);
 		const box = (el: HTMLElement) => {
 			const r = el.getBoundingClientRect();
 			return { x: r.left - c.left, y: r.top - c.top, w: r.width, h: r.height };
@@ -277,7 +279,7 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 				const cy = top + Math.floor(k / columns[layer]) * unit + unit / 2;
 				ctx.fillStyle = f > 0.05 ? alpha(colors.spike, 0.25 + 0.75 * f) : alpha(colors.ink, 0.1);
 				ctx.beginPath();
-				ctx.arc(cx, cy, unit * 0.32, 0, 2 * Math.PI);
+				ctx.arc(cx, cy, Math.max(0.5, unit * 0.32), 0, 2 * Math.PI);
 				ctx.fill();
 			}
 			offset += sizes[layer];
@@ -299,7 +301,7 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 	}
 
 	function draw() {
-		if (!colors) return;
+		if (!colors || !view.width || net.w <= 0) return;
 		const { ctx, width, height } = view;
 		ctx.clearRect(0, 0, width, height);
 		drawTrack(ctx);
@@ -400,6 +402,7 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 			drawing = on;
 			root.dataset.drawing = String(on);
 			canvas.style.touchAction = on ? 'none' : '';
+			draw();
 		},
 		setPaused(value: boolean) {
 			paused = value;
