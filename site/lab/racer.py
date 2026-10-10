@@ -187,10 +187,12 @@ def network(hidden: tuple[int, ...] = (96, 64), tau: float = 3.0, readout_tau: f
     return stack((*hidden, 2), tau, readout_tau)
 
 
-def vision(world: World, neuron: str = "lif", tau: float = 3.0, readout_tau: float = 4.0) -> Vision:
+def vision(world: World, neuron: str = "lif", tau: float = 3.0, readout_tau: float = 4.0, bits: int = 1,
+           delta: float = 0.1, branches: int = 4) -> Vision:
     """The convolutional network over the camera's image: ON and OFF events, or a frame."""
     channels = 2 if world.sees == "events" else 1
-    return Vision((world.rows, world.columns, channels), neuron=neuron, tau=tau, readout_tau=readout_tau)
+    return Vision((world.rows, world.columns, channels), neuron=neuron, tau=tau, readout_tau=readout_tau,
+                  bits=bits, delta=delta, branches=branches)
 
 
 def inputs(world: World, on: jax.Array, off: jax.Array, seen: jax.Array, car: jax.Array) -> jax.Array:
@@ -198,10 +200,12 @@ def inputs(world: World, on: jax.Array, off: jax.Array, seen: jax.Array, car: ja
     return jnp.concatenate([*image, car[:, 3:4] / world.max_speed], -1)
 
 
-def race(net, params, world: World, ground, points, car0, steps: int, truncate: int = 0):
+def race(net, params, world: World, ground, points, car0, steps: int, truncate: int = 0,
+         nudge: tuple[int, float] | None = None):
     """Drive each car of `car0` `[B, 4]` around its track `points` `[B, N, 2]` for `steps` steps. With
     `truncate`, gradients flow back through at most that many steps: the state is cut from its past at
-    every multiple of it."""
+    every multiple of it. A `nudge` of `(step, metres)` moves every car sideways, to its left, by `metres`
+    at the start of `step`."""
     tables = track_tables(points)
     dashes = jnp.maximum(jnp.round(tables[2].sum(-1) / world.dash_period), 1) / 1.0
     dashes = tables[2].sum(-1) / dashes
@@ -212,6 +216,9 @@ def race(net, params, world: World, ground, points, car0, steps: int, truncate: 
             cut = t % truncate == 0
             carry = jax.tree.map(lambda c: jnp.where(cut, jax.lax.stop_gradient(c), c), carry)
         car, level, carried = carry
+        if nudge is not None:
+            left = jnp.stack([-jnp.sin(car[:, 2]), jnp.cos(car[:, 2])], -1)
+            car = jnp.where(t == nudge[0], car.at[:, :2].add(nudge[1] * left), car)
         seen = look(world, ground, points, tables, dashes, car)
         level, on, off = sense(world, level, seen)
         u, carried, spikes = act(net, params, carried, inputs(world, on, off, seen, car))
@@ -322,7 +329,7 @@ def train(args: argparse.Namespace) -> None:
     tracks = Tracks()
     ground = tuple(jnp.asarray(g, jnp.float32) for g in world.ground())
     if args.net == "conv":
-        net = vision(world, args.neuron, args.tau, args.readout_tau)
+        net = vision(world, args.neuron, args.tau, args.readout_tau, args.bits, args.delta, args.branches)
     else:
         net = network(tuple(args.hidden), args.tau, args.readout_tau)
     params = net.init(jax.random.key(args.seed), jnp.zeros((1, 1, world.features)))["params"]
@@ -372,7 +379,7 @@ def evaluation(net, params, world: World, ground, points: jax.Array, seconds: fl
     d = points[:, 1] - points[:, 0]
     car0 = jnp.stack([points[:, 0, 0], points[:, 0, 1], jnp.arctan2(d[:, 1], d[:, 0]), jnp.zeros(tracks)], -1)
     run = jax.jit(lambda p, pts, c: race(net, p, world, tuple(jnp.asarray(g) for g in ground), pts, c, steps))
-    cars, _, on, off, spikes, distance, _, along = run(params, points, car0)
+    cars, u, on, off, spikes, distance, _, along = run(params, points, car0)
     length = np.asarray(track_tables(points)[2].sum(-1))
     covered = np.cumsum(np.asarray(along) * world.dt, 0)
     distance = np.asarray(distance)
@@ -388,6 +395,7 @@ def evaluation(net, params, world: World, ground, points: jax.Array, seconds: fl
     else:
         dense, triggered = stack_operations(net, world.features, nonzero, np.asarray(spikes), 1)
     parameters = sum(int(np.size(leaf)) for leaf in jax.tree.leaves(params))
+    latency = response(net, params, world, ground, points, car0, np.asarray(u), ~crashed[NUDGE[0]])
     per_track = [
         {
             "finished": bool(f),
@@ -418,6 +426,7 @@ def evaluation(net, params, world: World, ground, points: jax.Array, seconds: fl
             "parameters": parameters,
             "dense_macs_per_step": int(dense),
             "triggered_macs_per_step": float(np.mean(triggered)),
+            **latency,
         },
         "tracks": per_track,
         "worst": {
@@ -426,6 +435,33 @@ def evaluation(net, params, world: World, ground, points: jax.Array, seconds: fl
             "path": np.asarray(cars[::5, worst, :2]).round(3).tolist(),
             **per_track[worst],
         },
+    }
+
+
+NUDGE = (100, 0.3)
+"""The response probe's nudge: 2 s into the drive, every car moved 0.3 m to its left."""
+
+
+def response(net, params, world: World, ground, points: jax.Array, car0: jax.Array, u: np.ndarray,
+             running: np.ndarray, window: int = 50) -> dict:
+    """How fast the network steers back when its car is moved sideways (`NUDGE`): on each track whose car is
+    still running at the nudge, the steering's difference from the same drive unnudged, `u` `[T, B, 2]`,
+    over the next `window` steps; the latency is the time until that difference first reaches half its
+    largest. The median over the tracks that responded, in ms, and how many did."""
+    at, metres = NUDGE
+    steps = at + window
+    run = jax.jit(lambda p, pts, c: race(net, p, world, tuple(jnp.asarray(g) for g in ground), pts, c, steps,
+                                         nudge=NUDGE))
+    nudged = np.asarray(run(params, points, car0)[1])
+    turn = np.tanh(nudged[at:, :, 0]) - np.tanh(u[at:steps, :, 0])
+    peak = np.abs(turn).max(0)
+    responded = running & (peak > 1e-3)
+    first = np.argmax(np.abs(turn) >= 0.5 * peak, 0)
+    return {
+        "response_ms": float(np.median(first[responded]) * world.dt * 1000) if responded.any() else None,
+        "responded": int(responded.sum()),
+        "nudged": int(running.sum()),
+        "nudge_m": metres,
     }
 
 
@@ -537,7 +573,11 @@ def main() -> None:
                    help="the weight of the penalty on driving backwards")
     t.add_argument("--difficulty", action="store_true", help="also score the harder sets (difficulty.json)")
     t.add_argument("--net", choices=("dense", "conv"), default="dense")
-    t.add_argument("--neuron", choices=("lif", "relu"), default="lif", help="the conv network's units")
+    t.add_argument("--neuron", choices=("lif", "relu", "sigma-delta", "dendritic"), default="lif",
+                   help="the conv network's units")
+    t.add_argument("--bits", type=int, default=1, help="lif: the bits each spike carries")
+    t.add_argument("--delta", type=float, default=0.1, help="sigma-delta: the smallest change sent")
+    t.add_argument("--branches", type=int, default=4, help="dendritic: the branches of each neuron")
     t.add_argument("--sees", choices=("events", "frames"), default="events")
     t.add_argument("--columns", type=int, default=24)
     t.add_argument("--rows", type=int, default=12)

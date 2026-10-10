@@ -2,8 +2,9 @@
 
 A stack is `nn.Sequential([Dense, LIF, ..., Dense, LIF, Dense, LI])` of sparx layers: LIF layers that reset
 to zero, as NIR describes them, and a leaky-integrator readout whose membranes are the outputs. `Vision`
-puts two strided convolutions over a camera's image in front of the same kind of stack. The browser steps
-them from the JSON (site/src/engines/stack.ts).
+puts two strided convolutions over a camera's image in front of the same kind of stack, with units that
+send binary spikes, spikes of a few bits, real values, or changes of real values. The browser steps them
+from the JSON (site/src/engines/stack.ts).
 """
 
 from __future__ import annotations
@@ -11,14 +12,19 @@ from __future__ import annotations
 import base64
 import itertools
 import math
+from typing import NamedTuple
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
+from flax import struct
 
 import sparx
-from sparx.nn import LI, LIF
+from sparx.dynamics import MembraneState, Output, SynapticInput, decay, run
+from sparx.dynamics.core import fire
+from sparx.nn import LI, LIF, STATE, Neuron, record_rates
+from sparx.surrogate import ATan, Surrogate, spike
 
 
 def stack(widths: tuple[int, ...], tau: float, readout_tau: float) -> nn.Sequential:
@@ -62,11 +68,135 @@ class Graded(nn.Module):
         return h
 
 
+@struct.dataclass
+class FewBitCell:
+    """LIF neurons that reset to zero, whose spike carries how many thresholds (multiples of 1) the
+    membrane reached, from 1 to `levels`: Loihi 2's graded spikes, of log2(levels + 1) bits. One level
+    is `LIFCell(decay, reset="zero")`; each level's step is differentiated through `surrogate`."""
+
+    decay: jax.Array | float
+    levels: int = struct.field(pytree_node=False, default=1)
+    surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
+    graded = True
+
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> MembraneState:
+        return MembraneState(jnp.zeros(shape, jnp.promote_types(dtype, jnp.float32)))
+
+    def step(self, state: MembraneState, inputs: SynapticInput, dt: float) -> tuple[MembraneState, Output]:
+        v = self.decay ** dt * state.v + inputs.jump
+        after, first = fire(v, 1.0, self.surrogate, "zero")
+        payload = first + sum(spike(v - k, self.surrogate) for k in range(2, self.levels + 1))
+        payload = payload.astype(inputs.jump.dtype)
+        return MembraneState(after), Output(payload, jnp.ones_like(payload))
+
+
+class FewBit(Neuron):
+    """`FewBitCell` as a layer: spikes of `bits` bits. It records the share of its neurons that fire, as
+    `LIF` records spikes."""
+
+    tau: float = 3.0
+    bits: int = 2
+
+    def build(self, x: jax.Array) -> FewBitCell:
+        return FewBitCell(decay(self.tau), 2 ** self.bits - 1)
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        payload = self.run(self.model(x), x)
+        record_rates(self, payload != 0)
+        return payload
+
+
+class SigmaDeltaState(NamedTuple):
+    v: jax.Array
+    sent: jax.Array
+    """The activation as last sent, which the receivers hold: the sum of the changes sent."""
+    fired: jax.Array
+    """Whether the step sent a change."""
+
+
+@struct.dataclass
+class SigmaDeltaCell:
+    """`Graded`'s unit, a leaky membrane read through a ReLU, that sends the change in its activation
+    since it last sent, when that change reaches `threshold`: the sigma-delta neuron of Lava's `SigmaDelta`
+    for Loihi 2 (after O'Connor and Welling, arXiv 1611.02024). Its receivers add up the changes, so what
+    they see is the activation as last sent, within `threshold` of the activation. Its gradient is the
+    activation's. At `threshold = 0` it is `Graded`, sending every change."""
+
+    decay: jax.Array | float
+    threshold: jax.Array | float = 0.1
+    graded = True
+
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> SigmaDeltaState:
+        zeros = jnp.zeros(shape, jnp.promote_types(dtype, jnp.float32))
+        return SigmaDeltaState(zeros, zeros, jnp.zeros(shape, bool))
+
+    def step(self, state: SigmaDeltaState, inputs: SynapticInput, dt: float,
+             ) -> tuple[SigmaDeltaState, Output]:
+        v = self.decay ** dt * state.v + inputs.jump
+        activation = jax.nn.relu(v)
+        change = activation - state.sent
+        fired = (jnp.abs(change) >= self.threshold) & (change != 0)
+        sent = jnp.where(fired, activation, state.sent)
+        value = activation + jax.lax.stop_gradient(sent - activation)
+        return SigmaDeltaState(v, sent, fired), Output(value, jnp.ones_like(value))
+
+
+class SigmaDelta(Neuron):
+    """`SigmaDeltaCell` as a layer. It records the share of its units that send a change each step."""
+
+    tau: float = 3.0
+    threshold: float = 0.1
+
+    def build(self, x: jax.Array) -> SigmaDeltaCell:
+        return SigmaDeltaCell(decay(self.tau), self.threshold)
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        carrying = self.is_mutable_collection(STATE) and not self.is_initializing()
+        state = self.get_variable(STATE, "carry") if carrying else None
+        (out, fired), final = run(self.model(x), self.inputs(x), state, dt=self.dt,
+                                  record=lambda s: s.fired, unroll=self.unroll)
+        if carrying:
+            self.put_variable(STATE, "carry", final)
+        record_rates(self, fired)
+        return out.value
+
+
+class Dendrites(nn.Module):
+    """`units` neurons of `branches` active dendrites each: Poirazi, Brannon and Mel's (2003) two-layer
+    neuron, spiking. Each input reaches one branch of each neuron, drawn at random once (`seed`), through
+    one weight, so the weights number as a dense layer's. A branch is a LIF membrane that resets to zero,
+    and its spike, a dendritic spike, reaches the soma through a learned coupling; the soma is a LIF
+    neuron. At the start, two branches spiking together fire the soma and one alone does not. Current
+    runs one way, branch to soma: nothing flows back."""
+
+    units: int
+    branches: int = 4
+    tau: float = 3.0
+    seed: int = 0
+
+    @nn.compact
+    def __call__(self, x: jax.Array) -> jax.Array:
+        inputs = x.shape[-1]
+        rng = np.random.default_rng(self.seed)
+        branch = np.stack([rng.permutation(np.arange(inputs) % self.branches) for _ in range(self.units)], 1)
+        route = jax.nn.one_hot(branch, self.branches, dtype=x.dtype)  # [inputs, units, branches]
+        # Each branch's current varies as a dense layer's unit's would, from a quarter of the inputs.
+        init = nn.initializers.variance_scaling(self.branches, "fan_in", "truncated_normal")
+        kernel = self.param("kernel", init, (inputs, self.units))
+        bias = self.param("bias", nn.initializers.zeros, (self.units, self.branches))
+        coupling = self.param("coupling", nn.initializers.constant(0.5), (self.units, self.branches))
+        dendritic = LIF(tau=self.tau, reset="zero")(jnp.einsum("...i,iu,iub->...ub", x, kernel, route) + bias)
+        return LIF(tau=self.tau, reset="zero")(jnp.sum(dendritic * coupling, -1))
+
+
 class Vision(nn.Module):
     """A camera's image, `(rows, columns, channels)` flattened at the front of each input, through two
     convolutions of stride 2, each into a population of units, then a dense layer of `hidden` units with
     the input's remaining features, and a dense layer into `outputs` leaky integrators. The units are LIF
-    neurons that reset to zero, or `Graded` units for the non-spiking counterpart."""
+    neurons that reset to zero (`neuron="lif"`), sending spikes of `bits` bits (`FewBit`) when `bits` is
+    above 1; `Graded` units for the non-spiking counterpart (`"relu"`); or `SigmaDelta` units that send
+    their changes of at least `delta` (`"sigma-delta"`). With `"dendritic"`, the units are LIF neurons
+    and the dense layer's are `Dendrites` of `branches` branches."""
 
     shape: tuple[int, int, int]
     features: tuple[int, ...] = (16, 32)
@@ -76,19 +206,33 @@ class Vision(nn.Module):
     neuron: str = "lif"
     tau: float = 3.0
     readout_tau: float = 4.0
+    bits: int = 1
+    delta: float = 0.1
+    branches: int = 4
 
-    def unit(self) -> nn.Module:
-        return LIF(tau=self.tau, reset="zero") if self.neuron == "lif" else Graded(tau=self.tau)
+    def unit(self, name: str) -> nn.Module:
+        """A population of units, named so that `act` lists the populations in order."""
+        if self.neuron == "relu":
+            return Graded(tau=self.tau, name=name)
+        if self.neuron == "sigma-delta":
+            return SigmaDelta(tau=self.tau, threshold=self.delta, name=name)
+        if self.bits > 1:
+            return FewBit(tau=self.tau, bits=self.bits, name=name)
+        return LIF(tau=self.tau, reset="zero", name=name)
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
         rows, columns, channels = self.shape
         pixels = rows * columns * channels
         h = jnp.moveaxis(x[..., :pixels].reshape(*x.shape[:-1], channels, rows, columns), -3, -1)
-        for features, kernel in zip(self.features, self.kernels, strict=True):
-            h = self.unit()(nn.Conv(features, (kernel, kernel), (2, 2), padding="SAME")(h))
+        for k, (features, kernel) in enumerate(zip(self.features, self.kernels, strict=True)):
+            h = self.unit(f"units_{k}")(nn.Conv(features, (kernel, kernel), (2, 2), padding="SAME")(h))
         h = jnp.concatenate([h.reshape(*h.shape[:-3], -1), x[..., pixels:]], -1)
-        h = self.unit()(nn.Dense(self.hidden)(h))
+        last = f"units_{len(self.features)}"
+        if self.neuron == "dendritic":
+            h = Dendrites(self.hidden, self.branches, self.tau, name=last)(h)
+        else:
+            h = self.unit(last)(nn.Dense(self.hidden)(h))
         return LI(tau=self.readout_tau)(nn.Dense(self.outputs)(h))
 
     def layers(self) -> list[tuple[int, int, int]]:
@@ -100,7 +244,13 @@ class Vision(nn.Module):
             # A stride of 2 sends each input to about a quarter of the kernel's positions in each output map.
             out.append((h * w * c, -(-h // 2) * -(-w // 2) * features, kernel * kernel * features // 4))
             h, w, c = -(-h // 2), -(-w // 2), features
-        return [*out, (h * w * c, self.hidden, self.hidden), (self.hidden, self.outputs, self.outputs)]
+        if self.neuron == "dendritic":
+            # Each input reaches one branch of every neuron, and each branch its soma.
+            hidden = [(h * w * c, self.hidden * self.branches, self.hidden),
+                      (self.hidden * self.branches, self.hidden, 1)]
+        else:
+            hidden = [(h * w * c, self.hidden, self.hidden)]
+        return [*out, *hidden, (self.hidden, self.outputs, self.outputs)]
 
     def operations(self, inputs: jax.Array, units: jax.Array, extra: int) -> tuple[int, jax.Array]:
         """Multiply-adds per step: every connection's, a constant, and the count triggered, `[...]`, those
@@ -172,7 +322,9 @@ def vision_json(net: Vision, params: dict) -> dict:
     path, such as `Conv_0/kernel` `[kernel, kernel, in, out]`."""
     flat = jax.tree_util.tree_flatten_with_path(params)[0]
     return {
-        "config": {**{k: getattr(net, k) for k in ("features", "kernels", "hidden", "outputs", "neuron")},
+        "config": {**{k: getattr(net, k)
+                      for k in ("features", "kernels", "hidden", "outputs", "neuron", "bits", "delta",
+                                "branches")},
                    "shape": list(net.shape), "decay": sparx.dynamics.decay(net.tau),
                    "readout_decay": sparx.dynamics.decay(net.readout_tau)},
         "params": {"/".join(key.key for key in path): {"shape": list(leaf.shape), "data": b64(leaf)}
@@ -184,7 +336,8 @@ def vision_from_json(model: dict) -> tuple[Vision, dict]:
     config = model["config"]
     net = Vision(shape=tuple(config["shape"]), features=tuple(config["features"]),
                  kernels=tuple(config["kernels"]), hidden=config["hidden"], outputs=config["outputs"],
-                 neuron=config["neuron"],
+                 neuron=config["neuron"], bits=config.get("bits", 1), delta=config.get("delta", 0.1),
+                 branches=config.get("branches", 4),
                  tau=-1 / math.log(config["decay"]), readout_tau=-1 / math.log(config["readout_decay"]))
     params: dict = {}
     for path, leaf in model["params"].items():

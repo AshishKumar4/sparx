@@ -1,0 +1,7 @@
+[
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 2 --batch 2 --horizon 12 --truncate 6 --eval-tracks 2 --log-every 1 --neuron lif --bits 2",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 2 --batch 2 --horizon 12 --truncate 6 --eval-tracks 2 --log-every 1 --neuron lif --bits 4",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 2 --batch 2 --horizon 12 --truncate 6 --eval-tracks 2 --log-every 1 --neuron sigma-delta --delta 0.1",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 2 --batch 2 --horizon 12 --truncate 6 --eval-tracks 2 --log-every 1 --neuron dendritic",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 2 --batch 2 --horizon 12 --truncate 6 --eval-tracks 2 --log-every 1 --neuron lif"
+]
