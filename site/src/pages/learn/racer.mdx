@@ -86,9 +86,9 @@ Each of 200 tracks it never trained on, drawn by the same rule with another seed
 
 It finished all {evaluation.summary.tracks}, in a median of {evaluation.summary.median_lap_time.toFixed(1)} s for tracks of 39 to 76 m, at a median of {evaluation.summary.median_speed.toFixed(1)} m/s, and its centre never left the road. Each step the camera sent {Math.round(evaluation.summary.events_per_step)} events, of 288 possible, since a pixel fires at most once a step, and {evaluation.summary.spikes_per_step.toFixed(1)} of the 160 neurons fired. Moved 0.3 m sideways 2 s into a drive, it steered back at once: its steering's difference from the same drive unmoved reached half its largest in a median of {evaluation.summary.response_ms} ms, one step.
 
-Tracks with sharper bends than any it trained on test it further. At bend strengths 0.9, 1.2, 1.5 and 1.8, 200 tracks each, the last two harder than training's hardest, it finished {+(difficulty.by_bend['0.9'].finished * 100).toFixed(1)}%, {+(difficulty.by_bend['1.2'].finished * 100).toFixed(1)}%, {+(difficulty.by_bend['1.5'].finished * 100).toFixed(1)}% and {+(difficulty.by_bend['1.8'].finished * 100).toFixed(1)}%. Its one failure of the 800 was on a bend tighter than a metre in radius.
+Tracks with sharper bends test it further. At bend strengths 0.9, 1.2, 1.5 and 1.8, 200 tracks each, the last two harder than training's hardest, it finished {+(difficulty.by_bend['0.9'].finished * 100).toFixed(1)}%, {+(difficulty.by_bend['1.2'].finished * 100).toFixed(1)}%, {+(difficulty.by_bend['1.5'].finished * 100).toFixed(1)}% and {+(difficulty.by_bend['1.8'].finished * 100).toFixed(1)}%. Its one failure of the 800 was on a bend tighter than a metre in radius.
 
-No track failed and none was left, so here is its slowest lap:
+No track failed and the car never left the road, so here is its slowest lap:
 
 <RacerTrack>
 	Track {evaluation.worst.index} of the 200, {evaluation.worst.length.toFixed(1)} m around, with the car's path over 30 s in orange from the dot. It finished
