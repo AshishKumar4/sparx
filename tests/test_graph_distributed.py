@@ -1,12 +1,9 @@
 """Simulation over several devices gives one device's results: trials spread, or neurons partitioned."""
 
-import json
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
+from devices import run_on
 
 PROGRAM = '''
 import json, sys
@@ -56,13 +53,7 @@ print(json.dumps(out))
 
 
 def _run(devices: int) -> dict:
-    env = {**os.environ, "JAX_PLATFORMS": "cpu",
-           "XLA_FLAGS": f"--xla_force_host_platform_device_count={devices}"}
-    program = PROGRAM.replace("TESTS", repr(str(Path(__file__).parent)))
-    done = subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, env=env,
-                          timeout=600)
-    assert done.returncode == 0, done.stderr[-3000:]
-    return json.loads(done.stdout.strip().splitlines()[-1])
+    return run_on(devices, PROGRAM.replace("TESTS", repr(str(Path(__file__).parent))), timeout=600)
 
 
 def test_simulation_over_devices_equals_one_device():

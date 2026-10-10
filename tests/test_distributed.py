@@ -1,11 +1,7 @@
 """Training through dew's mesh gives the result one device gives."""
 
-import json
-import os
-import subprocess
-import sys
-
 import numpy as np
+from devices import run_on
 
 PROGRAM = '''
 import json, os
@@ -43,12 +39,7 @@ print(json.dumps({"devices": jax.device_count(), "params": leaves, "specs": spec
 
 
 def _train(devices: int, fsdp: int) -> dict:
-    env = {**os.environ, "JAX_PLATFORMS": "cpu",
-           "XLA_FLAGS": f"--xla_force_host_platform_device_count={devices}"}
-    done = subprocess.run([sys.executable, "-c", PROGRAM.replace("FSDP", str(fsdp))], capture_output=True,
-                          text=True, env=env, timeout=900)
-    assert done.returncode == 0, done.stderr[-3000:]
-    return json.loads(done.stdout.strip().splitlines()[-1])
+    return run_on(devices, PROGRAM.replace("FSDP", str(fsdp)), timeout=900)
 
 
 def test_eight_devices_train_the_parameters_one_device_trains():
