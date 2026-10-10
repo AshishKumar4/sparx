@@ -114,7 +114,7 @@ Each run of the new recipe took 72 to 93 minutes on one container.
 
 Two of the new recipe's seeds drove well halfway through training and worse at its end: seeds 3 and 4 had
 mean speeds of 5.35 and 5.04 m/s on their training tracks at step 1,500, once the curriculum reached its
-hardest bends, and 2.19 and 3.50 m/s at step 3,000. Phase 0b (commit c035434) trains the same five seeds
+hardest bends, and 2.19 and 3.50 m/s at step 3,000. Phase 0b (commit 3aa82a4) trains the same five seeds
 the same way and keeps, of the parameters at every 250th step, those that drove farthest in 20 s on 32
 tracks drawn as training's hardest are, never the evaluation's (`--select 250`). Every seed then
 finished all 200 unseen tracks, with median laps of 9.5 to 10.9 s, and 96.5 to 100% of each harder set.
