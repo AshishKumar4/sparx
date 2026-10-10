@@ -78,7 +78,7 @@ for (const size of widths) {
 					const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
 					for (let i = 3; i < data.length; i += 4) if (data[i]) return [];
 					const label = (canvas.getAttribute('aria-label') ?? '').slice(0, 48);
-					return [`${label}: ${canvas.width}x${canvas.height} for a ${Math.round(r.width)}x${Math.round(r.height)} box ${JSON.stringify(canvas.dataset)}`];
+					return [`${label}: ${canvas.width}x${canvas.height} for a ${Math.round(r.width)}x${Math.round(r.height)} box`];
 				}),
 			);
 			const problems = [...errors, ...overflow.map((el) => `wider than the page: ${el}`), ...blank.map((c) => `blank canvas: ${c}`)];

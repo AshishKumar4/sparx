@@ -120,7 +120,6 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 		// Hidden on the drone's tab: keep the last layout until the canvas has a size again.
 		if (!c.width || !c.height) return;
 		view = fit(canvas);
-		canvas.dataset.trace = `${canvas.dataset.trace ?? ''} fit${Math.round(c.width)}x${Math.round(c.height)}`.slice(-400);
 		const box = (el: HTMLElement) => {
 			const r = el.getBoundingClientRect();
 			return { x: r.left - c.left, y: r.top - c.top, w: r.width, h: r.height };
@@ -305,8 +304,6 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 		if (!colors || !view.width || net.w <= 0) return;
 		const { ctx, width, height } = view;
 		ctx.clearRect(0, 0, width, height);
-		const t = (canvas.dataset.trace ?? '').split(' ');
-		if (!t.at(-1)?.startsWith('draw')) canvas.dataset.trace = `${canvas.dataset.trace ?? ''} draw[s${scale.toFixed(1)} o${origin.map((v) => v.toFixed(0))} r${region.x},${region.y},${region.w},${region.h} n${net.x},${net.y},${net.w},${net.h} v${width}x${height}]`.slice(-400);
 		drawTrack(ctx);
 		drawCar(ctx);
 		if (stroke.length > 1) {
@@ -365,12 +362,15 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 		draw();
 	});
 
-	layout();
-	new ResizeObserver(() => {
+	// Fitting the canvas clears it, so every new layout is drawn at once: an off-screen figure would
+	// otherwise stay blank until it next animates, and a paused one until it is played.
+	const resize = () => {
 		layout();
 		draw();
-	}).observe(canvas);
-	desk.addEventListener('change', layout);
+	};
+	layout();
+	new ResizeObserver(resize).observe(canvas);
+	desk.addEventListener('change', resize);
 	onTheme((p) => {
 		colors = p;
 		draw();
