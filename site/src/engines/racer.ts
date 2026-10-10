@@ -191,6 +191,19 @@ export class Racer {
 		return into;
 	}
 
+	/** The frame into the input at zero mean and unit variance over its pixels, the deviation floored at
+	 * `1 / sqrt(pixels)`, as site/lab/racer.py's `standardized`. */
+	private standardize(): void {
+		const n = this.pixels;
+		let mean = 0;
+		for (let p = 0; p < n; p++) mean += this.seen[p];
+		mean /= n;
+		let variance = 0;
+		for (let p = 0; p < n; p++) variance += (this.seen[p] - mean) ** 2;
+		const deviation = Math.max(Math.sqrt(variance / n), 1 / Math.sqrt(n));
+		for (let p = 0; p < n; p++) this.input[p] = (this.seen[p] - mean) / deviation;
+	}
+
 	/** One step: look, fire events, think, drive. Returns how many events fired. */
 	step(): number {
 		const w = this.world;
@@ -203,13 +216,13 @@ export class Racer {
 			this.level[p] += w.threshold * (on - off);
 			this.events[p] = on;
 			this.events[this.pixels + p] = off;
-			if (w.sees === 'frames') this.input[p] = this.seen[p];
-			else {
+			if (w.sees !== 'frames') {
 				this.input[p] = on;
 				this.input[this.pixels + p] = off;
 			}
 			events += on + off;
 		}
+		if (w.sees === 'frames') this.standardize();
 		this.input[this.input.length - 1] = this.car[3] / w.max_speed;
 		const u = this.network.step(this.input);
 		this.steer = w.max_steer * Math.tanh(u[0]);

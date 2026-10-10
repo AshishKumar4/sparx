@@ -172,12 +172,13 @@ export class Vision {
 				}
 	}
 
-	/** Each unit's membrane takes in `drive` (which it overwrites with the units' outputs): a LIF neuron fires
-	 * at 1 and resets to zero, a graded unit sends its membrane through a ReLU. */
+	/** Each unit's membrane takes in `drive` (which it overwrites with the units' outputs): a LIF neuron sums
+	 * it, fires at 1 and resets to zero; a graded unit averages it and sends its membrane through a ReLU. */
 	private fire(units: Units, drive: Float64Array): void {
 		const { v, offset } = units;
+		const gain = this.graded ? 1 - this.decay : 1;
 		for (let j = 0; j < v.length; j++) {
-			let u = this.decay * v[j] + drive[j];
+			let u = this.decay * v[j] + (this.graded ? gain * drive[j] : drive[j]);
 			let s: number;
 			if (this.silenced[offset + j]) {
 				u = 0;

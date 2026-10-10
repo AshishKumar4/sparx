@@ -55,15 +55,18 @@ def act(net: nn.Module, params: dict, carried: dict, x: jax.Array):
 
 
 class Graded(nn.Module):
-    """The non-spiking counterpart of `LIF`: the same leaky membrane, read out through a ReLU instead of a
-    threshold and reset. It records which of its units are active, as `LIF` records spikes, for the count
-    of multiply-adds; the record has no gradient, so the racer's band on firing rates does not train it."""
+    """The non-spiking counterpart of `LIF`: a leaky membrane with `LIF`'s time constant, read out through a
+    ReLU instead of a threshold and reset. The membrane averages its input, `v <- d v + (1 - d) x`, where
+    `LIF`'s sums it: with no reset to bound it, a summing membrane's activity grows by `1 / (1 - d)` at
+    each layer, and at the start of training it held the speed readout's sigmoid at zero. It records which
+    of its units are active, as `LIF` records spikes, for the count of multiply-adds; the record has no
+    gradient, so the racer's band on firing rates does not train it."""
 
     tau: float
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
-        h = nn.relu(LI(tau=self.tau)(x))
+        h = nn.relu(LI(tau=self.tau)((1 - decay(self.tau)) * x))
         if self.is_mutable_collection("spike_rates") and not self.is_initializing():
             self.sow("spike_rates", "rate", jnp.mean(h > 0, axis=0, dtype=jnp.float32))
         return h
@@ -125,8 +128,8 @@ class SigmaDeltaState(NamedTuple):
 
 @struct.dataclass
 class SigmaDeltaCell:
-    """`Graded`'s unit, a leaky membrane read through a ReLU, that sends the change in its activation
-    since it last sent once that change reaches `threshold`, and receivers that add up the changes:
+    """`Graded`'s unit, an averaging leaky membrane read through a ReLU, that sends the change in its
+    activation since it last sent once that change reaches `threshold`, and receivers that add the changes:
     sigma-delta coding (O'Connor and Welling, arXiv 1611.02024) as Lava's `SigmaDelta` neurons do it on
     Loihi 2. Unlike Lava's, the unit's membrane leaks, as `Graded`'s does, the change is sent unrounded, and
     the cell returns what the receivers hold, the activation as last sent, within `threshold` of the
@@ -143,7 +146,8 @@ class SigmaDeltaCell:
 
     def step(self, state: SigmaDeltaState, inputs: SynapticInput, dt: float,
              ) -> tuple[SigmaDeltaState, Output]:
-        v = self.decay ** dt * state.v + inputs.jump
+        d = self.decay ** dt
+        v = d * state.v + (1 - d) * inputs.jump
         activation = jax.nn.relu(v)
         change = activation - state.sent
         fired = (jnp.abs(change) >= self.threshold) & (change != 0)

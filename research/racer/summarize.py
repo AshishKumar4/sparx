@@ -1,6 +1,8 @@
 """A racer sweep's runs as one small summary for results/: each run's arguments, its evaluation on 200
 unseen tracks, its results on the harder sets by bend and by tightest bend, its training curve every
-250 steps, and the median and largest gradient norm over every step it logged.
+250 steps, the median and largest gradient norm over every step it logged, and its first step, taken
+from the parameters it started with: a start whose speed readout is saturated shows there as a car that
+does not move.
 
     python research/racer/summarize.py <out dir> research/racer/results/<name>.json
 
@@ -26,6 +28,7 @@ def main() -> None:
             row["history"] = [h for h in history if h["step"] == 1 or h["step"] % 250 == 0]
             norms = [h["grad_norm"] for h in history]
             row["grad_norm"] = {"logged": len(norms), "median": statistics.median(norms), "max": max(norms)}
+            row["start"] = {k: history[0][k] for k in ("step", "speed", "distance", "grad_norm", "rate")}
         if (run / "evaluation.json").exists():
             row["evaluation"] = json.loads((run / "evaluation.json").read_text())["summary"]
         if (run / "difficulty.json").exists():
