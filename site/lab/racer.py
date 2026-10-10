@@ -25,7 +25,6 @@ import argparse
 import dataclasses
 import itertools
 import json
-import math
 from pathlib import Path
 
 import jax
@@ -206,11 +205,12 @@ def inputs(world: World, on: jax.Array, off: jax.Array, seen: jax.Array, car: ja
 def standardized(frame: jax.Array) -> jax.Array:
     """Each frame `[B, pixels]` at zero mean and unit variance over its pixels, as TensorFlow's
     `per_image_standardization` makes it, the deviation floored at `1 / sqrt(pixels)` for a uniform frame.
+    The floor is taken under the square root, whose slope at a variance of 0 would make the gradient NaN.
     The log brightness itself lies between -2.1 and 0.35 at every pixel, and at the start of training that
     offset alone held the speed readout's sigmoid at zero."""
     mean = jnp.mean(frame, -1, keepdims=True)
-    deviation = jnp.sqrt(jnp.mean((frame - mean) ** 2, -1, keepdims=True))
-    return (frame - mean) / jnp.maximum(deviation, 1 / math.sqrt(frame.shape[-1]))
+    variance = jnp.mean((frame - mean) ** 2, -1, keepdims=True)
+    return (frame - mean) / jnp.sqrt(jnp.maximum(variance, 1 / frame.shape[-1]))
 
 
 def race(net, params, world: World, ground, points, car0, steps: int, truncate: int = 0,
