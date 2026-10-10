@@ -16,6 +16,8 @@ export interface World {
 	threshold: number;
 	columns: number;
 	rows: number;
+	/** Points around a track. */
+	points: number;
 	behind: number;
 	ahead: number;
 }
