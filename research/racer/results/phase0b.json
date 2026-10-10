@@ -1,0 +1,1456 @@
+{
+ "commit": "3aa82a4eeb6d7843e66741376415d3c74f5ef278",
+ "runs": [
+  {
+   "arguments": "train --steps 3000 --batch 32 --lr 1e-3 --difficulty --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --select 250 --seed 1",
+   "history": [
+    {
+     "step": 1,
+     "loss": 139.33023071289062,
+     "grad_norm": 59.43461227416992,
+     "seconds": 4.4,
+     "distance": 4.053417205810547,
+     "events": 13.855729103088379,
+     "rate": 0.005169271025806665,
+     "speed": 2.0765864849090576
+    },
+    {
+     "step": 250,
+     "loss": -0.43855905532836914,
+     "grad_norm": 0.32616934180259705,
+     "seconds": 358.2,
+     "distance": 0.06450169533491135,
+     "events": 82.85760498046875,
+     "rate": 0.11049935966730118,
+     "speed": 5.475450038909912,
+     "score": 1.8595812320709229
+    },
+    {
+     "step": 500,
+     "loss": -0.45832350850105286,
+     "grad_norm": 0.048817671835422516,
+     "seconds": 718.1,
+     "distance": 0.04330063611268997,
+     "events": 85.63260650634766,
+     "rate": 0.11494727432727814,
+     "speed": 5.613500118255615,
+     "score": 1.9746114015579224
+    },
+    {
+     "step": 750,
+     "loss": -0.4566996991634369,
+     "grad_norm": 0.09834390878677368,
+     "seconds": 1076.5,
+     "distance": 0.03789332136511803,
+     "events": 83.70249938964844,
+     "rate": 0.12196355313062668,
+     "speed": 5.584188938140869,
+     "score": 1.9822430610656738
+    },
+    {
+     "step": 1000,
+     "loss": -0.4648595452308655,
+     "grad_norm": 0.07216610014438629,
+     "seconds": 1440.6,
+     "distance": 0.03125490993261337,
+     "events": 87.02166748046875,
+     "rate": 0.12858398258686066,
+     "speed": 5.641522407531738,
+     "score": 1.9859334230422974
+    },
+    {
+     "step": 1250,
+     "loss": -0.4620564579963684,
+     "grad_norm": 0.03823297470808029,
+     "seconds": 1801.6,
+     "distance": 0.02906154654920101,
+     "events": 84.9175033569336,
+     "rate": 0.1261015683412552,
+     "speed": 5.6106367111206055,
+     "score": 1.9895000457763672
+    },
+    {
+     "step": 1500,
+     "loss": -0.4612984359264374,
+     "grad_norm": 0.08772215992212296,
+     "seconds": 2160.2,
+     "distance": 0.03189333528280258,
+     "events": 88.38229370117188,
+     "rate": 0.12956054508686066,
+     "speed": 5.600812911987305,
+     "score": 1.9909502267837524
+    },
+    {
+     "step": 1750,
+     "loss": -0.4641277492046356,
+     "grad_norm": 0.02556377835571766,
+     "seconds": 2520.8,
+     "distance": 0.027181629091501236,
+     "events": 85.02218627929688,
+     "rate": 0.1313202977180481,
+     "speed": 5.626131534576416,
+     "score": 1.9925764799118042
+    },
+    {
+     "step": 2000,
+     "loss": -0.46555137634277344,
+     "grad_norm": 0.07015233486890793,
+     "seconds": 2885.9,
+     "distance": 0.02890438213944435,
+     "events": 88.95729064941406,
+     "rate": 0.13482032716274261,
+     "speed": 5.648234844207764,
+     "score": 1.992671012878418
+    },
+    {
+     "step": 2250,
+     "loss": -0.46726247668266296,
+     "grad_norm": 0.052721213549375534,
+     "seconds": 3251.8,
+     "distance": 0.024043181911110878,
+     "events": 85.86354064941406,
+     "rate": 0.13207228481769562,
+     "speed": 5.646742343902588,
+     "score": 1.9939054250717163
+    },
+    {
+     "step": 2500,
+     "loss": -0.4667758643627167,
+     "grad_norm": 0.03621025010943413,
+     "seconds": 3615.5,
+     "distance": 0.026299692690372467,
+     "events": 85.53437805175781,
+     "rate": 0.13240300118923187,
+     "speed": 5.669132232666016,
+     "score": 1.9944018125534058
+    },
+    {
+     "step": 2750,
+     "loss": -0.46534299850463867,
+     "grad_norm": 0.01784132979810238,
+     "seconds": 3981.6,
+     "distance": 0.02570156566798687,
+     "events": 85.66177368164062,
+     "rate": 0.13579948246479034,
+     "speed": 5.633299350738525,
+     "score": 1.9948554039001465
+    },
+    {
+     "step": 3000,
+     "loss": -0.4662254750728607,
+     "grad_norm": 0.035319507122039795,
+     "seconds": 4342.9,
+     "distance": 0.025850728154182434,
+     "events": 85.80250549316406,
+     "rate": 0.13443230092525482,
+     "speed": 5.6604719161987305,
+     "score": 1.995117425918579
+    }
+   ],
+   "evaluation": {
+    "tracks": 200,
+    "seconds": 30.0,
+    "finished": 1.0,
+    "crashed": 0.0,
+    "median_lap_time": 9.530000000000001,
+    "median_speed": 5.8911027908325195,
+    "off_road": 0.0,
+    "events_per_step": 83.69155883789062,
+    "spikes_per_step": 20.368335723876953,
+    "units": 160,
+    "parameters": 61826,
+    "dense_macs_per_step": 61664,
+    "triggered_macs_per_step": 8923.7353515625,
+    "onset_ms": 0.0,
+    "response_ms": 20.0,
+    "responded": 200,
+    "nudged": 200,
+    "nudge_m": 0.3
+   },
+   "difficulty": {
+    "by_bend": {
+     "0.9": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 1.0,
+      "crashed": 0.0,
+      "median_lap_time": 9.51,
+      "median_speed": 5.891259670257568,
+      "off_road": 0.0,
+      "events_per_step": 83.4645767211914,
+      "spikes_per_step": 20.286483764648438,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 8896.599609375,
+      "onset_ms": 0.0,
+      "response_ms": 20.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     },
+     "1.2": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 1.0,
+      "crashed": 0.0,
+      "median_lap_time": 10.46,
+      "median_speed": 5.889890670776367,
+      "off_road": 0.0,
+      "events_per_step": 85.27122497558594,
+      "spikes_per_step": 21.00724983215332,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 9099.8212890625,
+      "onset_ms": 0.0,
+      "response_ms": 20.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     },
+     "1.5": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 0.995,
+      "crashed": 0.005,
+      "median_lap_time": 10.48,
+      "median_speed": 5.887344837188721,
+      "off_road": 0.00024333333333333333,
+      "events_per_step": 86.82542419433594,
+      "spikes_per_step": 21.525962829589844,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 9270.4716796875,
+      "onset_ms": 0.0,
+      "response_ms": 20.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     },
+     "1.8": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 1.0,
+      "crashed": 0.005,
+      "median_lap_time": 11.16,
+      "median_speed": 5.8854079246521,
+      "off_road": 0.00023333333333333333,
+      "events_per_step": 87.2973861694336,
+      "spikes_per_step": 21.69983673095703,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 9322.75,
+      "onset_ms": 0.0,
+      "response_ms": 20.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     }
+    },
+    "by_radius": [
+     {
+      "from": 0.0,
+      "to": 1.0,
+      "tracks": 370,
+      "finished": 0.9972972972972973
+     },
+     {
+      "from": 1.0,
+      "to": 1.5,
+      "tracks": 137,
+      "finished": 1.0
+     },
+     {
+      "from": 1.5,
+      "to": 2.0,
+      "tracks": 119,
+      "finished": 1.0
+     },
+     {
+      "from": 2.0,
+      "to": 3.0,
+      "tracks": 129,
+      "finished": 1.0
+     },
+     {
+      "from": 3.0,
+      "to": 4.0,
+      "tracks": 27,
+      "finished": 1.0
+     },
+     {
+      "from": 4.0,
+      "to": 6.0,
+      "tracks": 17,
+      "finished": 1.0
+     },
+     {
+      "from": 6.0,
+      "to": null,
+      "tracks": 1,
+      "finished": 1.0
+     }
+    ]
+   }
+  },
+  {
+   "arguments": "train --steps 3000 --batch 32 --lr 1e-3 --difficulty --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --select 250 --seed 2",
+   "history": [
+    {
+     "step": 1,
+     "loss": 172.17282104492188,
+     "grad_norm": 58.93180465698242,
+     "seconds": 5.4,
+     "distance": 4.457561016082764,
+     "events": 13.411354064941406,
+     "rate": 0.004693359602242708,
+     "speed": 1.8689110279083252
+    },
+    {
+     "step": 250,
+     "loss": -0.027044616639614105,
+     "grad_norm": 18.726280212402344,
+     "seconds": 483.2,
+     "distance": 0.40464672446250916,
+     "events": 103.2542724609375,
+     "rate": 0.1760527342557907,
+     "speed": 5.373010158538818,
+     "score": 1.8361681699752808
+    },
+    {
+     "step": 500,
+     "loss": 85.16634368896484,
+     "grad_norm": 423.0166931152344,
+     "seconds": 960.2,
+     "distance": 3.847978115081787,
+     "events": 27.25197982788086,
+     "rate": 0.053029950708150864,
+     "speed": 1.667832612991333,
+     "score": 0.02776011824607849
+    },
+    {
+     "step": 750,
+     "loss": 1.4032620191574097,
+     "grad_norm": 6.165985107421875,
+     "seconds": 1442.5,
+     "distance": 0.46486037969589233,
+     "events": 88.55052185058594,
+     "rate": 0.15641668438911438,
+     "speed": 0.2149510681629181,
+     "score": 0.027248507365584373
+    },
+    {
+     "step": 1000,
+     "loss": 0.3835173547267914,
+     "grad_norm": 5.800097465515137,
+     "seconds": 1912.9,
+     "distance": 0.3285438120365143,
+     "events": 108.01677703857422,
+     "rate": 0.09840365499258041,
+     "speed": 2.184537887573242,
+     "score": 0.8138493299484253
+    },
+    {
+     "step": 1250,
+     "loss": -0.2863996624946594,
+     "grad_norm": 13.692445755004883,
+     "seconds": 2393.9,
+     "distance": 0.12730345129966736,
+     "events": 112.20208740234375,
+     "rate": 0.06597461551427841,
+     "speed": 5.007425308227539,
+     "score": 1.8582322597503662
+    },
+    {
+     "step": 1500,
+     "loss": 0.5480215549468994,
+     "grad_norm": 13.956552505493164,
+     "seconds": 2881.1,
+     "distance": 0.5461782813072205,
+     "events": 79.72177124023438,
+     "rate": 0.055824220180511475,
+     "speed": 2.477717638015747,
+     "score": 0.8805955052375793
+    },
+    {
+     "step": 1750,
+     "loss": -0.10461146384477615,
+     "grad_norm": 45.859134674072266,
+     "seconds": 3365.9,
+     "distance": 0.19232267141342163,
+     "events": 101.92124938964844,
+     "rate": 0.053115881979465485,
+     "speed": 3.5016822814941406,
+     "score": 1.2536441087722778
+    },
+    {
+     "step": 2000,
+     "loss": 0.519498884677887,
+     "grad_norm": 19.592409133911133,
+     "seconds": 3853.9,
+     "distance": 0.3384372293949127,
+     "events": 94.99520874023438,
+     "rate": 0.09020834416151047,
+     "speed": 1.0923641920089722,
+     "score": 0.3307739496231079
+    },
+    {
+     "step": 2250,
+     "loss": -0.040886975824832916,
+     "grad_norm": 10.981645584106445,
+     "seconds": 4337.1,
+     "distance": 0.1840502768754959,
+     "events": 84.92500305175781,
+     "rate": 0.05586003139615059,
+     "speed": 2.7696032524108887,
+     "score": 1.0126473903656006
+    },
+    {
+     "step": 2500,
+     "loss": 0.07567542791366577,
+     "grad_norm": 11.823848724365234,
+     "seconds": 4826.3,
+     "distance": 0.21812963485717773,
+     "events": 98.00062561035156,
+     "rate": 0.06702735275030136,
+     "speed": 2.7879817485809326,
+     "score": 1.1121093034744263
+    },
+    {
+     "step": 2750,
+     "loss": 0.001240799087099731,
+     "grad_norm": 35.795448303222656,
+     "seconds": 5314.8,
+     "distance": 0.21276037395000458,
+     "events": 99.06135559082031,
+     "rate": 0.06469791382551193,
+     "speed": 3.1466047763824463,
+     "score": 1.1690024137496948
+    },
+    {
+     "step": 3000,
+     "loss": 0.005287931300699711,
+     "grad_norm": 132.95761108398438,
+     "seconds": 5802.4,
+     "distance": 0.21350586414337158,
+     "events": 103.25292205810547,
+     "rate": 0.06731446832418442,
+     "speed": 3.224249839782715,
+     "score": 1.1842254400253296
+    }
+   ],
+   "evaluation": {
+    "tracks": 200,
+    "seconds": 30.0,
+    "finished": 1.0,
+    "crashed": 0.0,
+    "median_lap_time": 10.94,
+    "median_speed": 5.4144978523254395,
+    "off_road": 0.022776666666666667,
+    "events_per_step": 119.4150390625,
+    "spikes_per_step": 10.886177062988281,
+    "units": 160,
+    "parameters": 61826,
+    "dense_macs_per_step": 61664,
+    "triggered_macs_per_step": 12025.57421875,
+    "onset_ms": 0.0,
+    "response_ms": 60.0,
+    "responded": 200,
+    "nudged": 200,
+    "nudge_m": 0.3
+   },
+   "difficulty": {
+    "by_bend": {
+     "0.9": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 1.0,
+      "crashed": 0.0,
+      "median_lap_time": 11.100000000000001,
+      "median_speed": 5.399908065795898,
+      "off_road": 0.025046666666666672,
+      "events_per_step": 119.37401580810547,
+      "spikes_per_step": 11.01375675201416,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 12026.1513671875,
+      "onset_ms": 0.0,
+      "response_ms": 60.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     },
+     "1.2": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 0.995,
+      "crashed": 0.0,
+      "median_lap_time": 11.18,
+      "median_speed": 5.2985358238220215,
+      "off_road": 0.02314,
+      "events_per_step": 119.1723861694336,
+      "spikes_per_step": 10.900066375732422,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 12004.2919921875,
+      "onset_ms": 0.0,
+      "response_ms": 60.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     },
+     "1.5": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 0.985,
+      "crashed": 0.0,
+      "median_lap_time": 12.08,
+      "median_speed": 5.221548080444336,
+      "off_road": 0.023563333333333332,
+      "events_per_step": 118.47064208984375,
+      "spikes_per_step": 10.9221830368042,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 11938.17578125,
+      "onset_ms": 0.0,
+      "response_ms": 60.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     },
+     "1.8": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 0.965,
+      "crashed": 0.015,
+      "median_lap_time": 12.280000000000001,
+      "median_speed": 5.172942161560059,
+      "off_road": 0.024573333333333332,
+      "events_per_step": 117.24241638183594,
+      "spikes_per_step": 10.860906600952148,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 11818.015625,
+      "onset_ms": 0.0,
+      "response_ms": 60.0,
+      "responded": 198,
+      "nudged": 198,
+      "nudge_m": 0.3
+     }
+    },
+    "by_radius": [
+     {
+      "from": 0.0,
+      "to": 1.0,
+      "tracks": 365,
+      "finished": 0.9698630136986301
+     },
+     {
+      "from": 1.0,
+      "to": 1.5,
+      "tracks": 146,
+      "finished": 1.0
+     },
+     {
+      "from": 1.5,
+      "to": 2.0,
+      "tracks": 107,
+      "finished": 1.0
+     },
+     {
+      "from": 2.0,
+      "to": 3.0,
+      "tracks": 136,
+      "finished": 1.0
+     },
+     {
+      "from": 3.0,
+      "to": 4.0,
+      "tracks": 36,
+      "finished": 1.0
+     },
+     {
+      "from": 4.0,
+      "to": 6.0,
+      "tracks": 10,
+      "finished": 1.0
+     }
+    ]
+   }
+  },
+  {
+   "arguments": "train --steps 3000 --batch 32 --lr 1e-3 --difficulty --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --select 250 --seed 3",
+   "history": [
+    {
+     "step": 1,
+     "loss": 122.2605209350586,
+     "grad_norm": 52.34119415283203,
+     "seconds": 6.1,
+     "distance": 3.6894478797912598,
+     "events": 15.972604751586914,
+     "rate": 0.0050084637477993965,
+     "speed": 2.1092400550842285
+    },
+    {
+     "step": 250,
+     "loss": 0.7586334943771362,
+     "grad_norm": 18.62581443786621,
+     "seconds": 483.7,
+     "distance": 0.4085884690284729,
+     "events": 77.29906463623047,
+     "rate": 0.13043229281902313,
+     "speed": 0.032108865678310394,
+     "score": 0.015157942660152912
+    },
+    {
+     "step": 500,
+     "loss": 0.4146439731121063,
+     "grad_norm": 2.5164694786071777,
+     "seconds": 965.8,
+     "distance": 0.33304449915885925,
+     "events": 84.39031219482422,
+     "rate": 0.0898229256272316,
+     "speed": 0.7249932289123535,
+     "score": 0.22534900903701782
+    },
+    {
+     "step": 750,
+     "loss": -0.3842257261276245,
+     "grad_norm": 47.20640563964844,
+     "seconds": 1445.8,
+     "distance": 0.14067478477954865,
+     "events": 107.10187530517578,
+     "rate": 0.082763671875,
+     "speed": 5.443567752838135,
+     "score": 1.9775880575180054
+    },
+    {
+     "step": 1000,
+     "loss": -0.2175290286540985,
+     "grad_norm": 34.65290451049805,
+     "seconds": 1915.4,
+     "distance": 0.16234838962554932,
+     "events": 120.48114776611328,
+     "rate": 0.07441016286611557,
+     "speed": 4.086146831512451,
+     "score": 1.3172649145126343
+    },
+    {
+     "step": 1250,
+     "loss": -0.3758489489555359,
+     "grad_norm": 4.471292018890381,
+     "seconds": 2398.1,
+     "distance": 0.12462437897920609,
+     "events": 116.78916931152344,
+     "rate": 0.08254688233137131,
+     "speed": 5.335848331451416,
+     "score": 1.8852155208587646
+    },
+    {
+     "step": 1500,
+     "loss": -0.38297244906425476,
+     "grad_norm": 1.2938683032989502,
+     "seconds": 2888.8,
+     "distance": 0.10089058429002762,
+     "events": 100.6163558959961,
+     "rate": 0.07985937595367432,
+     "speed": 5.347179412841797,
+     "score": 1.9017845392227173
+    },
+    {
+     "step": 1750,
+     "loss": 0.24039481580257416,
+     "grad_norm": 60.105289459228516,
+     "seconds": 3375.5,
+     "distance": 0.33304423093795776,
+     "events": 100.00031280517578,
+     "rate": 0.09431380033493042,
+     "speed": 2.85615611076355,
+     "score": 0.9640650749206543
+    },
+    {
+     "step": 2000,
+     "loss": 0.14342966675758362,
+     "grad_norm": 73.78773498535156,
+     "seconds": 3864.2,
+     "distance": 0.3064452111721039,
+     "events": 104.13396453857422,
+     "rate": 0.09522787481546402,
+     "speed": 3.302161455154419,
+     "score": 1.0839067697525024
+    },
+    {
+     "step": 2250,
+     "loss": 0.3479381203651428,
+     "grad_norm": 8.140206336975098,
+     "seconds": 4345.8,
+     "distance": 0.3377361595630646,
+     "events": 105.03177642822266,
+     "rate": 0.10565821081399918,
+     "speed": 2.284405469894409,
+     "score": 0.7427548170089722
+    },
+    {
+     "step": 2500,
+     "loss": 0.41026571393013,
+     "grad_norm": 12.009405136108398,
+     "seconds": 4834.5,
+     "distance": 0.3491082787513733,
+     "events": 102.32635498046875,
+     "rate": 0.10666082054376602,
+     "speed": 2.1151814460754395,
+     "score": 0.6857937574386597
+    },
+    {
+     "step": 2750,
+     "loss": 0.47892671823501587,
+     "grad_norm": 12.29246711730957,
+     "seconds": 5324.9,
+     "distance": 0.35497358441352844,
+     "events": 102.13249969482422,
+     "rate": 0.10803712904453278,
+     "speed": 1.937961459159851,
+     "score": 0.5964518785476685
+    },
+    {
+     "step": 3000,
+     "loss": 0.4388885796070099,
+     "grad_norm": 53.61724090576172,
+     "seconds": 5807.8,
+     "distance": 0.3482022285461426,
+     "events": 99.60865020751953,
+     "rate": 0.10304361581802368,
+     "speed": 2.18705415725708,
+     "score": 0.693617045879364
+    }
+   ],
+   "evaluation": {
+    "tracks": 200,
+    "seconds": 30.0,
+    "finished": 1.0,
+    "crashed": 0.0,
+    "median_lap_time": 10.3,
+    "median_speed": 5.70648717880249,
+    "off_road": 0.0030299999999999997,
+    "events_per_step": 119.38377380371094,
+    "spikes_per_step": 13.80997371673584,
+    "units": 160,
+    "parameters": 61826,
+    "dense_macs_per_step": 61664,
+    "triggered_macs_per_step": 12100.1572265625,
+    "onset_ms": 0.0,
+    "response_ms": 40.0,
+    "responded": 200,
+    "nudged": 200,
+    "nudge_m": 0.3
+   },
+   "difficulty": {
+    "by_bend": {
+     "0.9": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 1.0,
+      "crashed": 0.0,
+      "median_lap_time": 9.78,
+      "median_speed": 5.705896377563477,
+      "off_road": 0.00297,
+      "events_per_step": 121.39620971679688,
+      "spikes_per_step": 13.825260162353516,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 12292.2890625,
+      "onset_ms": 0.0,
+      "response_ms": 40.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     },
+     "1.2": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 1.0,
+      "crashed": 0.0,
+      "median_lap_time": 10.56,
+      "median_speed": 5.696556568145752,
+      "off_road": 0.0034033333333333333,
+      "events_per_step": 122.49440002441406,
+      "spikes_per_step": 13.902923583984375,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 12399.8837890625,
+      "onset_ms": 0.0,
+      "response_ms": 40.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     },
+     "1.5": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 0.99,
+      "crashed": 0.0,
+      "median_lap_time": 11.030000000000001,
+      "median_speed": 5.677971363067627,
+      "off_road": 0.005196666666666666,
+      "events_per_step": 122.554931640625,
+      "spikes_per_step": 13.867039680480957,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 12404.2373046875,
+      "onset_ms": 0.0,
+      "response_ms": 50.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     },
+     "1.8": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 0.975,
+      "crashed": 0.0,
+      "median_lap_time": 11.8,
+      "median_speed": 5.679986953735352,
+      "off_road": 0.00835,
+      "events_per_step": 117.39108276367188,
+      "spikes_per_step": 13.863966941833496,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 11910.953125,
+      "onset_ms": 0.0,
+      "response_ms": 40.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     }
+    },
+    "by_radius": [
+     {
+      "from": 0.0,
+      "to": 1.0,
+      "tracks": 378,
+      "finished": 0.9814814814814815
+     },
+     {
+      "from": 1.0,
+      "to": 1.5,
+      "tracks": 150,
+      "finished": 1.0
+     },
+     {
+      "from": 1.5,
+      "to": 2.0,
+      "tracks": 107,
+      "finished": 1.0
+     },
+     {
+      "from": 2.0,
+      "to": 3.0,
+      "tracks": 119,
+      "finished": 1.0
+     },
+     {
+      "from": 3.0,
+      "to": 4.0,
+      "tracks": 37,
+      "finished": 1.0
+     },
+     {
+      "from": 4.0,
+      "to": 6.0,
+      "tracks": 9,
+      "finished": 1.0
+     }
+    ]
+   }
+  },
+  {
+   "arguments": "train --steps 3000 --batch 32 --lr 1e-3 --difficulty --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --select 250 --seed 4",
+   "history": [
+    {
+     "step": 1,
+     "loss": 175.46945190429688,
+     "grad_norm": 103.6706314086914,
+     "seconds": 5.7,
+     "distance": 4.6090192794799805,
+     "events": 13.051563262939453,
+     "rate": 0.0041901045478880405,
+     "speed": 1.9554030895233154
+    },
+    {
+     "step": 250,
+     "loss": -0.4556083083152771,
+     "grad_norm": 0.185943141579628,
+     "seconds": 484.8,
+     "distance": 0.04121546447277069,
+     "events": 76.8828125,
+     "rate": 0.12200000137090683,
+     "speed": 5.580079555511475,
+     "score": 1.478188157081604
+    },
+    {
+     "step": 500,
+     "loss": 6.450865745544434,
+     "grad_norm": 5.763088703155518,
+     "seconds": 967.0,
+     "distance": 0.7760612964630127,
+     "events": 79.48312377929688,
+     "rate": 0.1321132928133011,
+     "speed": 0.18307670950889587,
+     "score": 0.027066169306635857
+    },
+    {
+     "step": 750,
+     "loss": 0.8108140230178833,
+     "grad_norm": 8.025702476501465,
+     "seconds": 1446.2,
+     "distance": 0.44140350818634033,
+     "events": 100.50239562988281,
+     "rate": 0.13611198961734772,
+     "speed": 0.7106654047966003,
+     "score": 0.034660834819078445
+    },
+    {
+     "step": 1000,
+     "loss": 0.09281421452760696,
+     "grad_norm": 12.05718994140625,
+     "seconds": 1918.3,
+     "distance": 0.28006595373153687,
+     "events": 106.04771423339844,
+     "rate": 0.08054947853088379,
+     "speed": 2.3758819103240967,
+     "score": 0.644524335861206
+    },
+    {
+     "step": 1250,
+     "loss": 0.052711375057697296,
+     "grad_norm": 5.875839710235596,
+     "seconds": 2401.7,
+     "distance": 0.20824745297431946,
+     "events": 102.52437591552734,
+     "rate": 0.08533203601837158,
+     "speed": 2.958367109298706,
+     "score": 0.9584914445877075
+    },
+    {
+     "step": 1500,
+     "loss": -0.3588954508304596,
+     "grad_norm": 1.2568286657333374,
+     "seconds": 2892.5,
+     "distance": 0.11521919816732407,
+     "events": 103.43031311035156,
+     "rate": 0.07502669095993042,
+     "speed": 5.039058685302734,
+     "score": 1.7271255254745483
+    },
+    {
+     "step": 1750,
+     "loss": 0.45428168773651123,
+     "grad_norm": 9.650446891784668,
+     "seconds": 3381.6,
+     "distance": 0.39506155252456665,
+     "events": 98.80802154541016,
+     "rate": 0.10322592407464981,
+     "speed": 1.5378282070159912,
+     "score": 0.3788086771965027
+    },
+    {
+     "step": 2000,
+     "loss": 0.12659484148025513,
+     "grad_norm": 74.8524398803711,
+     "seconds": 3868.6,
+     "distance": 0.313050776720047,
+     "events": 99.85906219482422,
+     "rate": 0.08657421916723251,
+     "speed": 2.9533817768096924,
+     "score": 0.7179759740829468
+    },
+    {
+     "step": 2250,
+     "loss": 0.1589832603931427,
+     "grad_norm": 80.52149963378906,
+     "seconds": 4347.7,
+     "distance": 0.37605369091033936,
+     "events": 99.24104309082031,
+     "rate": 0.08248307555913925,
+     "speed": 3.114053726196289,
+     "score": 0.9716804027557373
+    },
+    {
+     "step": 2500,
+     "loss": 0.22049544751644135,
+     "grad_norm": 49.90180206298828,
+     "seconds": 4838.8,
+     "distance": 0.45078903436660767,
+     "events": 100.71843719482422,
+     "rate": 0.07957162708044052,
+     "speed": 3.5395801067352295,
+     "score": 0.8515840172767639
+    },
+    {
+     "step": 2750,
+     "loss": 0.20959928631782532,
+     "grad_norm": 404.45526123046875,
+     "seconds": 5325.5,
+     "distance": 0.4624841511249542,
+     "events": 101.92031860351562,
+     "rate": 0.08124219626188278,
+     "speed": 3.658480644226074,
+     "score": 0.7526735067367554
+    },
+    {
+     "step": 3000,
+     "loss": 0.20480670034885406,
+     "grad_norm": 34.69080352783203,
+     "seconds": 5808.8,
+     "distance": 0.43250396847724915,
+     "events": 97.15499877929688,
+     "rate": 0.0771191343665123,
+     "speed": 3.4980123043060303,
+     "score": 0.9928325414657593
+    }
+   ],
+   "evaluation": {
+    "tracks": 200,
+    "seconds": 30.0,
+    "finished": 1.0,
+    "crashed": 0.0,
+    "median_lap_time": 10.82,
+    "median_speed": 5.509788513183594,
+    "off_road": 0.00157,
+    "events_per_step": 109.04490661621094,
+    "spikes_per_step": 12.068840026855469,
+    "units": 160,
+    "parameters": 61826,
+    "dense_macs_per_step": 61664,
+    "triggered_macs_per_step": 11098.7490234375,
+    "onset_ms": 10.0,
+    "response_ms": 40.0,
+    "responded": 200,
+    "nudged": 200,
+    "nudge_m": 0.3
+   },
+   "difficulty": {
+    "by_bend": {
+     "0.9": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 1.0,
+      "crashed": 0.0,
+      "median_lap_time": 10.66,
+      "median_speed": 5.240795135498047,
+      "off_road": 0.0031366666666666665,
+      "events_per_step": 110.10037231445312,
+      "spikes_per_step": 12.046183586120605,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 11199.42578125,
+      "onset_ms": 20.0,
+      "response_ms": 40.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     },
+     "1.2": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 0.99,
+      "crashed": 0.0,
+      "median_lap_time": 11.08,
+      "median_speed": 5.160556793212891,
+      "off_road": 0.0019966666666666666,
+      "events_per_step": 110.55496978759766,
+      "spikes_per_step": 12.08411693572998,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 11245.5458984375,
+      "onset_ms": 20.0,
+      "response_ms": 60.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     },
+     "1.5": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 0.985,
+      "crashed": 0.0,
+      "median_lap_time": 11.88,
+      "median_speed": 5.393673896789551,
+      "off_road": 0.00204,
+      "events_per_step": 108.9000015258789,
+      "spikes_per_step": 12.24036693572998,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 11092.6474609375,
+      "onset_ms": 0.0,
+      "response_ms": 40.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     },
+     "1.8": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 0.98,
+      "crashed": 0.0,
+      "median_lap_time": 12.399999999999999,
+      "median_speed": 5.224926471710205,
+      "off_road": 0.002563333333333333,
+      "events_per_step": 109.48445129394531,
+      "spikes_per_step": 12.289569854736328,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 11151.953125,
+      "onset_ms": 20.0,
+      "response_ms": 40.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     }
+    },
+    "by_radius": [
+     {
+      "from": 0.0,
+      "to": 1.0,
+      "tracks": 349,
+      "finished": 0.9742120343839542
+     },
+     {
+      "from": 1.0,
+      "to": 1.5,
+      "tracks": 170,
+      "finished": 1.0
+     },
+     {
+      "from": 1.5,
+      "to": 2.0,
+      "tracks": 116,
+      "finished": 1.0
+     },
+     {
+      "from": 2.0,
+      "to": 3.0,
+      "tracks": 119,
+      "finished": 1.0
+     },
+     {
+      "from": 3.0,
+      "to": 4.0,
+      "tracks": 37,
+      "finished": 1.0
+     },
+     {
+      "from": 4.0,
+      "to": 6.0,
+      "tracks": 9,
+      "finished": 1.0
+     }
+    ]
+   }
+  },
+  {
+   "arguments": "train --steps 3000 --batch 32 --lr 1e-3 --difficulty --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --select 250 --seed 5",
+   "history": [
+    {
+     "step": 1,
+     "loss": 136.23175048828125,
+     "grad_norm": 57.00205612182617,
+     "seconds": 4.4,
+     "distance": 3.9869608879089355,
+     "events": 15.42145824432373,
+     "rate": 0.004805989563465118,
+     "speed": 2.0614376068115234
+    },
+    {
+     "step": 250,
+     "loss": 0.6521776914596558,
+     "grad_norm": 0.8232144713401794,
+     "seconds": 359.1,
+     "distance": 0.3778614103794098,
+     "events": 110.34406280517578,
+     "rate": 0.13103386759757996,
+     "speed": 0.27810680866241455,
+     "score": 0.09068096429109573
+    },
+    {
+     "step": 500,
+     "loss": -0.14608041942119598,
+     "grad_norm": 9.345727920532227,
+     "seconds": 720.6,
+     "distance": 0.11533846706151962,
+     "events": 92.59375,
+     "rate": 0.06131185218691826,
+     "speed": 2.238661050796509,
+     "score": 0.7481096386909485
+    },
+    {
+     "step": 750,
+     "loss": 0.459123820066452,
+     "grad_norm": 4.105820655822754,
+     "seconds": 1080.0,
+     "distance": 0.3357297480106354,
+     "events": 119.10677337646484,
+     "rate": 0.11511719226837158,
+     "speed": 1.4766148328781128,
+     "score": 0.36885783076286316
+    },
+    {
+     "step": 1000,
+     "loss": -0.13905826210975647,
+     "grad_norm": 5.860581398010254,
+     "seconds": 1446.3,
+     "distance": 0.1751096248626709,
+     "events": 81.90416717529297,
+     "rate": 0.05561979487538338,
+     "speed": 2.5767526626586914,
+     "score": 0.9288046956062317
+    },
+    {
+     "step": 1250,
+     "loss": -0.32607659697532654,
+     "grad_norm": 17.51429557800293,
+     "seconds": 1806.6,
+     "distance": 0.12700065970420837,
+     "events": 111.7393798828125,
+     "rate": 0.06653580814599991,
+     "speed": 4.658854961395264,
+     "score": 1.6390712261199951
+    },
+    {
+     "step": 1500,
+     "loss": -0.3621462285518646,
+     "grad_norm": 33.68883514404297,
+     "seconds": 2166.7,
+     "distance": 0.12015355378389359,
+     "events": 125.94208526611328,
+     "rate": 0.07916536927223206,
+     "speed": 4.95281982421875,
+     "score": 1.7659403085708618
+    },
+    {
+     "step": 1750,
+     "loss": -0.342958927154541,
+     "grad_norm": 106.25943756103516,
+     "seconds": 2528.3,
+     "distance": 0.19003629684448242,
+     "events": 139.6501007080078,
+     "rate": 0.08263932913541794,
+     "speed": 5.240561485290527,
+     "score": 1.85020911693573
+    },
+    {
+     "step": 2000,
+     "loss": -0.3941625654697418,
+     "grad_norm": 3.3580286502838135,
+     "seconds": 2893.8,
+     "distance": 0.1173606738448143,
+     "events": 151.53334045410156,
+     "rate": 0.09773503243923187,
+     "speed": 5.2764201164245605,
+     "score": 1.9106197357177734
+    },
+    {
+     "step": 2250,
+     "loss": -0.37388238310813904,
+     "grad_norm": 145.48609924316406,
+     "seconds": 3260.4,
+     "distance": 0.1353694647550583,
+     "events": 149.35520935058594,
+     "rate": 0.09706315398216248,
+     "speed": 5.175652980804443,
+     "score": 1.8678553104400635
+    },
+    {
+     "step": 2500,
+     "loss": -0.3169519305229187,
+     "grad_norm": 30.55777359008789,
+     "seconds": 3624.7,
+     "distance": 0.10921688377857208,
+     "events": 149.4656219482422,
+     "rate": 0.09624089300632477,
+     "speed": 4.986746788024902,
+     "score": 1.876068353652954
+    },
+    {
+     "step": 2750,
+     "loss": -0.3938848674297333,
+     "grad_norm": 9.250426292419434,
+     "seconds": 3990.5,
+     "distance": 0.10939329117536545,
+     "events": 150.88656616210938,
+     "rate": 0.09851237386465073,
+     "speed": 5.238116264343262,
+     "score": 1.8960206508636475
+    },
+    {
+     "step": 3000,
+     "loss": -0.39714354276657104,
+     "grad_norm": 3.031919240951538,
+     "seconds": 4352.7,
+     "distance": 0.1132095605134964,
+     "events": 156.06124877929688,
+     "rate": 0.1016920730471611,
+     "speed": 5.252846717834473,
+     "score": 1.8836532831192017
+    }
+   ],
+   "evaluation": {
+    "tracks": 200,
+    "seconds": 30.0,
+    "finished": 1.0,
+    "crashed": 0.0,
+    "median_lap_time": 10.49,
+    "median_speed": 5.495136260986328,
+    "off_road": 0.0,
+    "events_per_step": 163.87814331054688,
+    "spikes_per_step": 15.930919647216797,
+    "units": 160,
+    "parameters": 61826,
+    "dense_macs_per_step": 61664,
+    "triggered_macs_per_step": 16424.193359375,
+    "onset_ms": 20.0,
+    "response_ms": 110.0,
+    "responded": 200,
+    "nudged": 200,
+    "nudge_m": 0.3
+   },
+   "difficulty": {
+    "by_bend": {
+     "0.9": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 1.0,
+      "crashed": 0.0,
+      "median_lap_time": 10.27,
+      "median_speed": 5.491959571838379,
+      "off_road": 0.0,
+      "events_per_step": 163.92295837402344,
+      "spikes_per_step": 16.066495895385742,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 16431.236328125,
+      "onset_ms": 20.0,
+      "response_ms": 100.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     },
+     "1.2": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 0.995,
+      "crashed": 0.0,
+      "median_lap_time": 11.02,
+      "median_speed": 5.488031387329102,
+      "off_road": 3.3333333333333333e-06,
+      "events_per_step": 161.25852966308594,
+      "spikes_per_step": 15.745916366577148,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 16166.5947265625,
+      "onset_ms": 20.0,
+      "response_ms": 100.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     },
+     "1.5": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 1.0,
+      "crashed": 0.0,
+      "median_lap_time": 11.58,
+      "median_speed": 5.469614028930664,
+      "off_road": 1e-05,
+      "events_per_step": 159.99583435058594,
+      "spikes_per_step": 15.791263580322266,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 16045.3564453125,
+      "onset_ms": 40.0,
+      "response_ms": 100.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     },
+     "1.8": {
+      "tracks": 200,
+      "seconds": 30.0,
+      "finished": 1.0,
+      "crashed": 0.0,
+      "median_lap_time": 12.1,
+      "median_speed": 5.451663970947266,
+      "off_road": 4e-05,
+      "events_per_step": 160.44017028808594,
+      "spikes_per_step": 16.0164794921875,
+      "units": 160,
+      "parameters": 61826,
+      "dense_macs_per_step": 61664,
+      "triggered_macs_per_step": 16093.849609375,
+      "onset_ms": 20.0,
+      "response_ms": 100.0,
+      "responded": 200,
+      "nudged": 200,
+      "nudge_m": 0.3
+     }
+    },
+    "by_radius": [
+     {
+      "from": 0.0,
+      "to": 1.0,
+      "tracks": 339,
+      "finished": 0.9970501474926253
+     },
+     {
+      "from": 1.0,
+      "to": 1.5,
+      "tracks": 154,
+      "finished": 1.0
+     },
+     {
+      "from": 1.5,
+      "to": 2.0,
+      "tracks": 129,
+      "finished": 1.0
+     },
+     {
+      "from": 2.0,
+      "to": 3.0,
+      "tracks": 130,
+      "finished": 1.0
+     },
+     {
+      "from": 3.0,
+      "to": 4.0,
+      "tracks": 35,
+      "finished": 1.0
+     },
+     {
+      "from": 4.0,
+      "to": 6.0,
+      "tracks": 13,
+      "finished": 1.0
+     }
+    ]
+   }
+  }
+ ]
+}
