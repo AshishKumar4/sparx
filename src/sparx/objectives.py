@@ -45,7 +45,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import optax
-from dew.artifacts import TokenScores
+from dew.artifacts import Artifacts, TokenScores
 from dew.inputs import Field, InputSpec
 from dew.nn.precision import at_least_fp32
 from dew.objectives.base import (
@@ -367,7 +367,7 @@ class ActivityFitObjective(Objective[Ratio]):
     def _evaluation_scores(self, variables: Variables, batch: Batch, key: jax.Array) -> TokenScores:
         return _per_example(self._distances(variables, batch)[0])
 
-    def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
+    def evaluate(self, params: Variables, batch: Batch, step: Step) -> Artifacts | None:
         return super().evaluate(params, _fields(batch, self.stimulus.key, self.recording), step)
 
 
@@ -507,7 +507,7 @@ class EPropObjective(Objective[Ratio]):
         correct = jnp.argmax(readout_logits("mean", outputs), -1) == labels
         return _per_example(readout_losses("mean", outputs, labels), correct)
 
-    def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
+    def evaluate(self, params: Variables, batch: Batch, step: Step) -> Artifacts | None:
         return super().evaluate(params, _fields(batch, self.sample.key, self.labels), step)
 
     def task_record(self) -> Mapping[str, JSON]:
@@ -606,7 +606,7 @@ class PredictiveCodingObjective(Objective[Ratio]):
         _, labels, target, output = self._scored(variables, batch)
         return _per_example(squared_error(output, target), jnp.argmax(output, axis=-1) == labels)
 
-    def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
+    def evaluate(self, params: Variables, batch: Batch, step: Step) -> Artifacts | None:
         return super().evaluate(params, _fields(batch, self.sample.key, self.labels), step)
 
 
@@ -725,5 +725,5 @@ class RNeuralNetObjective(Objective[Ratio]):
         correct = jnp.argmax(outputs, axis=-1) == batch[self.labels]
         return _per_example(jnp.where(correct, -1.0, 1.0), correct)
 
-    def evaluate(self, params: Variables, batch: Batch, step: Step) -> TokenScores:
+    def evaluate(self, params: Variables, batch: Batch, step: Step) -> Artifacts | None:
         return super().evaluate(params, _fields(batch, self.sample.key, self.labels), step)
