@@ -1,5 +1,5 @@
 // A scrolling plot of several traces in stacked bands, each band on its own axis, with events marked along
-// the top: what the biology chapter's figures draw.
+// the top: what the biology chapter's figures draw, and the neuron scopes (scope.ts).
 import { alpha, animate, fit, onTheme, type Palette } from './theme';
 
 export type Role = 'spike' | 'membrane' | 'bio' | 'learn' | 'ink';
@@ -11,6 +11,10 @@ export interface Band {
 	lines: Role[];
 	/** Dashed levels with their labels. */
 	guides?: { at: number; label: string; role?: Role }[];
+	/** Faint lines dividing the band into this many parts. */
+	grid?: number;
+	/** Shade each line's area down to zero, or the band's floor, instead of stroking it. */
+	fill?: boolean;
 }
 
 export interface Sample {
@@ -19,7 +23,12 @@ export interface Sample {
 	event?: boolean;
 }
 
-export function traces(canvas: HTMLCanvasElement, bands: Band[], step: () => Sample, { steps = 400, perFrame = 1 } = {}) {
+export function traces(
+	canvas: HTMLCanvasElement,
+	bands: Band[],
+	step: () => Sample,
+	{ steps = 400, perFrame = 1, events = 'ink' as Role } = {},
+) {
 	const width = bands.reduce((n, band) => n + band.lines.length, 0);
 	const values = new Float64Array(steps * width);
 	const events = new Uint8Array(steps);
@@ -56,8 +65,8 @@ export function traces(canvas: HTMLCanvasElement, bands: Band[], step: () => Sam
 		const first = Math.max(0, head - steps);
 		const x = (t: number) => ((steps - (head - t)) / (steps - 1)) * w;
 
-		ctx.strokeStyle = alpha(colors.ink, 0.5);
-		ctx.lineWidth = 1.5;
+		ctx.strokeStyle = events === 'ink' ? alpha(colors.ink, 0.5) : colors[events];
+		ctx.lineWidth = events === 'ink' ? 1.5 : 2;
 		ctx.beginPath();
 		for (let t = first; t < head; t++) {
 			if (!events[t % steps]) continue;
@@ -73,6 +82,17 @@ export function traces(canvas: HTMLCanvasElement, bands: Band[], step: () => Sam
 			const height = (band.weight / total) * usable;
 			const [lo, hi] = band.range;
 			const y = (v: number) => top + height - ((Math.min(Math.max(v, lo), hi) - lo) / (hi - lo)) * height;
+			if (band.grid) {
+				ctx.strokeStyle = alpha(colors.ink, 0.07);
+				ctx.lineWidth = 1;
+				ctx.beginPath();
+				for (let k = 1; k < band.grid; k++) {
+					const yy = Math.round(top + (k * height) / band.grid) + 0.5;
+					ctx.moveTo(0, yy);
+					ctx.lineTo(w, yy);
+				}
+				ctx.stroke();
+			}
 			for (const guide of band.guides ?? []) {
 				const yy = Math.round(y(guide.at)) + 0.5;
 				ctx.setLineDash([4, 4]);
@@ -84,19 +104,27 @@ export function traces(canvas: HTMLCanvasElement, bands: Band[], step: () => Sam
 				ctx.stroke();
 				ctx.setLineDash([]);
 				ctx.fillStyle = colors.muted;
-				ctx.fillText(guide.label, 6, yy - 4);
+				if (guide.label) ctx.fillText(guide.label, 6, yy - 4);
 			}
+			const floor = y(Math.min(Math.max(0, lo), hi));
 			for (const role of band.lines) {
-				ctx.strokeStyle = colors[role];
 				ctx.lineWidth = 1.75;
 				ctx.lineJoin = 'round';
 				ctx.beginPath();
+				if (band.fill) ctx.moveTo(x(first), floor);
 				for (let t = first; t < head; t++) {
 					const yy = y(values[(t % steps) * width + column]);
-					if (t === first) ctx.moveTo(x(t), yy);
+					if (t === first && !band.fill) ctx.moveTo(x(t), yy);
 					else ctx.lineTo(x(t), yy);
 				}
-				ctx.stroke();
+				if (band.fill) {
+					ctx.lineTo(x(head - 1), floor);
+					ctx.fillStyle = alpha(colors[role], 0.1);
+					ctx.fill();
+				} else {
+					ctx.strokeStyle = colors[role];
+					ctx.stroke();
+				}
 				column++;
 			}
 			top += height + gap;

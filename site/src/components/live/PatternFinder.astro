@@ -19,6 +19,7 @@ import Figure from './Figure.astro';
 <script>
 	import { controls } from '../../widgets/controls';
 	import { type PatternFigure, patternFigure } from '../../widgets/plasticity';
+	import { whenNear } from '../../widgets/theme';
 
 	for (const root of document.querySelectorAll<HTMLElement>('[data-pattern]')) {
 		let figure: PatternFigure | null = null;
@@ -27,11 +28,7 @@ import Figure from './Figure.astro';
 			if (name === 'speed') figure.setSpeed(Number(ui.choice('speed')));
 			if (name === 'learning') figure.setLearning(ui.choice('learning') === 'on');
 		});
-		new IntersectionObserver(([entry], observer) => {
-			if (!entry.isIntersecting) return;
-			figure = patternFigure(root);
-			observer.disconnect();
-		}).observe(root);
+		whenNear(root, () => (figure = patternFigure(root)), '0px');
 		root.querySelector('[data-act="reset"]')?.addEventListener('click', () => figure?.reset());
 	}
 </script>

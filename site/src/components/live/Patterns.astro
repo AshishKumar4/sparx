@@ -26,15 +26,14 @@ const names = data.patterns.map((p) => p.pattern.replaceAll('_', ' ').replace(/^
 
 <script>
 	import { type Panel, panels } from '../../widgets/parity';
+	import { whenNear } from '../../widgets/theme';
 
 	const root = document.querySelector<HTMLElement>('[data-patterns]');
 	if (root) {
-		new IntersectionObserver(async ([entry], observer) => {
-			if (!entry.isIntersecting) return;
-			observer.disconnect();
+		whenNear(root, async () => {
 			const data: { patterns: Panel[] } = await (await fetch('/data/parity.json')).json();
 			panels(root, data.patterns);
-		}, { rootMargin: '300px' }).observe(root);
+		});
 	}
 </script>
 

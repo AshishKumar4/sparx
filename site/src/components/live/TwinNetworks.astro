@@ -18,6 +18,7 @@ import Figure from './Figure.astro';
 <script>
 	import { controls } from '../../widgets/controls';
 	import { type TwinsFigure, twins } from '../../widgets/twins';
+	import { whenNear } from '../../widgets/theme';
 
 	for (const root of document.querySelectorAll<HTMLElement>('[data-twins]')) {
 		let figure: TwinsFigure | null = null;
@@ -26,11 +27,7 @@ import Figure from './Figure.astro';
 			const [g, eta] = ui.choice('regime').split(',').map(Number);
 			return { g, eta };
 		};
-		new IntersectionObserver(([entry], observer) => {
-			if (!entry.isIntersecting) return;
-			figure = twins(root, regime);
-			observer.disconnect();
-		}, { rootMargin: '200px' }).observe(root);
+		whenNear(root, () => (figure = twins(root, regime)), '200px');
 		root.querySelector('[data-act="nudge"]')?.addEventListener('click', () => figure?.nudge());
 		root.querySelector('[data-act="restart"]')?.addEventListener('click', () => figure?.restart());
 	}

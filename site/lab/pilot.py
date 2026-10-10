@@ -20,14 +20,13 @@ import argparse
 import dataclasses
 import json
 import math
-import time
 from pathlib import Path
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
-import optax
+import training
 from stack import act, at_rest, from_layers, stack, to_layers
 
 import sparx
@@ -186,38 +185,13 @@ def train(args: argparse.Namespace) -> None:
     )
     net = network(args.hidden, args.tau, args.readout_tau)
     params = net.init(jax.random.key(args.seed), jnp.zeros((1, 1, 7)))["params"]
-    warmup = min(100, args.steps // 10)
-    schedule = optax.warmup_cosine_decay_schedule(0.0, args.lr, warmup, args.steps, args.lr / 20)
-    optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(schedule))
-    opt_state = optimizer.init(params)
-
     def loss_fn(params, key):
         s0, targets, kicks, box = flights.draw(drone, key, args.batch)
         states, _, spikes = fly(net, params, drone, s0, targets, kicks, box)
         return flight_cost(states, targets, spikes, (args.rate_low, args.rate_high))
 
-    @jax.jit
-    def update(params, opt_state, key):
-        (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(params, key)
-        updates, opt_state = optimizer.update(grads, opt_state, params)
-        return optax.apply_updates(params, updates), opt_state, loss, aux, optax.global_norm(grads)
-
-    history, start = [], time.time()
-    key = jax.random.key(args.seed + 1)
-    for step in range(1, args.steps + 1):
-        key, sub = jax.random.split(key)
-        params, opt_state, loss, aux, norm = update(params, opt_state, sub)
-        if step % args.log_every == 0 or step == 1:
-            row = {
-                "step": step,
-                "loss": float(loss),
-                "distance": float(aux["distance"]),
-                "rate": float(aux["rate"]),
-                "grad_norm": float(norm),
-                "seconds": round(time.time() - start, 1),
-            }
-            history.append(row)
-            print(json.dumps(row), flush=True)
+    params, history = training.train(loss_fn, params, lr=args.lr, steps=args.steps, seed=args.seed + 1,
+                                     log_every=args.log_every)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

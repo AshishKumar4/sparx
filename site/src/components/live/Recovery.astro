@@ -24,6 +24,7 @@ const starts = [
 
 <script>
 	import { arrival, type Flight, recovery } from '../../widgets/pilot/recovery';
+	import { whenNear } from '../../widgets/theme';
 
 	for (const root of document.querySelectorAll<HTMLElement>('[data-recovery]')) {
 		const arrived = root.querySelector<HTMLElement>('[data-arrived]') as HTMLElement;
@@ -32,13 +33,11 @@ const starts = [
 			const spikes = flight.spikes.reduce((n, row) => n + row.reduce((a, b) => a + b, 0), 0);
 			arrived.textContent = `${t === null ? 'not there yet' : `within 15 cm from ${(t / 100).toFixed(2)} s`} · ${spikes.toLocaleString('en-US')} spikes`;
 		};
-		new IntersectionObserver(async ([entry], observer) => {
-			if (!entry.isIntersecting) return;
-			observer.disconnect();
+		whenNear(root, async () => {
 			const model = await (await fetch('/pilot/pilot.json')).json();
 			const figure = recovery(root.querySelector('canvas') as HTMLCanvasElement, model, report);
 			for (const button of root.querySelectorAll<HTMLButtonElement>('[data-start]')) button.addEventListener('click', () => figure.start(button.dataset.start as string));
-		}, { rootMargin: '300px' }).observe(root);
+		});
 	}
 </script>
 

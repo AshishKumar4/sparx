@@ -85,31 +85,11 @@ const finished = Math.round(laps.finished * laps.tracks);
 
 <script>
 	import { hero } from '../../widgets/pilot/hero';
-	import { racerHero } from '../../widgets/racer/hero';
+	import { mountRacer } from '../../widgets/racer/hero';
 
 	const root = document.querySelector<HTMLElement>('[data-hero]');
 	if (root) {
-		const events = root.querySelector<HTMLElement>('[data-racer-events]') as HTMLElement;
-		const spikes = root.querySelector<HTMLElement>('[data-racer-spikes]') as HTMLElement;
-		const lap = root.querySelector<HTMLElement>('[data-racer-lap]') as HTMLElement;
-		const draw = root.querySelector<HTMLButtonElement>('[data-racer-act="draw"]') as HTMLButtonElement;
-		const pause = root.querySelector<HTMLButtonElement>('[data-racer-act="pause"]') as HTMLButtonElement;
-		const car = racerHero(root, await (await fetch('/racer/racer.json')).json(), (state) => {
-			events.textContent = String(state.events);
-			spikes.textContent = String(state.spikes);
-			lap.textContent = state.crashed ? 'off the road: starting again' : state.lap === null ? '' : `last lap ${state.lap.toFixed(1)} s`;
-			draw.setAttribute('aria-pressed', String(root.dataset.drawing === 'true'));
-		});
-		const paused = (value: boolean) => {
-			car.setPaused(value);
-			root.dataset.racerPaused = String(value);
-			pause.setAttribute('aria-pressed', String(value));
-			pause.textContent = value ? 'Play' : 'Pause';
-		};
-		paused(car.paused);
-		root.querySelector('[data-racer-act="track"]')?.addEventListener('click', () => car.newTrack());
-		draw.addEventListener('click', () => car.draw(root.dataset.drawing !== 'true'));
-		pause.addEventListener('click', () => paused(!car.paused));
+		mountRacer(root, await (await fetch('/racer/racer.json')).json(), () => '');
 
 		let drone: Promise<void> | null = null;
 		const tabs = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')];

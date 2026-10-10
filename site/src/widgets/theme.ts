@@ -86,3 +86,16 @@ export function animate(element: Element, frame: (dt: number) => void): { runnin
 	document.addEventListener('visibilitychange', update);
 	return { running: () => handle !== 0 };
 }
+
+/** Calls `start` once, when `element` comes within `margin` of the screen, so a figure costs nothing until a
+ * reader scrolls toward it. */
+export function whenNear(element: Element, start: () => unknown, margin = '300px'): void {
+	new IntersectionObserver(
+		([entry], observer) => {
+			if (!entry.isIntersecting) return;
+			observer.disconnect();
+			Promise.resolve(start()).catch((error) => console.error(error));
+		},
+		{ rootMargin: margin },
+	).observe(element);
+}

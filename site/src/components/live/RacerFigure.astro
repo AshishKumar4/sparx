@@ -9,42 +9,22 @@ import Figure from './Figure.astro';
 		<canvas data-racer-stage role="img" aria-label="A car driven by a spiking network around a closed track from its event camera's output, above the camera's pixels as they fire, the network's 160 neurons as they spike, and its steering and speed"></canvas>
 		<div class="net" data-racer-net aria-hidden="true"></div>
 		<div slot="controls" class="sx-buttons">
-			<button class="sx-button" type="button" data-act="track">New track</button>
-			<button class="sx-button" type="button" data-act="draw" aria-pressed="false">Draw a track</button>
-			<button class="sx-button" type="button" data-act="pause" aria-pressed="false">Pause</button>
+			<button class="sx-button" type="button" data-racer-act="track">New track</button>
+			<button class="sx-button" type="button" data-racer-act="draw" aria-pressed="false">Draw a track</button>
+			<button class="sx-button" type="button" data-racer-act="pause" aria-pressed="false">Pause</button>
 		</div>
 		<p slot="after" class="sx-readout">
-			events <b data-events>0</b> · spikes <b data-spikes>0</b> a step · <b data-lap>…</b>
+			events <b data-racer-events>0</b> · spikes <b data-racer-spikes>0</b> a step · <b data-racer-lap>…</b>
 		</p>
 	</Figure>
 </div>
 
 <script>
-	import { racerHero } from '../../widgets/racer/hero';
+	import { mountRacer } from '../../widgets/racer/hero';
+	import { whenNear } from '../../widgets/theme';
 
 	for (const root of document.querySelectorAll<HTMLElement>('[data-racer-figure]')) {
-		const field = (name: string) => root.querySelector<HTMLElement>(`[data-${name}]`) as HTMLElement;
-		const draw = root.querySelector<HTMLButtonElement>('[data-act="draw"]') as HTMLButtonElement;
-		const pause = root.querySelector<HTMLButtonElement>('[data-act="pause"]') as HTMLButtonElement;
-		new IntersectionObserver(async ([entry], observer) => {
-			if (!entry.isIntersecting) return;
-			observer.disconnect();
-			const car = racerHero(root, await (await fetch('/racer/racer.json')).json(), (state) => {
-				field('events').textContent = String(state.events);
-				field('spikes').textContent = String(state.spikes);
-				field('lap').textContent = state.crashed ? 'off the road: starting again' : state.lap === null ? `lap ${state.laps + 1} under way` : `last lap ${state.lap.toFixed(1)} s`;
-				draw.setAttribute('aria-pressed', String(root.dataset.drawing === 'true'));
-			});
-			const paused = (value: boolean) => {
-				car.setPaused(value);
-				pause.setAttribute('aria-pressed', String(value));
-				pause.textContent = value ? 'Play' : 'Pause';
-			};
-			paused(car.paused);
-			root.querySelector('[data-act="track"]')?.addEventListener('click', () => car.newTrack());
-			draw.addEventListener('click', () => car.draw(root.dataset.drawing !== 'true'));
-			pause.addEventListener('click', () => paused(!car.paused));
-		}, { rootMargin: '300px' }).observe(root);
+		whenNear(root, async () => mountRacer(root, await (await fetch('/racer/racer.json')).json(), (laps) => `lap ${laps + 1} under way`));
 	}
 </script>
 

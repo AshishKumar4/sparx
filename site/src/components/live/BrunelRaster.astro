@@ -49,6 +49,7 @@ const synapses = [
 <script>
 	import { type Raster, type Settings, raster } from '../../widgets/brunel/raster';
 	import { controls } from '../../widgets/controls';
+	import { whenNear } from '../../widgets/theme';
 
 	for (const root of document.querySelectorAll<HTMLElement>('[data-brunel]')) {
 		const canvas = root.querySelector('canvas') as HTMLCanvasElement;
@@ -68,11 +69,7 @@ const synapses = [
 			started ??= raster(canvas, settings());
 			return started;
 		};
-		new IntersectionObserver(([entry], observer) => {
-			if (!entry.isIntersecting) return;
-			begin();
-			observer.disconnect();
-		}, { rootMargin: '200px' }).observe(root);
+		whenNear(root, begin, '200px');
 		const ui = controls(root, (name) => {
 			if (name === 'regime' && hasSliders) {
 				const [g, eta] = ui.choice('regime').split(',').map(Number);

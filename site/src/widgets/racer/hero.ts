@@ -418,6 +418,32 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 	return hero;
 }
 
+/** A racer driving inside `root`, bound to the controls and readouts there: buttons data-racer-act="track",
+ * "draw" and "pause", and readouts data-racer-events, -spikes and -lap. `waiting` is the lap readout before a
+ * lap is done. */
+export function mountRacer(root: HTMLElement, model: RacerModel, waiting: (laps: number) => string): RacerHero {
+	const field = (name: string) => root.querySelector<HTMLElement>(`[data-racer-${name}]`) as HTMLElement;
+	const button = (act: string) => root.querySelector<HTMLButtonElement>(`[data-racer-act="${act}"]`) as HTMLButtonElement;
+	const [draw, pause] = [button('draw'), button('pause')];
+	const car = racerHero(root, model, (state) => {
+		field('events').textContent = String(state.events);
+		field('spikes').textContent = String(state.spikes);
+		field('lap').textContent = state.crashed ? 'off the road: starting again' : state.lap === null ? waiting(state.laps) : `last lap ${state.lap.toFixed(1)} s`;
+		draw.setAttribute('aria-pressed', String(root.dataset.drawing === 'true'));
+	});
+	const paused = (value: boolean) => {
+		car.setPaused(value);
+		root.dataset.racerPaused = String(value);
+		pause.setAttribute('aria-pressed', String(value));
+		pause.textContent = value ? 'Play' : 'Pause';
+	};
+	paused(car.paused);
+	button('track').addEventListener('click', () => car.newTrack());
+	draw.addEventListener('click', () => car.draw(root.dataset.drawing !== 'true'));
+	pause.addEventListener('click', () => paused(!car.paused));
+	return car;
+}
+
 /** Uniform numbers from a seed (mulberry32), so the first track is the same on every visit. */
 function seeded(seed: number): () => number {
 	let a = seed >>> 0;
