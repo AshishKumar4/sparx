@@ -22,7 +22,7 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 
-from sparx.dynamics.core import NeuronModel, Output, SynapticInput
+from sparx.dynamics.core import NeuronModel, Output, Reversing, SynapticInput
 
 __all__ = ["IntrinsicPlasticity", "IntrinsicState"]
 
@@ -66,12 +66,11 @@ class IntrinsicPlasticity[State]:
 
     @property
     def reversal(self) -> Mapping[str, float]:
-        """The wrapped model's reversal potentials, when it reads conductances, so a `Network` gives it
-        conductances as it would the model alone."""
-        reversal = getattr(self.inner, "reversal", None)
-        if reversal is None:
+        """The wrapped model's reversal potentials (`Reversing`), so a `Network` gives this model the
+        conductances it would give the wrapped one."""
+        if not isinstance(self.inner, Reversing):
             raise AttributeError(f"{type(self.inner).__name__} reads no conductances")
-        return reversal
+        return self.inner.reversal
 
     def shifted(self, state: IntrinsicState[State]) -> NeuronModel[State]:
         """The wrapped model with each neuron's threshold where homeostasis has moved it."""

@@ -103,7 +103,7 @@ def test_intrinsic_plasticity_wraps_a_conductance_based_population():
     adapted = spikes(IntrinsicPlasticity(LeakyIntegrateAndFire(), 0.005, 1.0, "v_th"))
     assert plain.sum() > 50 and adapted.sum() < plain.sum()
     dimensionless = Population("n", 2, IntrinsicPlasticity(LIFCell(0.9), 0.1), receptors)
-    with pytest.raises(ValueError, match="IntrinsicPlasticity has no reversal potentials"):
+    with pytest.raises(AttributeError, match="LIFCell reads no conductances"):
         Network((dimensionless,)).init(jax.random.key(0))
 
 

@@ -84,7 +84,7 @@ import jax.numpy as jnp
 import numpy as np
 from dew.objectives.base import Variables
 
-from sparx.dynamics.core import Gap, NeuronModel, Output, Term
+from sparx.dynamics.core import Gap, NeuronModel, Output, Reversing, Term
 from sparx.dynamics.plasticity import Plasticity, TsodyksMarkram, TsodyksMarkramState
 from sparx.dynamics.synapses import Graded, PointNeuron, PointNeuronState, Receptor, StochasticRelease
 from sparx.graph.connectivity import Connectivity, EdgeList
@@ -131,15 +131,6 @@ def whole_steps(time: float | np.ndarray, dt: float, what: str) -> np.ndarray:
         raise ValueError(f"{what} must be a whole number of steps of {dt} ms; {shown} is not. Round it to "
                          f"the grid, as `np.round(x / dt) * dt` does")
     return steps.astype(np.int64)
-
-
-@runtime_checkable
-class Reversing(Protocol):
-    """A neuron model that reads conductances, against the reversal potential (mV) of each receptor by
-    name: the physical models of `sparx.dynamics.neurons`."""
-
-    @property
-    def reversal(self) -> Mapping[str, float]: ...
 
 
 @dataclass(frozen=True)
@@ -647,13 +638,11 @@ def _check_conductances(population: Population) -> None:
     for name, receptor in population.receptors.items():
         if receptor.kind != "conductance" or receptor.synapse.lands != "synapse":
             continue
-        # A wrapper (`IntrinsicPlasticity`) has reversal potentials when the model it wraps does.
-        reversal: Mapping[str, float] | None = getattr(neuron, "reversal", None)
-        if reversal is None:
+        if not isinstance(neuron, Reversing):
             raise ValueError(f"{where}: receptor {name!r} is a conductance, and {model} has no reversal "
                              f"potentials to read it against")
-        if name not in reversal:
-            known = ", ".join(map(repr, reversal))
+        if name not in neuron.reversal:
+            known = ", ".join(map(repr, neuron.reversal))
             raise ValueError(f"{where}: conductance receptor {name!r} has no reversal potential; "
                              f"{model}.reversal has {known}. Name the receptor after one of them, or give "
                              f"{model} a reversal potential for it")

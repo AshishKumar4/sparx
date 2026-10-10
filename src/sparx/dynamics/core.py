@@ -52,7 +52,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping
-from typing import Literal, NamedTuple, Protocol, overload
+from typing import Literal, NamedTuple, Protocol, overload, runtime_checkable
 
 import jax
 import jax.numpy as jnp
@@ -67,6 +67,7 @@ __all__ = [
     "NeuronModel",
     "Output",
     "Reset",
+    "Reversing",
     "SynapticInput",
     "Term",
     "crossing",
@@ -170,6 +171,15 @@ class Output(NamedTuple):
 
     value: jax.Array
     offset: jax.Array
+
+
+@runtime_checkable
+class Reversing(Protocol):
+    """A neuron model that reads conductances, against the reversal potential (mV) of each receptor by
+    name: the physical models of `sparx.dynamics.neurons`, and a model that wraps one."""
+
+    @property
+    def reversal(self) -> Mapping[str, float]: ...
 
 
 class Model[State, Inputs](Protocol):
