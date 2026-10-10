@@ -294,12 +294,14 @@ class Homeostatic(Neuron):
 
         Homeostatic(LIF(tau=3.0), target=0.05)
 
-    `field` names the model's threshold (`threshold`, or `v_th` for a
-    physical neuron). The drift is part of the layer's carried state.
+    `field` names the model's threshold: `threshold`, or `v_th` for a
+    physical LIF (`Dynamics`). The drift is part of the layer's carried
+    state.
+    The defaults hold a `LIF` layer's neurons at 5% of steps.
     """
 
-    neuron: Neuron
-    target: float
+    neuron: Neuron = LIF()
+    target: float = 0.05
     eta: float = 0.001
     field: str = "threshold"
 

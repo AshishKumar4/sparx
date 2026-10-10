@@ -85,6 +85,7 @@ import numpy as np
 from dew.objectives.base import Variables
 
 from sparx.dynamics.core import Gap, NeuronModel, Output, Term
+from sparx.dynamics.homeostasis import IntrinsicPlasticity
 from sparx.dynamics.plasticity import Plasticity, TsodyksMarkram, TsodyksMarkramState
 from sparx.dynamics.synapses import Graded, PointNeuron, PointNeuronState, Receptor, StochasticRelease
 from sparx.graph.connectivity import Connectivity, EdgeList
@@ -642,8 +643,10 @@ def _check_conductances(population: Population) -> None:
     A model reads each conductance against its reversal potential for the
     receptor's name, so a name it lacks would fail at the first step.
     """
-    neuron, model = population.neuron, type(population.neuron).__name__
-    where = f"population {population.name!r}"
+    neuron = population.neuron
+    while isinstance(neuron, IntrinsicPlasticity):  # which passes its inputs to the model it wraps
+        neuron = neuron.inner
+    where, model = f"population {population.name!r}", type(neuron).__name__
     for name, receptor in population.receptors.items():
         if receptor.kind != "conductance" or receptor.synapse.lands != "synapse":
             continue

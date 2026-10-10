@@ -86,6 +86,31 @@ def test_intrinsic_plasticity_holds_a_networks_population_at_its_target_rate():
     assert voltage.shape == (40_000, 1) and np.all(np.isfinite(voltage)) and voltage.max() > -50
 
 
+def test_intrinsic_plasticity_wraps_a_conductance_based_population():
+    # At eta = 0 the wrapper is the model it wraps, conductances and all; at eta > 0 its thresholds rise.
+    receptors = {"ampa": Receptor(Exponential(5.0), "conductance")}
+
+    def spikes(neuron):
+        network = Network((Population("n", 10, neuron, receptors),),
+                          inputs=(PoissonInput("n", rate=1000.0, weight=2.0, receptor="ampa"),), dt=0.1)
+        result = simulate(network, network.init(jax.random.key(0)), duration=300.0, key=jax.random.key(1),
+                          monitors={"spikes": SpikeRaster("n")})
+        return np.asarray(result.records["spikes"])
+
+    plain = spikes(LeakyIntegrateAndFire())
+    still = IntrinsicPlasticity(LeakyIntegrateAndFire(), 0.005, 0.0, "v_th")
+    np.testing.assert_array_equal(spikes(still), plain)
+    adapted = spikes(IntrinsicPlasticity(LeakyIntegrateAndFire(), 0.005, 1.0, "v_th"))
+    assert plain.sum() > 50 and adapted.sum() < plain.sum()
+
+
+def test_intrinsic_plasticity_keeps_its_drift_in_the_states_dtype():
+    # Parameters in float64 drive a float32 population without changing the carried state's dtype.
+    neuron = IntrinsicPlasticity(LIFCell(0.9), jnp.full(3, 0.1, jnp.float64), jnp.full(3, 0.01, jnp.float64))
+    _, final = run(neuron, jnp.ones((20, 3), jnp.float32))
+    assert final.shift.dtype == jnp.float32 and float(final.shift[0]) > 0
+
+
 def test_intrinsic_plasticity_refuses_a_graded_model_and_a_missing_field():
     with pytest.raises(ValueError, match="graded"):
         IntrinsicPlasticity(LICell(0.9), 0.1).init_state((3,), jnp.float32)
@@ -94,13 +119,15 @@ def test_intrinsic_plasticity_refuses_a_graded_model_and_a_missing_field():
 
 
 def scaling_reference(weights, post, spikes, dt, tau, goal, beta, gamma):
-    """van Rossum et al.'s equation 3, the sensor decayed exactly and each spike adding 1 / tau, the
-    weights scaled by the exponential of the step's rate of change."""
+    """van Rossum et al.'s equation 3 solved over each step with the sensor held at its value after the
+    step's spikes: with d = goal - a, the integral grows as E + d s over the step, and
+    log(w' / w) = dt (beta d + gamma E) + gamma d dt^2 / 2."""
     activity, error, w = np.zeros(spikes.shape[1]), np.zeros(spikes.shape[1]), weights.copy()
     for s in spikes:
         activity = activity * np.exp(-dt / tau) + s / tau
-        error = error + dt * (goal - activity)
-        w = w * np.exp(dt * (beta * (goal - activity) + gamma * error))[post]
+        d = goal - activity
+        w = w * np.exp(dt * (beta * d + gamma * error) + gamma * d * dt**2 / 2)[post]
+        error = error + dt * d
     return w, activity
 
 
@@ -118,11 +145,11 @@ def test_synaptic_scaling_is_van_rossum_bi_and_turrigianos_equations():
     pre, post = np.array([0, 1, 2, 0, 1, 2, 3]), np.array([0, 0, 0, 1, 1, 2, 2])
     weights = rng.uniform(0.5, 2.0, 7)
     spikes = (rng.random((2_000, 3)) < np.array([0.005, 0.03, 0.01])).astype(float)
-    rule = SynapticScaling(tau=200.0, goal=0.015, beta=0.05, gamma=1e-5)
+    rule = SynapticScaling(tau=200.0, goal=0.015, beta=0.05, gamma=1e-4)
     traces, w = scan_rule(rule, rule.init_state(4, 3, 7, jnp.float64), jnp.asarray(weights),
                           jnp.zeros((2_000, 4)), jnp.asarray(spikes), jnp.asarray(pre), jnp.asarray(post),
                           0.5)
-    expected, activity = scaling_reference(weights, post, spikes, 0.5, 200.0, 0.015, 0.05, 1e-5)
+    expected, activity = scaling_reference(weights, post, spikes, 0.5, 200.0, 0.015, 0.05, 1e-4)
     np.testing.assert_allclose(np.asarray(w), expected, rtol=1e-12)
     np.testing.assert_allclose(np.asarray(traces.activity), activity, rtol=1e-12)
     # A neuron firing below its goal had its weights scaled up, one above it down.
@@ -163,6 +190,19 @@ def test_synaptic_scaling_brings_a_driven_neuron_to_its_goal_rate():
 
     for start in (0.02, 0.6):
         assert abs(settled(start) - 0.02) < 0.004, start
+
+
+def test_scaling_above_soft_bounded_stdps_bound_leaves_it_at_the_bound():
+    # Scaling raises a weight already at PairSTDP's bound while its neuron is silent; at the next
+    # postsynaptic spike STDP holds it at the bound, where (1 - w)^0.5 alone would be NaN.
+    scaling = SynapticScaling(tau=20.0, goal=0.05, beta=0.5, gamma=0.0)
+    rule = Rules((PairSTDP(mu_plus=0.5, w_max=1.0), scaling))
+    traces, w = rule.init_state(1, 1, 1, jnp.float64), jnp.ones(1)
+    index = jnp.zeros(1, int)
+    traces, w = rule.step(traces, w, jnp.zeros(1), jnp.zeros(1), index, index, 1.0, modulators={})
+    assert float(w[0]) > 1
+    _, w = rule.step(traces, w, jnp.zeros(1), jnp.ones(1), index, index, 1.0, modulators={})
+    assert np.isfinite(float(w[0])) and float(w[0]) <= 1.0
 
 
 def test_rules_step_each_rule_on_the_weights_the_one_before_left():

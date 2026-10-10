@@ -406,6 +406,17 @@ def test_stdp_with_synaptic_scaling_in_a_network_is_the_rules_on_the_networks_ow
     assert np.mean(learned / alone(stdp)) < 0.95
 
 
+def test_rules_read_a_modulator_with_the_time_constant_any_of_them_assumes():
+    # A rule that reads dopamine without assuming its decay agrees with one that assumes 200 ms, in
+    # either order; two that assume different decays do not.
+    dopamine = DopamineSTDP()
+    assert Rules((ReadsModulator(), dopamine)).modulated_by() == {"dopamine": 200.0}
+    assert Rules((dopamine, ReadsModulator())).modulated_by() == {"dopamine": 200.0}
+    dopamine_network(Rules((ReadsModulator(), dopamine))).init(jax.random.key(0))
+    with pytest.raises(ValueError, match="different time constants"):
+        Rules((dopamine, DopamineSTDP(tau_n=100.0))).modulated_by()
+
+
 def test_plasticity_refuses_a_modulator_the_network_lacks_or_another_time_constant():
     with pytest.raises(ValueError, match="reads modulator 'serotonin', which the network lacks"):
         dopamine_network(DopamineSTDP(modulator="serotonin")).init(jax.random.key(0))

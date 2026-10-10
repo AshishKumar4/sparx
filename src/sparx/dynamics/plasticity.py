@@ -168,7 +168,9 @@ class PairSTDP:
         k_pre = traces.pre * jnp.exp(-dt / self.tau_plus)
         k_post = traces.post * jnp.exp(-dt / self.tau_minus)
         w = weights / self.w_max
-        potentiated = jnp.minimum(w + self.lambda_ * (1 - w) ** self.mu_plus * k_pre[pre], 1.0)
+        # A weight above the bound, which another rule may have left (`Rules`), is held at it.
+        room = jnp.maximum(1 - w, 0.0)
+        potentiated = jnp.minimum(w + self.lambda_ * room ** self.mu_plus * k_pre[pre], 1.0)
         w = jnp.where(post_arrivals[post] > 0, potentiated, w)
         depressed = jnp.maximum(w - self.alpha * self.lambda_ * w ** self.mu_minus * k_post[post], 0.0)
         w = jnp.where(pre_spikes[pre] > 0, depressed, w)
@@ -327,9 +329,14 @@ class SynapticScaling:
     which is dimensionless) and `gamma` of 1e-7 per s per s per Hz, 1e-10
     per ms per ms per (spike per ms). Each step the sensor decays exactly and
     adds `1 / tau` per spike that reached the synapse, then each weight is
-    multiplied by `exp(dt (beta (goal - a) + gamma error))`, which scales it
-    without changing its sign: a weight's ratio to its neighbours onto the
-    same neuron never changes.
+    multiplied by the equation's exact solution over the step with the
+    sensor held, `exp(dt (beta (goal - a) + gamma (error + error') / 2))`,
+    as the integral runs from `error` to `error'`. The factor never changes
+    a weight's sign, and the ratios of a projection's weights onto one
+    neuron never change. Each projection keeps its own sensor of the spikes
+    as they reach its synapses, a dendritic delay after the neuron fired, so
+    two projections onto one neuron with different delays scale by factors
+    that differ by how much the sensor changes over the difference.
     """
 
     tau: jax.Array | float = 100_000.0
@@ -349,7 +356,7 @@ class SynapticScaling:
         """As `Plasticity.step`."""
         activity = traces.activity * jnp.exp(-dt / self.tau) + post_arrivals / self.tau
         error = traces.error + dt * (self.goal - activity)
-        factor = jnp.exp(dt * (self.beta * (self.goal - activity) + self.gamma * error))
+        factor = jnp.exp(dt * (self.beta * (self.goal - activity) + self.gamma * (traces.error + error) / 2))
         return ScalingTraces(activity, error), weights * factor[post]
 
 
@@ -367,9 +374,13 @@ class Rules:
         read: dict[str, float | None] = {}
         for rule in self.rules:
             for name, tau in rule.modulated_by().items():
-                if name in read and read[name] != tau:
+                # A rule that assumes no time constant (None) agrees with one that does.
+                if tau is None:
+                    read.setdefault(name, None)
+                elif read.get(name) is None:
+                    read[name] = tau
+                elif read[name] != tau:
                     raise ValueError(f"two rules read modulator {name!r} with different time constants")
-                read[name] = tau
         return read
 
     def step(self, traces: tuple, weights: jax.Array, pre_spikes: jax.Array, post_arrivals: jax.Array,

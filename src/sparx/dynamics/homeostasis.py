@@ -14,6 +14,7 @@ at `dt = 1`, per millisecond for the physical ones.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, NamedTuple
 
 import jax
@@ -25,15 +26,15 @@ from sparx.dynamics.core import NeuronModel, Output, SynapticInput
 __all__ = ["IntrinsicPlasticity", "IntrinsicState"]
 
 
-class IntrinsicState(NamedTuple):
-    inner: Any
+class IntrinsicState[State](NamedTuple):
+    inner: State
     """The wrapped model's state."""
     shift: jax.Array
     """How far each neuron's threshold has moved from the wrapped model's."""
 
 
 @struct.dataclass
-class IntrinsicPlasticity:
+class IntrinsicPlasticity[State]:
     """A spiking model whose threshold drifts to hold each neuron at `target` spikes per unit of time.
 
     After each step a neuron that fired raises its threshold and one that
@@ -46,12 +47,14 @@ class IntrinsicPlasticity:
     `target dt` is the rate's share of a step. A neuron firing faster than
     `target` grows harder to fire, one firing slower easier, until on
     average it fires at `target`. The threshold is the wrapped model's
-    field `field` (`threshold` for the dimensionless models, `v_th` for the
-    physical ones), which the shift adds to. The shift follows the spikes
-    as they are, so gradients through a run pass through it too.
+    field `field`, which the shift adds to: `threshold` for the
+    dimensionless models, `v_th` for the physical LIF and `v_t` for AdEx.
+    Izhikevich's `v_th` and Hodgkin-Huxley's `v_spike` mark the peak of a
+    spike already under way rather than a threshold. The shift follows the
+    spikes as they are, so gradients through a run pass through it too.
     """
 
-    inner: NeuronModel
+    inner: NeuronModel[State]
     target: jax.Array | float
     eta: jax.Array | float = 0.001
     field: str = struct.field(pytree_node=False, default="threshold")
@@ -60,11 +63,12 @@ class IntrinsicPlasticity:
     def graded(self) -> bool:
         return False
 
-    def shifted(self, state: IntrinsicState) -> NeuronModel:
+    def shifted(self, state: IntrinsicState[State]) -> NeuronModel[State]:
         """The wrapped model with each neuron's threshold where homeostasis has moved it."""
-        return self.inner.replace(**{self.field: getattr(self.inner, self.field) + state.shift})
+        inner: Any = self.inner  # a dataclass, which NeuronModel does not promise
+        return dataclasses.replace(inner, **{self.field: getattr(inner, self.field) + state.shift})
 
-    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> IntrinsicState:
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> IntrinsicState[State]:
         if self.inner.graded:
             raise ValueError("intrinsic plasticity holds a firing rate, and a graded model does not fire")
         if not hasattr(self.inner, self.field):
@@ -72,13 +76,15 @@ class IntrinsicPlasticity:
         inner = self.inner.init_state(shape, dtype)
         return IntrinsicState(inner, jnp.zeros(shape, jax.tree.leaves(inner)[0].dtype))
 
-    def step(self, state: IntrinsicState, inputs: SynapticInput, dt: float) -> tuple[IntrinsicState, Output]:
+    def step(self, state: IntrinsicState[State], inputs: SynapticInput,
+             dt: float) -> tuple[IntrinsicState[State], Output]:
         inner, out = self.shifted(state).step(state.inner, inputs, dt)
-        shift = state.shift + self.eta * (out.value.astype(state.shift.dtype) - self.target * dt)
-        return IntrinsicState(inner, shift), out
+        shift = state.shift + self.eta * (out.value - self.target * dt)
+        return IntrinsicState(inner, shift.astype(state.shift.dtype)), out
 
-    def is_refractory(self, state: IntrinsicState, dt: float) -> jax.Array:
+    def is_refractory(self, state: IntrinsicState[State], dt: float) -> jax.Array:
         return self.shifted(state).is_refractory(state.inner, dt)
 
-    def after_threshold(self, state: IntrinsicState, jump: jax.Array, fired: jax.Array) -> IntrinsicState:
+    def after_threshold(self, state: IntrinsicState[State], jump: jax.Array,
+                        fired: jax.Array) -> IntrinsicState[State]:
         return state._replace(inner=self.shifted(state).after_threshold(state.inner, jump, fired))
