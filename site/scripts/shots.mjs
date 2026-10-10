@@ -68,7 +68,20 @@ for (const size of widths) {
 				});
 				return wide.slice(0, 5).map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')}`);
 			});
-			const problems = [...errors, ...overflow.map((el) => `wider than the page: ${el}`)];
+			// A figure on the page whose canvas holds nothing drawn: its pixels, read back, are all transparent.
+			const blank = await page.evaluate(() =>
+				[...document.querySelectorAll('canvas')].flatMap((canvas) => {
+					const r = canvas.getBoundingClientRect();
+					if (!r.width || !r.height) return [];
+					const ctx = canvas.getContext('2d');
+					if (!ctx) return [];
+					const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+					for (let i = 3; i < data.length; i += 4) if (data[i]) return [];
+					const label = (canvas.getAttribute('aria-label') ?? '').slice(0, 48);
+					return [`${label}: ${canvas.width}x${canvas.height} for a ${Math.round(r.width)}x${Math.round(r.height)} box`];
+				}),
+			);
+			const problems = [...errors, ...overflow.map((el) => `wider than the page: ${el}`), ...blank.map((c) => `blank canvas: ${c}`)];
 			failed += problems.length ? 1 : 0;
 			console.log(`${name}${problems.length ? `  FAILED: ${problems.join(' | ')}` : ''}${notes.length ? `  console: ${notes.join(' | ')}` : ''}`);
 			errors.length = 0;
