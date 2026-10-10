@@ -8,8 +8,13 @@ results. Models and raw logs stay out of git; each sweep's are attached to a Git
 
 ```bash
 research/racer/sweep.sh research/racer/configs/<sweep>.json <label> <out dir> [pool]   # on armada
+python research/racer/run.py research/racer/configs/<sweep>.json <out dir>              # on a GPU
 python research/racer/summarize.py <out dir> research/racer/results/<sweep>.json
 ```
+
+`configs/phase2.json` is the comparison: the seven arms below, A, B, C, the 2- and 4-bit arms, sigma-delta
+and the dendritic arm, five seeds each, at Phase 0's recipe (truncated at 50 steps of a 300-step drive, the
+curriculum from bends of 0.3 to 1.3, a reverse penalty of 2, 3,000 steps).
 
 ## Why the published racer is weak
 
