@@ -135,6 +135,11 @@
      "speed": 1.4345207214355469
     }
    ],
+   "grad_norm": {
+    "logged": 61,
+    "median": 8375.091796875,
+    "max": 26199652.0
+   },
    "evaluation": {
     "tracks": 200,
     "seconds": 30.0,
@@ -367,6 +372,11 @@
      "speed": 2.2418651580810547
     }
    ],
+   "grad_norm": {
+    "logged": 61,
+    "median": 1646.1314697265625,
+    "max": 18308176.0
+   },
    "evaluation": {
     "tracks": 200,
     "seconds": 30.0,
@@ -599,6 +609,11 @@
      "speed": 0.5554057359695435
     }
    ],
+   "grad_norm": {
+    "logged": 61,
+    "median": 4720.3603515625,
+    "max": 323876403806208.0
+   },
    "evaluation": {
     "tracks": 200,
     "seconds": 30.0,
@@ -831,6 +846,11 @@
      "speed": 5.6604719161987305
     }
    ],
+   "grad_norm": {
+    "logged": 61,
+    "median": 0.052721213549375534,
+    "max": 59.43461227416992
+   },
    "evaluation": {
     "tracks": 200,
     "seconds": 30.0,
@@ -1069,6 +1089,11 @@
      "speed": 3.224249839782715
     }
    ],
+   "grad_norm": {
+    "logged": 61,
+    "median": 20.55528450012207,
+    "max": 3319.95166015625
+   },
    "evaluation": {
     "tracks": 200,
     "seconds": 30.0,
@@ -1301,6 +1326,11 @@
      "speed": 2.18705415725708
     }
    ],
+   "grad_norm": {
+    "logged": 61,
+    "median": 11.379708290100098,
+    "max": 732.5718383789062
+   },
    "evaluation": {
     "tracks": 200,
     "seconds": 30.0,
@@ -1533,6 +1563,11 @@
      "speed": 3.4980123043060303
     }
    ],
+   "grad_norm": {
+    "logged": 61,
+    "median": 38.08102035522461,
+    "max": 1859.82763671875
+   },
    "evaluation": {
     "tracks": 200,
     "seconds": 30.0,
@@ -1765,6 +1800,11 @@
      "speed": 5.252846717834473
     }
    ],
+   "grad_norm": {
+    "logged": 61,
+    "median": 9.345727920532227,
+    "max": 310.7869567871094
+   },
    "evaluation": {
     "tracks": 200,
     "seconds": 30.0,

@@ -54,7 +54,7 @@ The usual defences, roughly in order of how often they are needed:
 - **`detach_reset`** removes the reset's term, trading a little information for a cleaner product.
 - **Shorter sequences** mean fewer factors. sparx's layers stream: with the `state` collection mutable, a long sequence can be fed in chunks that carry the state forward, and a gradient can be cut between chunks.
 
-Memory has its own remedy. `jax.checkpoint` stores only some steps' states and recomputes the rest during the backward pass, trading compute for memory. The racer of chapter 14 trains with every step checkpointed.
+Memory has its own remedy. `jax.checkpoint` stores only some steps' states and recomputes the rest during the backward pass, trading compute for memory. The racer of chapter 14 trains with every step checkpointed, and cuts its gradient every 50 steps.
 
 <CodeBlock code={bptt} colab={colab('bptt')} source={source('src/sparx/dynamics/ml.py')} />
 

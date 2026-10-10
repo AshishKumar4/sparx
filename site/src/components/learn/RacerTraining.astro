@@ -4,7 +4,7 @@
 import model from '../../../public/racer/racer.json';
 import Chart from '../Chart.astro';
 
-const meta = model.meta as { trained: Record<string, number>; history: { step: number; distance: number; speed: number; seconds: number }[] };
+const meta = model.meta as { trained: { batch: number; horizon: number; steps: number }; history: { step: number; distance: number; speed: number; seconds: number }[] };
 const minutes = Math.round(meta.history.at(-1)!.seconds / 60);
 ---
 
@@ -15,9 +15,9 @@ const minutes = Math.round(meta.history.at(-1)!.seconds / 60);
 		{ points: meta.history.map((h) => [h.step, h.distance] as [number, number]), role: 'membrane' },
 	]}
 	x={{ label: 'training step', ticks: [0, 1000, 2000, 3000], min: 0, max: meta.trained.steps }}
-	y={{ label: 'm or m/s', ticks: [0, 1, 2, 3, 4], min: 0, max: 4 }}
+	y={{ label: 'm or m/s', ticks: [0, 2, 4, 6], min: 0, max: 6 }}
 >
 	Orange is the cars' mean speed along the road, blue their mean distance from its middle, over each training batch of
-	{meta.trained.batch} cars on fresh tracks for {(meta.trained.horizon * 0.02).toFixed(0)} s. {meta.trained.steps.toLocaleString('en-US')}
-	steps took {minutes} minutes on a CPU.
+	{meta.trained.batch} cars on fresh tracks for {(meta.trained.horizon * 0.02).toFixed(0)} s, whose bends grow over the first half.
+	{meta.trained.steps.toLocaleString('en-US')} steps took {minutes} minutes on a CPU.
 </Chart>

@@ -135,6 +135,11 @@
      "speed": 2.58461856842041
     }
    ],
+   "grad_norm": {
+    "logged": 61,
+    "median": 96.66758728027344,
+    "max": 12110852.0
+   },
    "evaluation": {
     "tracks": 200,
     "seconds": 30.0,
@@ -281,6 +286,11 @@
      "speed": 1.1610808372497559
     }
    ],
+   "grad_norm": {
+    "logged": 61,
+    "median": 6791146.0,
+    "max": 2603910627852288.0
+   },
    "evaluation": {
     "tracks": 200,
     "seconds": 30.0,
@@ -427,6 +437,11 @@
      "speed": 0.3717428743839264
     }
    ],
+   "grad_norm": {
+    "logged": 61,
+    "median": 5249.4892578125,
+    "max": 71856883236864.0
+   },
    "evaluation": {
     "tracks": 200,
     "seconds": 30.0,
@@ -573,6 +588,11 @@
      "speed": 1.2721341848373413
     }
    ],
+   "grad_norm": {
+    "logged": 61,
+    "median": 27687.421875,
+    "max": 36275392512.0
+   },
    "evaluation": {
     "tracks": 200,
     "seconds": 30.0,
