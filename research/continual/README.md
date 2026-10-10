@@ -75,8 +75,12 @@ does not stop.
 - The learners, on the same recurrent LIF network as `EPropObjective`'s: backpropagation through time with
   Adam, the baseline; the same with elastic weight consolidation (Kirkpatrick et al. 2017), the standard
   regularized baseline; e-prop (`sparx.learn.eprop`, Bellec et al. 2020), whose update is an eligibility
-  trace at each synapse times a learning signal broadcast to its neuron; and a three-factor rule on the
-  same traces, gated by a scalar reward instead of a per-neuron error (`sparx.learn.reinforce`).
+  trace at each synapse times a learning signal broadcast to its neuron; and a three-factor rule gated by
+  a scalar reward. The reward-gated rule exists in sparx only as REINFORCE (`sparx.learn.reinforce`), on
+  a network of the same shape whose neurons fire at random (`BernoulliCell`), with traces of its own:
+  each synapse's share in the probability of its neuron's spikes. Reward-modulated e-prop (Bellec et
+  al.'s reinforcement-learning variant), the same LIF network and traces gated by a reward, would have to
+  be written first.
 - The measures, over three seeds: the accuracy on every task after each task is learned, the mean of the
   last row, forgetting as each task's best accuracy minus its last (Chaudhry et al. 2018), and backward
   transfer (Lopez-Paz and Ranzato 2017).
