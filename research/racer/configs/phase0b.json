@@ -1,0 +1,7 @@
+[
+ "train --steps 3000 --batch 32 --lr 1e-3 --difficulty --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --select 250 --seed 1",
+ "train --steps 3000 --batch 32 --lr 1e-3 --difficulty --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --select 250 --seed 2",
+ "train --steps 3000 --batch 32 --lr 1e-3 --difficulty --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --select 250 --seed 3",
+ "train --steps 3000 --batch 32 --lr 1e-3 --difficulty --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --select 250 --seed 4",
+ "train --steps 3000 --batch 32 --lr 1e-3 --difficulty --horizon 300 --truncate 50 --curriculum 0.3 1.3 --reverse 2 --select 250 --seed 5"
+]

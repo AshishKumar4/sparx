@@ -347,8 +347,13 @@ def train(args: argparse.Namespace) -> None:
         out = race(net, params, world, ground, points, car0, args.horizon, args.truncate)
         return cost(world, out, (args.rate_low, args.rate_high), args.reverse)
 
+    score = None
+    if args.select:
+        # Tracks of their own, drawn as training's hardest are, never the evaluation's.
+        held = tracks.draw(world, jax.random.key(args.seed + 3000), args.select_tracks)
+        score = laps_driven(net, world, ground, held)
     params, history = training.train(loss_fn, params, lr=args.lr, steps=args.steps, seed=args.seed + 1,
-                                     log_every=args.log_every)
+                                     log_every=args.log_every, score=score, score_every=args.select)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -413,6 +418,31 @@ def drives(net, params, world: World, ground, points: jax.Array, car0: jax.Array
     return out
 
 
+def at_start(points: jax.Array) -> jax.Array:
+    """A car at rest in the middle of each track of `points`, at its first point, pointing along it."""
+    d = points[:, 1] - points[:, 0]
+    return jnp.stack([points[:, 0, 0], points[:, 0, 1], jnp.arctan2(d[:, 1], d[:, 0]),
+                      jnp.zeros(points.shape[0])], -1)
+
+
+def laps_driven(net, world: World, ground, points: jax.Array, seconds: float = 20.0):
+    """A score for choosing among a run's parameters: the mean over the tracks of `points` of the laps
+    driven in `seconds` from `at_start`, counting no distance once the car has left the road by more
+    than a metre. Compiled once; called with the parameters."""
+    steps = round(seconds / world.dt)
+    length = track_tables(points)[2].sum(-1)
+    ground = tuple(jnp.asarray(g) for g in ground)
+
+    @jax.jit
+    def score(params):
+        out = race(net, params, world, ground, points, at_start(points), steps)
+        distance, along = out[5], out[7]
+        crashed = jax.lax.cummax(distance > world.half_width + 1.0, axis=0)
+        return jnp.mean(jnp.sum(jnp.where(crashed, 0.0, along), 0) * world.dt / length)
+
+    return score
+
+
 def evaluation(net, params, world: World, ground, points: jax.Array, seconds: float = 30.0) -> dict:
     """Each car starts in the middle of an unseen track of `points`, at rest, pointing along it, and drives
     for `seconds`. A lap counts when the car has gone the track's length forward without leaving the road
@@ -420,8 +450,7 @@ def evaluation(net, params, world: World, ground, points: jax.Array, seconds: fl
     the response probe's window (`response`) runs it too."""
     steps = round(seconds / world.dt)
     tracks = points.shape[0]
-    d = points[:, 1] - points[:, 0]
-    car0 = jnp.stack([points[:, 0, 0], points[:, 0, 1], jnp.arctan2(d[:, 1], d[:, 0]), jnp.zeros(tracks)], -1)
+    car0 = at_start(points)
     out = drives(net, params, world, ground, points, car0, steps)
     length = np.asarray(track_tables(points)[2].sum(-1))
     covered = np.cumsum(out["along"] * world.dt, 0)
@@ -630,6 +659,9 @@ def main() -> None:
     t.add_argument("--reverse", type=float, default=0.0,
                    help="the weight of the penalty on driving backwards")
     t.add_argument("--difficulty", action="store_true", help="also score the harder sets (difficulty.json)")
+    t.add_argument("--select", type=int, default=0, metavar="EVERY",
+                   help="keep the parameters that drive farthest on held-out tracks, scored every EVERY")
+    t.add_argument("--select-tracks", type=int, default=32)
     t.add_argument("--net", choices=("dense", "conv"), default="dense")
     t.add_argument("--neuron", choices=("lif", "relu", "sigma-delta", "dendritic"), default="lif",
                    help="the conv network's units")
