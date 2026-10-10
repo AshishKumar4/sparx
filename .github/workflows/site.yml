@@ -56,6 +56,7 @@ jobs:
       run: |
         python site/lab/fixtures.py --out site/test/fixtures/sparx.json
         python site/lab/pilot.py record --out site/test/fixtures/pilot.json
+        python site/lab/racer.py record --out site/test/fixtures/racer.json
         git diff --stat -- site/test/fixtures
     - name: The browser's engines against them
       working-directory: site

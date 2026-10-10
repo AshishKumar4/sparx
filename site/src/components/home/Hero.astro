@@ -1,17 +1,23 @@
 ---
-// The front page's hero: the drone, flown live by the spiking network site/lab/pilot.py trained, and the
-// network itself (src/widgets/pilot/hero.ts).
+// The front page's hero: two networks sparx trained, live. The racer (src/widgets/racer/hero.ts) drives a
+// car around a track the visitor draws from its event camera's output alone; the drone
+// (src/widgets/pilot/hero.ts) flies after the pointer. Each is drawn beside its network.
 import model from '../../../public/pilot/pilot.json';
+import racer from '../../../public/racer/evaluation.json';
 import Install from '../Install.astro';
 
 const evaluation = model.evaluation as Record<string, number>;
 const arrived = Math.round(evaluation.arrived * 1000) / 10;
+const laps = racer.summary;
+const finished = Math.round(laps.finished * laps.tracks);
 ---
 
-<section class="hero" data-hero>
+<section class="hero" data-hero data-mode="racer">
 	<div class="stage">
-		<canvas data-stage role="img" aria-label="A drone flown by a spiking network toward the pointer, beside the network: its seven readings, two layers of 64 neurons that light up as they spike, and two readout neurons wired to the rotors"></canvas>
-		<div class="net" data-net aria-hidden="true"></div>
+		<canvas class="racer" data-racer-stage role="img" aria-label="A car driven by a spiking network around a closed track, seeing only an event camera's output, beside the camera's pixels lighting as they fire, the network's 160 neurons lighting as they spike, and its steering and speed"></canvas>
+		<div class="net racer" data-racer-net aria-hidden="true"></div>
+		<canvas class="drone" data-stage role="img" aria-label="A drone flown by a spiking network toward the pointer, beside the network: its seven readings, two layers of 64 neurons that light up as they spike, and two readout neurons wired to the rotors"></canvas>
+		<div class="net drone" data-net aria-hidden="true"></div>
 	</div>
 	<div class="copy">
 		<h1>Spiking neural networks in&nbsp;JAX</h1>
@@ -26,38 +32,106 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 		</div>
 	</div>
 	<div class="panel">
-		<p class="caption">
-			<span class="live" aria-hidden="true"></span>
-			<span>
-				<strong>This drone is flown by 128 spiking neurons, live.</strong>{' '}
-				<span class="hint desk">Move your pointer and it follows. Click to push it, drag it to throw it, click a neuron to silence it.</span>
-				<span class="hint touch">Tap anywhere to send it there. Tap a neuron to silence it.</span>
-			</span>
-		</p>
-		<div class="controls">
-			<button type="button" data-act="gust">Gust</button>
-			<button type="button" data-act="flip">Flip</button>
-			<button type="button" data-act="silence">Silence 16</button>
-			<button type="button" data-act="restore" class="restore">Restore</button>
-			<button type="button" data-act="pause" aria-pressed="false">Pause</button>
+		<div class="tabs" role="tablist" aria-label="Trained network">
+			<button type="button" role="tab" id="tab-racer" aria-controls="panel-racer" aria-selected="true" data-tab="racer">Racer</button>
+			<button type="button" role="tab" id="tab-drone" aria-controls="panel-drone" aria-selected="false" tabindex="-1" data-tab="drone">Drone</button>
 		</div>
-		<p class="stats">
-			<span>firing <span data-rate>0 Hz</span></span>
-			<span class="silenced" data-silenced></span>
-			<span>trained with sparx · reaches its target on {arrived}% of 1,000 starts · <a href="/learn/drone/">how it learned</a></span>
-		</p>
+		<div class="mode-panel racer" id="panel-racer" role="tabpanel" aria-labelledby="tab-racer" data-mode-panel="racer">
+			<p class="caption">
+				<span class="live" aria-hidden="true"></span>
+				<span>
+					<strong>This car is driven by 160 spiking neurons that see only an event camera's output, live.</strong>{' '}
+					<span class="hint desk">Drag a loop anywhere around it to draw a new track.</span>
+					<span class="hint touch">Tap Draw, then draw a loop around the track.</span>
+				</span>
+			</p>
+			<div class="controls">
+				<button type="button" data-racer-act="track">New track</button>
+				<button type="button" data-racer-act="draw" aria-pressed="false">Draw</button>
+				<button type="button" data-racer-act="pause" aria-pressed="false">Pause</button>
+			</div>
+			<p class="stats">
+				<span>events <span data-racer-events>0</span> · spikes <span data-racer-spikes>0</span> a step</span>
+				<span data-racer-lap></span>
+				<span>trained end to end with sparx · finished {finished} of {laps.tracks} unseen tracks · <a href="/learn/racer/">how it learned</a></span>
+			</p>
+		</div>
+		<div class="mode-panel drone" id="panel-drone" role="tabpanel" aria-labelledby="tab-drone" data-mode-panel="drone">
+			<p class="caption">
+				<span class="live" aria-hidden="true"></span>
+				<span>
+					<strong>This drone is flown by 128 spiking neurons, live.</strong>{' '}
+					<span class="hint desk">Move your pointer and it follows. Click to push it, drag it to throw it, click a neuron to silence it.</span>
+					<span class="hint touch">Tap anywhere to send it there. Tap a neuron to silence it.</span>
+				</span>
+			</p>
+			<div class="controls">
+				<button type="button" data-act="gust">Gust</button>
+				<button type="button" data-act="flip">Flip</button>
+				<button type="button" data-act="silence">Silence 16</button>
+				<button type="button" data-act="restore" class="restore">Restore</button>
+				<button type="button" data-act="pause" aria-pressed="false">Pause</button>
+			</div>
+			<p class="stats">
+				<span>firing <span data-rate>0 Hz</span></span>
+				<span class="silenced" data-silenced></span>
+				<span>trained with sparx · reaches its target on {arrived}% of 1,000 starts · <a href="/learn/drone/">how it learned</a></span>
+			</p>
+		</div>
 	</div>
 </section>
 
-<link rel="preload" href="/pilot/pilot.json" as="fetch" crossorigin="anonymous" />
+<link rel="preload" href="/racer/racer.json" as="fetch" crossorigin="anonymous" />
 
 <script>
 	import { hero } from '../../widgets/pilot/hero';
+	import { racerHero } from '../../widgets/racer/hero';
 
 	const root = document.querySelector<HTMLElement>('[data-hero]');
 	if (root) {
-		const model = await (await fetch('/pilot/pilot.json')).json();
-		hero(root, model);
+		const events = root.querySelector<HTMLElement>('[data-racer-events]') as HTMLElement;
+		const spikes = root.querySelector<HTMLElement>('[data-racer-spikes]') as HTMLElement;
+		const lap = root.querySelector<HTMLElement>('[data-racer-lap]') as HTMLElement;
+		const draw = root.querySelector<HTMLButtonElement>('[data-racer-act="draw"]') as HTMLButtonElement;
+		const pause = root.querySelector<HTMLButtonElement>('[data-racer-act="pause"]') as HTMLButtonElement;
+		const car = racerHero(root, await (await fetch('/racer/racer.json')).json(), (state) => {
+			events.textContent = String(state.events);
+			spikes.textContent = String(state.spikes);
+			lap.textContent = state.crashed ? 'off the road: starting again' : state.lap === null ? '' : `last lap ${state.lap.toFixed(1)} s`;
+			draw.setAttribute('aria-pressed', String(root.dataset.drawing === 'true'));
+		});
+		const paused = (value: boolean) => {
+			car.setPaused(value);
+			root.dataset.racerPaused = String(value);
+			pause.setAttribute('aria-pressed', String(value));
+			pause.textContent = value ? 'Play' : 'Pause';
+		};
+		paused(car.paused);
+		root.querySelector('[data-racer-act="track"]')?.addEventListener('click', () => car.newTrack());
+		draw.addEventListener('click', () => car.draw(root.dataset.drawing !== 'true'));
+		pause.addEventListener('click', () => paused(!car.paused));
+
+		let drone: Promise<void> | null = null;
+		const tabs = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+		const select = (tab: HTMLButtonElement) => {
+			const mode = tab.dataset.tab as string;
+			root.dataset.mode = mode;
+			for (const other of tabs) {
+				other.setAttribute('aria-selected', String(other === tab));
+				other.tabIndex = other === tab ? 0 : -1;
+			}
+			if (mode === 'drone') drone ??= fetch('/pilot/pilot.json').then((r) => r.json()).then((m) => hero(root, m));
+		};
+		for (const [k, tab] of tabs.entries()) {
+			tab.addEventListener('click', () => select(tab));
+			tab.addEventListener('keydown', (event) => {
+				const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+				if (!step) return;
+				const next = tabs[(k + step + tabs.length) % tabs.length];
+				select(next);
+				next.focus();
+			});
+		}
 	}
 </script>
 
@@ -164,6 +238,46 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 		color: var(--sx-page);
 		border-color: var(--sx-ink);
 	}
+	.hero[data-mode='racer'] .drone,
+	.hero[data-mode='drone'] .racer {
+		display: none;
+	}
+	.tabs {
+		display: inline-flex;
+		gap: 0.25rem;
+		padding: 0.1875rem;
+		border: 1px solid var(--sx-line);
+		border-radius: 0.5rem;
+		background: var(--sx-panel);
+		justify-self: start;
+	}
+	.tabs button {
+		font: inherit;
+		font-size: 0.8125rem;
+		font-weight: 550;
+		height: 1.875rem;
+		padding-inline: 0.875rem;
+		border: 0;
+		border-radius: 0.375rem;
+		background: none;
+		color: var(--sx-muted);
+		cursor: pointer;
+	}
+	.tabs button[aria-selected='true'] {
+		background: var(--sx-ink);
+		color: var(--sx-page);
+	}
+	.mode-panel {
+		display: grid;
+		gap: 0.75rem;
+	}
+	.hero[data-racer-paused='true'] .racer .live {
+		background: var(--sx-faint);
+		box-shadow: none;
+	}
+	.hero[data-drawing='true'] canvas.racer {
+		cursor: crosshair;
+	}
 	.panel {
 		grid-area: panel;
 		position: relative;
@@ -194,7 +308,7 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 		box-shadow: 0 0 0 0.25rem var(--sx-spike-soft);
 		translate: 0 -0.05rem;
 	}
-	.hero[data-paused='true'] .live {
+	.hero[data-paused='true'] .drone .live {
 		background: var(--sx-faint);
 		box-shadow: none;
 	}
@@ -291,6 +405,13 @@ const arrived = Math.round(evaluation.arrived * 1000) / 10;
 		.controls,
 		.stats {
 			justify-content: flex-end;
+		}
+		.tabs,
+		.mode-panel {
+			justify-self: end;
+		}
+		.mode-panel {
+			justify-items: end;
 		}
 	}
 </style>
