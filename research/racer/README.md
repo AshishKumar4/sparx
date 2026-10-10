@@ -88,6 +88,19 @@ output matches sparx's float64 run, and the car's position, heading and speed ag
 | --- | --- | --- | --- |
 | sweep 1: 1,500 steps, seed 1 | 1 of 1 | 187 of 200 | `results/sweep1.json` |
 | sweep 2: 3,000 steps, horizon 150 | 1 of 4 runs | 200, 2, 0 and 2 of 200 | `results/sweep2.json`: seeds 1 and 2, seed 1 at a learning rate of 7e-4, seed 3 at a batch of 64; seed 1 is the published racer |
+| Phase 0, the published recipe: seeds 3, 4 and 5 | 0 of 3 | 3, 94 and 25 of 200 | `results/phase0.json`, runs 0 to 2 |
+| Phase 0, truncated at 50 steps, curriculum, reverse penalty: seeds 1 to 5 | 3 of 5 | 200, 200, 134, 163 and 200 of 200 | `results/phase0.json`, runs 3 to 7 |
+
+Phase 0 ran on armada's CPUs at commit 6db9d24, 3,000 steps each at a learning rate of 1e-3 and a batch of
+32. With seeds 1 and 2 from sweep 2, the published recipe has driven 1 of 5 seeds to finish its unseen
+tracks. The new recipe drives 3 of 5 to finish every one, and the other two to 67% and 82%. Its median
+gradient norms over training (every 50th step) were 0.1, 21, 11, 38 and 9, and its largest 3.3e3, against
+medians of 1.6e3 to 8.4e3 and largest norms up to 3.2e14 for the published recipe's three seeds here. Its
+three best seeds also drive faster: a median lap of 9.5, 16.2 and 10.7 s against the published racer's
+20.6 s (`site/public/racer/evaluation.json`). On the harder sets, by bend strength 0.9, 1.2, 1.5 and 1.8 (`difficulty` in each run), seeds 1
+and 5 finished 99.5 to 100% of every set, seed 2 95.5 to 99%, and seeds 3 and 4 36.5 to 75%. The
+published racer finished 100, 99.5, 94 and 88.5% of the same sets (`results/difficulty-published.json`).
+Each run of the new recipe took 72 to 93 minutes on one container.
 
 One training step of each arm, batch 32 and 300 steps of driving cut every 50, on an RTX 4080: 0.42 s for
 each conv arm, the 2- and 4-bit and sigma-delta arms included, 0.45 s for the dendritic arm, and 0.042 s
