@@ -1,0 +1,7 @@
+ok 5.939
+held at -80 mV: 180 pA +2.83 mV, AMPA +3.67 mV, GABA-A -0.00 mV
+held at -60 mV: 180 pA +2.83 mV, AMPA +2.75 mV, GABA-A -0.92 mV
+held at -40 mV: 180 pA +2.83 mV, AMPA +1.84 mV, GABA-A -1.84 mV
+held at -20 mV: 180 pA +2.83 mV, AMPA +0.92 mV, GABA-A -2.75 mV
+held at   0 mV: 180 pA +2.83 mV, AMPA +0.00 mV, GABA-A -3.67 mV
+

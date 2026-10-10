@@ -1,0 +1,132 @@
+{
+ "commit": "6db9d2419d19dee2a4fdb4acfbf5a3ee20a0c233",
+ "model": "site/public/racer/racer.json",
+ "by_bend": {
+  "0.9": {
+   "tracks": 200,
+   "seconds": 30.0,
+   "finished": 1.0,
+   "crashed": 0.0,
+   "median_lap_time": 20.8,
+   "median_speed": 2.665985107421875,
+   "off_road": 0.0012833333333333336,
+   "events_per_step": 124.50748443603516,
+   "spikes_per_step": 16.643110275268555
+  },
+  "1.2": {
+   "tracks": 200,
+   "seconds": 30.0,
+   "finished": 0.995,
+   "crashed": 0.0,
+   "median_lap_time": 21.96,
+   "median_speed": 2.6348633766174316,
+   "off_road": 0.0020033333333333335,
+   "events_per_step": 124.35610961914062,
+   "spikes_per_step": 16.643360137939453
+  },
+  "1.5": {
+   "tracks": 200,
+   "seconds": 30.0,
+   "finished": 0.94,
+   "crashed": 0.01,
+   "median_lap_time": 23.270000000000003,
+   "median_speed": 2.6213231086730957,
+   "off_road": 0.00256,
+   "events_per_step": 123.04109191894531,
+   "spikes_per_step": 16.425573348999023
+  },
+  "1.8": {
+   "tracks": 200,
+   "seconds": 30.0,
+   "finished": 0.885,
+   "crashed": 0.02,
+   "median_lap_time": 23.44,
+   "median_speed": 2.5895512104034424,
+   "off_road": 0.0029033333333333333,
+   "events_per_step": 121.27488708496094,
+   "spikes_per_step": 16.217906951904297
+  }
+ },
+ "by_radius": [
+  {
+   "from": 0.0,
+   "to": 1.0,
+   "tracks": 346,
+   "finished": 0.8988439306358381
+  },
+  {
+   "from": 1.0,
+   "to": 1.5,
+   "tracks": 149,
+   "finished": 0.9932885906040269
+  },
+  {
+   "from": 1.5,
+   "to": 2.0,
+   "tracks": 125,
+   "finished": 1.0
+  },
+  {
+   "from": 2.0,
+   "to": 3.0,
+   "tracks": 132,
+   "finished": 1.0
+  },
+  {
+   "from": 3.0,
+   "to": 4.0,
+   "tracks": 38,
+   "finished": 1.0
+  },
+  {
+   "from": 4.0,
+   "to": 6.0,
+   "tracks": 9,
+   "finished": 1.0
+  },
+  {
+   "from": 6.0,
+   "to": null,
+   "tracks": 1,
+   "finished": 1.0
+  }
+ ],
+ "failed_tightest": [
+  0.225,
+  0.285,
+  0.285,
+  0.372,
+  0.385,
+  0.389,
+  0.39,
+  0.407,
+  0.409,
+  0.447,
+  0.451,
+  0.457,
+  0.462,
+  0.472,
+  0.472,
+  0.475,
+  0.486,
+  0.487,
+  0.498,
+  0.535,
+  0.542,
+  0.554,
+  0.56,
+  0.59,
+  0.607,
+  0.65,
+  0.65,
+  0.676,
+  0.708,
+  0.77,
+  0.773,
+  0.794,
+  0.798,
+  0.925,
+  0.949,
+  1.18
+ ]
+}

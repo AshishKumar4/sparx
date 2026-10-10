@@ -1,0 +1,4 @@
+synchronous regular: 116.7 Hz, CV 0.09, Fano 8.5
+asynchronous irregular: 85.8 Hz, CV 0.13, Fano 7.3
+synchronous, fast: 165.9 Hz, CV 0.11, Fano 41.3
+synchronous, slow: 4.0 Hz, CV 0.28, Fano 1.3

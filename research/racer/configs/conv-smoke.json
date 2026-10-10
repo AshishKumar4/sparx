@@ -1,0 +1,5 @@
+[
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 2 --batch 2 --horizon 12 --truncate 6 --eval-tracks 2 --log-every 1 --neuron lif",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 2 --batch 2 --horizon 12 --truncate 6 --eval-tracks 2 --log-every 1 --neuron relu",
+ "train --net conv --columns 64 --rows 32 --supersample 2 --steps 2 --batch 2 --horizon 12 --truncate 6 --eval-tracks 2 --log-every 1 --neuron relu --sees frames"
+]

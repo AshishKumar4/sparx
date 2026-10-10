@@ -479,7 +479,8 @@ def evaluate(args: argparse.Namespace) -> None:
 def harder(args: argparse.Namespace) -> None:
     net, params, world, ground = from_json(json.loads(Path(args.model).read_text()))
     result = difficulty(net, params, world, ground, args.seed, args.tracks)
-    Path(args.out).write_text(json.dumps(result))
+    out = Path(args.out)
+    (out / "difficulty.json" if out.is_dir() else out).write_text(json.dumps(result))
     print(json.dumps({"by_bend": result["by_bend"], "by_radius": result["by_radius"]}))
 
 

@@ -1,0 +1,6 @@
+[
+ "train --steps 3000 --batch 32 --horizon 150 --lr 1e-3 --seed 1",
+ "train --steps 3000 --batch 32 --horizon 150 --lr 1e-3 --seed 2",
+ "train --steps 3000 --batch 32 --horizon 150 --lr 1e-3 --seed 1 --lr 7e-4",
+ "train --steps 3000 --batch 32 --horizon 150 --lr 1e-3 --seed 3 --batch 64"
+]

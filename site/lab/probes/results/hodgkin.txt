@@ -1,0 +1,33 @@
+ok 6.039
+    0 pA:   0 Hz
+   50 pA:   0 Hz
+  100 pA:   0 Hz
+  150 pA:   0 Hz
+  200 pA:   0 Hz
+  250 pA:   0 Hz
+  300 pA:   0 Hz
+  350 pA:   0 Hz
+  400 pA:   0 Hz
+  450 pA:   0 Hz
+  500 pA:   0 Hz
+  550 pA:   0 Hz
+  600 pA:   0 Hz
+  650 pA:  55 Hz
+  700 pA:  58 Hz
+  750 pA:  60 Hz
+  800 pA:  62 Hz
+  850 pA:  65 Hz
+  900 pA:  66 Hz
+  950 pA:  67 Hz
+ 1000 pA:  68 Hz
+ 1050 pA:  69 Hz
+ 1100 pA:  71 Hz
+ 1150 pA:  72 Hz
+ 1200 pA:  73 Hz
+ 1250 pA:  74 Hz
+ 1300 pA:  75 Hz
+ 1350 pA:  76 Hz
+ 1400 pA:  77 Hz
+ 1450 pA:  78 Hz
+ 1500 pA:  79 Hz
+

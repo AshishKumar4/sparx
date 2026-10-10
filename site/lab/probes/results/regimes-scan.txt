@@ -1,0 +1,8 @@
+order 250 (1250 neurons, C_E 100) J 0.1: SR 117.0Hz CV 0.09 F 7.2 (0.3s) | AI 85.6Hz CV 0.13 F 6.2 (0.3s) | SIfast 164.7Hz CV 0.10 F 26.7 (0.3s) | SIslow 3.7Hz CV 0.26 F 1.5 (0.2s)
+order 250 (1250 neurons, C_E 100) J 0.5: SR 239.9Hz CV 0.17 F 6.6 (0.2s) | AI 57.8Hz CV 0.74 F 14.0 (0.2s) | SIfast 94.7Hz CV 0.89 F 15.3 (0.3s) | SIslow 16.7Hz CV 0.56 F 15.3 (0.2s)
+order 250 (1250 neurons, C_E 100) J 1: SR 325.0Hz CV 0.10 F 112.8 (0.3s) | AI 56.2Hz CV 1.40 F 8.9 (0.2s) | SIfast 76.5Hz CV 1.84 F 9.5 (0.3s) | SIslow 34.6Hz CV 1.13 F 24.9 (0.2s)
+order 500 (2500 neurons, C_E 200) J 0.1: SR 139.7Hz CV 0.08 F 9.0 (0.7s) | AI 75.1Hz CV 0.16 F 14.5 (0.6s) | SIfast 139.1Hz CV 0.15 F 35.1 (0.7s) | SIslow 4.0Hz CV 0.30 F 3.9 (0.4s)
+order 500 (2500 neurons, C_E 200) J 0.3: SR 256.9Hz CV 0.12 F 12.3 (0.7s) | AI 52.8Hz CV 0.59 F 30.7 (0.5s) | SIfast 84.1Hz CV 0.76 F 42.8 (0.6s) | SIslow 13.1Hz CV 0.47 F 30.6 (0.4s)
+order 500 (2500 neurons, C_E 200) J 0.5: SR 330.8Hz CV 0.05 F 314.8 (0.6s) | AI 49.5Hz CV 1.09 F 22.9 (0.4s) | SIfast 65.0Hz CV 1.28 F 17.7 (0.5s) | SIslow 19.0Hz CV 0.70 F 57.2 (0.3s)
+order 1000 (5000 neurons, C_E 400) J 0.2: SR 314.1Hz CV 0.08 F 344.7 (2.0s) | AI 46.0Hz CV 0.55 F 55.6 (1.0s) | SIfast 68.6Hz CV 0.82 F 121.5 (1.2s) | SIslow 10.6Hz CV 0.45 F 101.2 (0.8s)
+order 2500 (12500 neurons, C_E 1000) J 0.1: SR 332.5Hz CV 0.00 F 1708.1 (8.3s) | AI 37.2Hz CV 0.40 F 75.5 (3.3s) | SIfast 57.5Hz CV 0.66 F 316.4 (4.1s) | SIslow 6.1Hz CV 0.36 F 297.8 (2.2s)

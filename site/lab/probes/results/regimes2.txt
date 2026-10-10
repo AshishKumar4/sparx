@@ -1,0 +1,5 @@
+g 5, eta 2, j 0.1:  85.8 Hz, CV 0.13, Fano   7.3
+g 3.0, eta 2.0, j 1.0: 326.6 Hz, CV 0.09, Fano 156.0
+g 5.0, eta 2.0, j 1.0:  73.5 Hz, CV 1.47, Fano  14.7
+g 6.0, eta 4.0, j 1.0:  73.8 Hz, CV 1.72, Fano   7.3
+g 4.5, eta 0.9, j 1.0:  38.7 Hz, CV 1.18, Fano  29.8

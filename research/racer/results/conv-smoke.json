@@ -1,0 +1,95 @@
+{
+ "commit": null,
+ "runs": [
+  {
+   "arguments": "train --net conv --columns 64 --rows 32 --supersample 2 --steps 2 --batch 2 --horizon 12 --truncate 6 --eval-tracks 2 --log-every 1 --neuron lif",
+   "history": [
+    {
+     "step": 1,
+     "loss": -0.04517047107219696,
+     "grad_norm": 0.12650033831596375,
+     "seconds": 3.6,
+     "distance": 0.2551940083503723,
+     "events": 314.79168701171875,
+     "rate": 0.01183285005390644,
+     "speed": 2.647770404815674
+    }
+   ],
+   "evaluation": {
+    "tracks": 2,
+    "seconds": 30.0,
+    "finished": 0.0,
+    "crashed": 1.0,
+    "median_lap_time": null,
+    "median_speed": null,
+    "off_road": 0.9033333333333333,
+    "events_per_step": 31.32033348083496,
+    "spikes_per_step": 17.277334213256836,
+    "units": 12416,
+    "parameters": 530258,
+    "dense_macs_per_step": 1524096,
+    "triggered_macs_per_step": 4563.6787109375
+   }
+  },
+  {
+   "arguments": "train --net conv --columns 64 --rows 32 --supersample 2 --steps 2 --batch 2 --horizon 12 --truncate 6 --eval-tracks 2 --log-every 1 --neuron relu",
+   "history": [
+    {
+     "step": 1,
+     "loss": 0.3273870646953583,
+     "grad_norm": 4.4266462326049805,
+     "seconds": 3.2,
+     "distance": 0.2679081857204437,
+     "events": 629.5,
+     "rate": 0.26105764508247375,
+     "speed": 2.738086223602295
+    }
+   ],
+   "evaluation": {
+    "tracks": 2,
+    "seconds": 30.0,
+    "finished": 0.0,
+    "crashed": 0.0,
+    "median_lap_time": null,
+    "median_speed": null,
+    "off_road": 0.367,
+    "events_per_step": 938.17431640625,
+    "spikes_per_step": 6114.44287109375,
+    "units": 12416,
+    "parameters": 530258,
+    "dense_macs_per_step": 1524096,
+    "triggered_macs_per_step": 633560.8125
+   }
+  },
+  {
+   "arguments": "train --net conv --columns 64 --rows 32 --supersample 2 --steps 2 --batch 2 --horizon 12 --truncate 6 --eval-tracks 2 --log-every 1 --neuron relu --sees frames",
+   "history": [
+    {
+     "step": 1,
+     "loss": 2.521862745285034,
+     "grad_norm": 0.30250057578086853,
+     "seconds": 3.3,
+     "distance": 0.3273888826370239,
+     "events": 800.3333740234375,
+     "rate": 0.5055640339851379,
+     "speed": 1.5539288520812988
+    }
+   ],
+   "evaluation": {
+    "tracks": 2,
+    "seconds": 30.0,
+    "finished": 0.0,
+    "crashed": 0.0,
+    "median_lap_time": null,
+    "median_speed": null,
+    "off_road": 0.3676666666666667,
+    "events_per_step": 942.88232421875,
+    "spikes_per_step": 6027.27880859375,
+    "units": 12416,
+    "parameters": 529858,
+    "dense_macs_per_step": 1319296,
+    "triggered_macs_per_step": 716984.125
+   }
+  }
+ ]
+}
