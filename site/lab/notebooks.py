@@ -36,6 +36,7 @@ NOTEBOOKS = {
     "simulators": ("Simulators and fidelity", "simulators", ["convergence"]),
     "hardware": ("Hardware and events", "hardware", ["export"]),
     "drone": ("Case study: the drone", "drone", ["pilot"]),
+    "racer": ("Case study: the racer", "racer", ["racer"]),
 }
 
 

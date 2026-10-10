@@ -1,0 +1,74 @@
+---
+// The racer's hardest unseen track and its path round it (public/racer/evaluation.json, from site/lab/racer.py
+// evaluate), drawn when the site is built.
+import evaluation from '../../../public/racer/evaluation.json';
+
+const { worst } = evaluation;
+const width = 640;
+const height = 360;
+const xs = worst.points.map((p) => p[0]);
+const ys = worst.points.map((p) => p[1]);
+const margin = 1.6;
+const [x0, x1, y0, y1] = [Math.min(...xs) - margin, Math.max(...xs) + margin, Math.min(...ys) - margin, Math.max(...ys) + margin];
+const scale = Math.min(width / (x1 - x0), height / (y1 - y0));
+const sx = (x: number) => (width - (x1 - x0) * scale) / 2 + (x - x0) * scale;
+const sy = (y: number) => (height - (y1 - y0) * scale) / 2 + (y1 - y) * scale;
+const line = (points: number[][], close: boolean) =>
+	points.map(([x, y], k) => `${k ? 'L' : 'M'}${sx(x).toFixed(1)},${sy(y).toFixed(1)}`).join('') + (close ? 'Z' : '');
+const road = line(worst.points, true);
+const path = line(worst.path, false);
+---
+
+<figure class="track">
+	<svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="The racer's hardest unseen track, a closed road, with the path the car drove around it over 30 seconds">
+		<path class="verge" d={road} stroke-width={2 * 0.84 * scale} />
+		<path class="road" d={road} stroke-width={2 * 0.76 * scale} />
+		<path class="middle" d={road} stroke-width={Math.max(1, 0.08 * scale)} />
+		<path class="car" d={path} />
+		<circle class="start" cx={sx(worst.points[0][0])} cy={sy(worst.points[0][1])} r="5" />
+	</svg>
+	<figcaption><slot /></figcaption>
+</figure>
+
+<style>
+	.track {
+		margin: 0;
+		padding: 1rem 1rem 0.75rem;
+		border: 1px solid var(--sx-line);
+		border-radius: 0.75rem;
+		background: var(--sx-panel);
+	}
+	svg {
+		width: 100%;
+		height: auto;
+		display: block;
+	}
+	path {
+		fill: none;
+		stroke-linejoin: round;
+		stroke-linecap: round;
+	}
+	.verge {
+		stroke: var(--sx-line-strong);
+	}
+	.road {
+		stroke: var(--sx-page);
+	}
+	.middle {
+		stroke: var(--sx-faint);
+		stroke-dasharray: 6 6;
+	}
+	.car {
+		stroke: var(--sx-spike);
+		stroke-width: 2;
+	}
+	.start {
+		fill: var(--sx-spike);
+	}
+	figcaption {
+		margin-top: 0.5rem;
+		font-size: 0.875rem;
+		line-height: 1.5;
+		color: var(--sx-muted);
+	}
+</style>

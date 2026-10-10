@@ -1,0 +1,124 @@
+---
+layout: ../../layouts/Chapter.astro
+title: 'Case study: the racer'
+description: A spiking network drives a car around tracks it has never seen, with nothing but an event camera's output to go on. It learned end to end, by gradients through its own spikes, through the car, and through the camera's pixels, whose thresholds are spikes too. This chapter takes it apart, and shows how often such training fails.
+---
+
+import CodeBlock from '../../components/CodeBlock.astro';
+import RacerTrack from '../../components/learn/RacerTrack.astro';
+import RacerTraining from '../../components/learn/RacerTraining.astro';
+import RacerFigure from '../../components/live/RacerFigure.astro';
+import { colab, source } from '../../data/site.mjs';
+import evaluation from '../../../public/racer/evaluation.json';
+import camera from '../../../snippets/racer.py?raw';
+
+## The task
+
+A car carries an event camera that looks at the road ahead. The road is dark, its verges are light, and a dashed line runs down its middle. The camera sends nothing about the road itself, only where its brightness changes as the car moves, and a car that stands still sees nothing at all. From those events and its own speed, a network of spiking neurons must steer and set the speed, around a track it has never seen.
+
+Nobody shows it how. Event-camera steering has been learned by imitation: Maqueda et al. trained a conventional network to predict a human driver's steering from a large recorded dataset. The racer has no driver to imitate, and learns from what happens when it drives.
+
+## The car and its camera
+
+The car is a kinematic bicycle: a wheelbase $L$ of 0.4 m, steering $\delta$ of at most 0.6 rad, a top speed of 6 m/s. Every 20 ms the network's two readout membranes $u_1$ and $u_2$ set the steering and a target speed, and the car moves:
+
+$$
+\begin{gathered}
+\delta = 0.6 \tanh u_1, \qquad v^\ast = 6\,\sigma(u_2) \\
+v \leftarrow v + \frac{\Delta t}{0.5}\,(v^\ast - v), \qquad \psi \leftarrow \psi + \Delta t\, \frac{v \tan\delta}{L}, \qquad (x, y) \leftarrow (x, y) + \Delta t\, v\, (\cos\psi, \sin\psi)
+\end{gathered}
+$$
+
+The camera has 24 × 12 pixels, each looking at one point of the ground: rows from 0.6 m to 7 m ahead, spaced as a real camera's rows fall on a flat road, each spanning 0.9 times its distance to either side. Each pixel is chapter 12's: it sends an ON or OFF event when the logarithm of the brightness it sees has moved 0.15 from the level of its last event. The network reads 577 numbers each step, the 288 pixels' ON events, their 288 OFF events and the car's speed, through two layers of LIF neurons, 96 and 64, into the two readout integrators.
+
+<RacerFigure />
+
+Draw a track with the mouse, a loop around the car, or press "Draw a track" and draw it with a finger. Below the road are the camera's pixels as they fire, the far rows at the top, orange for ON and blue for OFF, then the 160 neurons, and the steering and speed the readouts set. The track you draw is smoothed and scaled to the size of the tracks the network trained on, which have radii of 6 to 10 m. Draw corners much tighter than those and the car may leave the road; the figure then puts it back at the start.
+
+## Gradients through a camera
+
+The car, the camera and the network are written in JAX, so a drive is one differentiable function of the network's weights. Most of it is smooth: the car's motion, the brightness of the ground, its logarithm. Two kinds of step are not, the neurons' spikes and the pixels' events, and both are `sparx.spike`, with chapter 5's surrogate for a derivative. The pixels use a narrower one than the neurons, since their threshold is 0.15 rather than 1.
+
+So the gradient of the loss reaches the weights by every path there is: through the readouts and the spikes, into the events, through each pixel's threshold into the brightness it saw, through the ground into the car's position and heading, and back through every earlier step of the drive. Here is one pixel row's piece of that chain:
+
+<CodeBlock code={camera} colab={colab('racer')} source={source('site/lab/racer.py')} />
+
+```
+move 0.05 m: 1 ON events, gradient 29.3 per m
+move 0.10 m: 3 ON events, gradient 15.2 per m
+move 0.20 m: 3 ON events, gradient 8.0 per m
+move 0.40 m: 5 ON events, gradient 5.6 per m
+```
+
+The count of events is a staircase in the car's position, flat between its steps, so its true derivative is zero almost everywhere. The surrogate's is never zero: between 0.1 and 0.2 m the count stays at 3, and the gradient still says that moving further brings more events.
+
+## The loss
+
+Each training step draws 32 tracks like those you see, puts a car on each at a random point, off the middle, askew and moving, and drives them all for 150 steps, 3 s. With $d$ the distance from the middle of the road, $w = 0.8$ m its half width, $\dot s$ the speed along the road and $r_i$ the share of steps on which neuron $i$ fired:
+
+$$
+L = \Big\langle \frac{d^2}{w^2} \Big\rangle + 4\, \big\langle (d - w)_+^2 \big\rangle - 0.5\, \Big\langle \frac{\dot s}{6} \Big\rangle + 10\, \big\langle (r_i - 0.3)_+^2 + (0.02 - r_i)_+^2 \big\rangle
+$$
+
+The first two terms keep the car on the road, the second hard once it is off. The third rewards progress, and the last keeps every neuron in use and none saturated, as in the drone. Adam follows the gradient, clipped to a norm of 1, with a learning rate that warms up and then decays.
+
+<RacerTraining />
+
+## How often it fails
+
+Gradients carried back through 150 steps of a car, a camera and a network explode, as chapter 6 warned, and this training does not always survive them. These are the five runs of the final setup on record:
+
+| Run | Seed | Steps | Learning rate | Batch | Unseen tracks finished |
+| --- | --- | --- | --- | --- | --- |
+| The racer | 1 | 3,000 | 0.001 | 32 | 200 of 200 |
+| Earlier | 1 | 1,500 | 0.001 | 32 | 187 of 200 |
+| | 2 | 3,000 | 0.001 | 32 | 2 of 200 |
+| | 3 | 3,000 | 0.001 | 64 | 2 of 200 |
+| | 1 | 3,000 | 0.0007 | 32 | 0 of 200 |
+
+The run with seed 2 ended with gradients of norm $2.7 \times 10^8$ before clipping, and its cars left the road 45% of the time. The run with the smaller learning rate found a shortcut instead: its cars stay near the middle, 0.4% of the time off the road, but crawl, and none finishes a lap in 30 s. Only seed 1 learned to drive, twice. The car on this page and the front page is that run's.
+
+## How well it drives
+
+Each of 200 tracks it never trained on, drawn by the same rule with another seed, starts the car at rest in the middle of the road, pointing along it, and gives it 30 s. A lap counts when the car has gone the track's length without straying more than a metre beyond the road's edge.
+
+It finished all {evaluation.summary.tracks}, in a median of {evaluation.summary.median_lap_time.toFixed(1)} s for tracks of 40 to 75 m, and never strayed that far. Over the 200 drives it spent {(evaluation.summary.off_road * 100).toFixed(2)}% of its time with its centre off the road, on 26 of the tracks. Each step the camera sent {Math.round(evaluation.summary.events_per_step)} events, of 576 possible, and {evaluation.summary.spikes_per_step.toFixed(1)} of the 160 neurons fired.
+
+No track failed, so here is the hardest, the one where it spent longest off the road:
+
+<RacerTrack>
+	Track {evaluation.worst.index} of the 200, {evaluation.worst.length.toFixed(1)} m around, with the car's path over 30 s in orange from the dot. It finished
+	its first lap in {evaluation.worst.lap_time.toFixed(1)} s and spent {(evaluation.worst.off_road * 100).toFixed(1)}% of its 30 s off the road.
+</RacerTrack>
+
+The browser drives the same network from the same weights, in double precision, with the same operations in the same order. Its test holds two drives of 10 s, on two unseen tracks, to sparx's own float64 run: every event and every spike at the same step, and the car's path within $10^{-9}$ m.
+
+## Try this
+
+1. Every drive starts with the car at rest. What does the network see at the first step, and how does the car get moving?
+2. Draw a track with a hairpin much tighter than any in training. Why might the car fail there, when it drives the 200 unseen tracks without a fault?
+3. Why does the loss reward speed along the road, rather than speed itself?
+4. The run with the smaller learning rate stayed on the road and never finished a lap. Which terms of the loss did it satisfy, and why was that a minimum gradient descent could settle in?
+
+<details>
+<summary>Answers</summary>
+
+1. Nothing: a still camera sends no events, and the speed it reads is 0. But the target speed is $6\,\sigma(u_2)$, which is never zero, so the car starts to roll, and as it moves the dashes and the road's edges start to send events.
+2. The 200 unseen tracks were drawn by the same rule as the training tracks, so their bends are no sharper than those it learned on. A hairpin asks for slowing and steering it never needed in training, and nothing in the loss taught it what to do there.
+3. Speed itself can be had by driving in circles, or straight off the track. Speed along the road counts only progress round the track.
+4. The first two: staying near the middle keeps $d$ small, and driving slowly makes that easy. A likely reason it stayed there is that each small change toward driving faster first cost more in the distance terms than it earned in progress, so the gradient pointed back to crawling.
+
+</details>
+
+## Summary
+
+A spiking network learned to drive from an event camera's output alone, by gradients through its spikes, the car's motion and the pixels' own thresholds, and finished every one of 200 tracks it had never seen. The same training failed on two other seeds and a smaller learning rate, so the result is one run that worked, not a recipe that always does.
+
+## References
+
+<ul class="references">
+<li>A. I. Maqueda, A. Loquercio, G. Gallego, N. García and D. Scaramuzza, "Event-based vision meets deep learning on steering prediction for self-driving cars", Conference on Computer Vision and Pattern Recognition, 2018, <a href="https://arxiv.org/abs/1804.01310">arXiv:1804.01310</a>.</li>
+<li>G. Gallego et al., "Event-based vision: a survey", <em>IEEE Transactions on Pattern Analysis and Machine Intelligence</em> 44, 2022, <a href="https://doi.org/10.1109/TPAMI.2020.3008413">doi:10.1109/TPAMI.2020.3008413</a>.</li>
+<li>E. O. Neftci, H. Mostafa and F. Zenke, "Surrogate gradient learning in spiking neural networks", <em>IEEE Signal Processing Magazine</em> 36, 2019, <a href="https://doi.org/10.1109/MSP.2019.2931595">doi:10.1109/MSP.2019.2931595</a>.</li>
+<li>R. Pascanu, T. Mikolov and Y. Bengio, "On the difficulty of training recurrent neural networks", International Conference on Machine Learning, 2013, <a href="https://arxiv.org/abs/1211.5063">arXiv:1211.5063</a>.</li>
+</ul>

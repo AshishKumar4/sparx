@@ -14,7 +14,7 @@ def brightness(x):
 
 def on_events(shift):
     """ON events from 9 pixels across the edge when the car moves
-    `shift` metres toward the road's middle."""
+    `shift` metres toward the verge."""
     pixels = jnp.linspace(0.0, 1.6, 9)        # metres from the middle
     before = jnp.log(brightness(pixels))
     after = jnp.log(brightness(pixels + shift))
