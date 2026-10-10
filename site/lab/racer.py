@@ -30,7 +30,17 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import training
-from stack import act, at_rest, from_layers, stack, to_layers
+from stack import (
+    Vision,
+    act,
+    at_rest,
+    from_layers,
+    stack,
+    stack_operations,
+    to_layers,
+    vision_from_json,
+    vision_json,
+)
 
 import sparx
 from sparx.surrogate import ATan
@@ -58,20 +68,29 @@ class World:
     points: int = 128
     behind: int = 4
     ahead: int = 24
+    supersample: int = 1
+    sees: str = "events"
 
     @property
     def pixels(self) -> int:
         return self.columns * self.rows
 
+    @property
+    def features(self) -> int:
+        """What the network reads each step: ON and OFF events, or a frame's log brightness, and the speed."""
+        return (2 if self.sees == "events" else 1) * self.pixels + 1
+
     def ground(self) -> tuple[np.ndarray, np.ndarray]:
-        """Where each pixel looks, in the car's frame: metres ahead and to the left, `[rows * columns]`.
+        """Where the camera looks, in the car's frame: metres ahead and to the left, `[rows * columns]`, or
+        `supersample` squared points per pixel, row-major over a grid that much finer, which `look` averages.
 
         Rows step geometrically from `near` to `far`, as a camera's rows do over a flat ground, and each
         row spans `spread` times its distance to either side.
         """
-        forward = self.near * (self.far / self.near) ** (np.arange(self.rows) / (self.rows - 1))
-        side = self.spread * (2 * np.arange(self.columns) / (self.columns - 1) - 1)
-        return np.repeat(forward, self.columns), (forward[:, None] * side[None, :]).reshape(-1)
+        rows, columns = self.rows * self.supersample, self.columns * self.supersample
+        forward = self.near * (self.far / self.near) ** (np.arange(rows) / (rows - 1))
+        side = self.spread * (2 * np.arange(columns) / (columns - 1) - 1)
+        return np.repeat(forward, columns), (forward[:, None] * side[None, :]).reshape(-1)
 
 
 EVENT = ATan(alpha=8.0)
@@ -129,14 +148,18 @@ def brightness(world: World, distance: jax.Array, s: jax.Array, dashes: jax.Arra
 
 
 def look(world: World, ground, points, tables, dashes, car: jax.Array) -> jax.Array:
-    """The log brightness each pixel sees from `car` `[B, 4]` (x, y, heading, speed): `[B, pixels]`."""
+    """The log brightness each pixel sees from `car` `[B, 4]` (x, y, heading, speed), the mean over its
+    points of the ground: `[B, pixels]`."""
     forward, side = ground
     x, y, psi = car[:, 0], car[:, 1], car[:, 2]
     c, s = jnp.cos(psi)[:, None], jnp.sin(psi)[:, None]
     px = x[:, None] + forward * c - side * s
     py = y[:, None] + forward * s + side * c
     distance, along, _ = locate(world, points, tables, px, py, nearest(points, x, y))
-    return jnp.log(brightness(world, distance, along, dashes))
+    light, n = brightness(world, distance, along, dashes), world.supersample
+    if n > 1:
+        light = light.reshape(-1, world.rows, n, world.columns, n).mean((2, 4)).reshape(light.shape[0], -1)
+    return jnp.log(light)
 
 
 def sense(world: World, level: jax.Array, seen: jax.Array):
@@ -164,8 +187,15 @@ def network(hidden: tuple[int, ...] = (96, 64), tau: float = 3.0, readout_tau: f
     return stack((*hidden, 2), tau, readout_tau)
 
 
-def inputs(world: World, on: jax.Array, off: jax.Array, car: jax.Array) -> jax.Array:
-    return jnp.concatenate([on, off, car[:, 3:4] / world.max_speed], -1)
+def vision(world: World, neuron: str = "lif", tau: float = 3.0, readout_tau: float = 4.0) -> Vision:
+    """The convolutional network over the camera's image: ON and OFF events, or a frame."""
+    channels = 2 if world.sees == "events" else 1
+    return Vision((world.rows, world.columns, channels), neuron=neuron, tau=tau, readout_tau=readout_tau)
+
+
+def inputs(world: World, on: jax.Array, off: jax.Array, seen: jax.Array, car: jax.Array) -> jax.Array:
+    image = [on, off] if world.sees == "events" else [seen]
+    return jnp.concatenate([*image, car[:, 3:4] / world.max_speed], -1)
 
 
 def race(net, params, world: World, ground, points, car0, steps: int, truncate: int = 0):
@@ -184,7 +214,7 @@ def race(net, params, world: World, ground, points, car0, steps: int, truncate: 
         car, level, carried = carry
         seen = look(world, ground, points, tables, dashes, car)
         level, on, off = sense(world, level, seen)
-        u, carried, spikes = act(net, params, carried, inputs(world, on, off, car))
+        u, carried, spikes = act(net, params, carried, inputs(world, on, off, seen, car))
         car = drive(world, car, u)
         distance, s, heading = locate(
             world, points, tables, car[:, 0], car[:, 1], nearest(points, car[:, 0], car[:, 1])
@@ -193,7 +223,7 @@ def race(net, params, world: World, ground, points, car0, steps: int, truncate: 
         return (car, level, carried), (car, u, on, off, spikes, distance, s, along)
 
     level0 = look(world, ground, points, tables, dashes, car0)
-    carried = at_rest(net, params, batch, 2 * world.pixels + 1)
+    carried = at_rest(net, params, batch, world.features)
     _, out = jax.lax.scan(jax.checkpoint(step), (car0, level0, carried), jnp.arange(steps))
     return out
 
@@ -268,26 +298,34 @@ def cost(world: World, out, rates: tuple[float, float], reverse: float = 0.0):
 
 def model_json(net, params, world: World, meta: dict) -> dict:
     forward, side = world.ground()
+    if isinstance(net, Vision):
+        weights = {"vision": vision_json(net, params)}
+    else:
+        weights = {"layers": to_layers(net, params)}
     return {
         "world": dataclasses.asdict(world),
         "ground": {"forward": forward.tolist(), "side": side.tolist()},
-        "layers": to_layers(net, params),
+        **weights,
         "meta": meta,
     }
 
 
 def from_json(model: dict):
-    net, params = from_layers(model["layers"])
+    net, params = vision_from_json(model["vision"]) if "vision" in model else from_layers(model["layers"])
     world = World(**model["world"])
     ground = (np.asarray(model["ground"]["forward"]), np.asarray(model["ground"]["side"]))
     return net, params, world, ground
 
 
 def train(args: argparse.Namespace) -> None:
-    world, tracks = World(), Tracks()
+    world = World(columns=args.columns, rows=args.rows, supersample=args.supersample, sees=args.sees)
+    tracks = Tracks()
     ground = tuple(jnp.asarray(g, jnp.float32) for g in world.ground())
-    net = network(tuple(args.hidden), args.tau, args.readout_tau)
-    params = net.init(jax.random.key(args.seed), jnp.zeros((1, 1, 2 * world.pixels + 1)))["params"]
+    if args.net == "conv":
+        net = vision(world, args.neuron, args.tau, args.readout_tau)
+    else:
+        net = network(tuple(args.hidden), args.tau, args.readout_tau)
+    params = net.init(jax.random.key(args.seed), jnp.zeros((1, 1, world.features)))["params"]
     if args.curriculum:
         easy, hard = args.curriculum
         tracks = Tracks(bend=hard, floor=args.floor)
@@ -344,6 +382,12 @@ def evaluation(net, params, world: World, ground, points: jax.Array, seconds: fl
     lap_time = np.where(finished, np.argmax(lap, 0) + 1, -1) * world.dt
     off_road = (distance > world.half_width).mean(0)
     bend = tightest(np.asarray(points))
+    nonzero = np.asarray(on + off).sum(-1) if world.sees == "events" else np.full(on.shape[:2], world.pixels)
+    if isinstance(net, Vision):
+        dense, triggered = net.operations(nonzero, np.asarray(spikes), 1)
+    else:
+        dense, triggered = stack_operations(net, world.features, nonzero, np.asarray(spikes), 1)
+    parameters = sum(int(np.size(leaf)) for leaf in jax.tree.leaves(params))
     per_track = [
         {
             "finished": bool(f),
@@ -370,6 +414,10 @@ def evaluation(net, params, world: World, ground, points: jax.Array, seconds: fl
             "off_road": float(off_road.mean()),
             "events_per_step": float(np.mean(np.asarray(on) + np.asarray(off)) * world.pixels),
             "spikes_per_step": float(np.mean(np.asarray(spikes)) * np.asarray(spikes).shape[-1]),
+            "units": int(np.asarray(spikes).shape[-1]),
+            "parameters": parameters,
+            "dense_macs_per_step": int(dense),
+            "triggered_macs_per_step": float(np.mean(triggered)),
         },
         "tracks": per_track,
         "worst": {
@@ -487,6 +535,12 @@ def main() -> None:
     t.add_argument("--reverse", type=float, default=0.0,
                    help="the weight of the penalty on driving backwards")
     t.add_argument("--difficulty", action="store_true", help="also score the harder sets (difficulty.json)")
+    t.add_argument("--net", choices=("dense", "conv"), default="dense")
+    t.add_argument("--neuron", choices=("lif", "relu"), default="lif", help="the conv network's units")
+    t.add_argument("--sees", choices=("events", "frames"), default="events")
+    t.add_argument("--columns", type=int, default=24)
+    t.add_argument("--rows", type=int, default=12)
+    t.add_argument("--supersample", type=int, default=1, help="ground points per pixel, squared")
     t.set_defaults(func=train)
     e = commands.add_parser("evaluate")
     e.add_argument("--model", default="site/public/racer/racer.json")
