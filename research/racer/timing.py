@@ -1,16 +1,39 @@
 """One training step of each racer arm on this GPU: compile time, step time and peak memory.
 
 Batch 32 (or each of `--batch`), 300 steps of driving with gradients cut every 50, as the conv arms
-would train. On the workstation it runs only through the shared GPU queue:
+would train. Each arm and batch runs in a process of its own, since the device's peak memory is the
+highest since its process began. On the workstation it runs only through the shared GPU queue:
 
     ~/.cache/dew/dew-gpu-run <python with jax[cuda]> research/racer/timing.py [--batch 32 160] [--arms A B]
 """
 import argparse
 import itertools
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
+
+ARMS = {
+    "A": ("spiking conv on events", "conv", "lif", 1, "events"),
+    "B": ("graded conv on events", "conv", "relu", 1, "events"),
+    "C": ("graded conv on frames", "conv", "relu", 1, "frames"),
+    "A2": ("2-bit spiking conv on events", "conv", "lif", 2, "events"),
+    "A4": ("4-bit spiking conv on events", "conv", "lif", 4, "events"),
+    "S": ("sigma-delta conv on events", "conv", "sigma-delta", 1, "events"),
+    "D": ("spiking conv with dendrites on events", "conv", "dendritic", 1, "events"),
+    "dense": ("dense stack on 24x12 events", "dense", "lif", 1, "events"),
+}
+parser = argparse.ArgumentParser()
+parser.add_argument("--batch", type=int, nargs="+", default=[32])
+parser.add_argument("--arms", nargs="+", default=list(ARMS), help="the arms' keys")
+parser.add_argument("--one", action="store_true", help="measure the one arm and batch given, here")
+options = parser.parse_args()
+if not options.one:
+    # Before JAX is imported, so this process holds no device memory.
+    for key, batch in itertools.product(options.arms, options.batch):
+        subprocess.run([sys.executable, __file__, "--one", "--arms", key, "--batch", str(batch)], check=True)
+    sys.exit()
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT / "site/lab")]
@@ -21,24 +44,9 @@ import optax  # noqa: E402
 import racer  # noqa: E402
 import training  # noqa: E402
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--batch", type=int, nargs="+", default=[32])
-parser.add_argument("--arms", nargs="+", default=None, help="the arms' keys, all when absent")
-options = parser.parse_args()
 print(jax.devices(), flush=True)
-arms = {
-    "A": ("spiking conv on events", "conv", "lif", 1, "events"),
-    "B": ("graded conv on events", "conv", "relu", 1, "events"),
-    "C": ("graded conv on frames", "conv", "relu", 1, "frames"),
-    "A2": ("2-bit spiking conv on events", "conv", "lif", 2, "events"),
-    "A4": ("4-bit spiking conv on events", "conv", "lif", 4, "events"),
-    "S": ("sigma-delta conv on events", "conv", "sigma-delta", 1, "events"),
-    "D": ("spiking conv with dendrites on events", "conv", "dendritic", 1, "events"),
-    "dense": ("dense stack on 24x12 events", "dense", "lif", 1, "events"),
-}
-for (key, (name, kind, neuron, bits, sees)), batch in itertools.product(arms.items(), options.batch):
-    if options.arms and key not in options.arms:
-        continue
+for key, batch in itertools.product(options.arms, options.batch):
+    name, kind, neuron, bits, sees = ARMS[key]
     columns, rows, n = (64, 32, 2) if kind == "conv" else (24, 12, 1)
     world = racer.World(columns=columns, rows=rows, supersample=n, sees=sees)
     ground = tuple(jnp.asarray(g, jnp.float32) for g in world.ground())

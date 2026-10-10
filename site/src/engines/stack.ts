@@ -11,9 +11,21 @@ type Step =
 	| { kind: 'lif'; decay: number; threshold: number; zero: boolean; v: Float64Array; out: Float64Array; offset: number }
 	| { kind: 'li'; decay: number; v: Float64Array };
 
-function floats(base64: string): Float64Array {
+/** Weights sent as base64 float32, widened to float64. */
+export function floats(base64: string): Float64Array {
 	const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 	return Float64Array.from(new Float32Array(bytes.buffer));
+}
+
+/** A dense layer's outputs into `out`: each the sum over inputs in order, then the bias. The kernel is
+ * `[inputs * outputs]`, row-major by input, as flax stores it. */
+export function dense(layer: { kernel: Float64Array; bias: Float64Array; inputs: number; outputs: number }, x: ArrayLike<number>, out: Float64Array): void {
+	const { kernel, bias, inputs, outputs } = layer;
+	for (let j = 0; j < outputs; j++) {
+		let sum = 0;
+		for (let i = 0; i < inputs; i++) sum += x[i] * kernel[i * outputs + j];
+		out[j] = sum + bias[j];
+	}
 }
 
 export class Stack {
@@ -69,13 +81,8 @@ export class Stack {
 		let x: ArrayLike<number> = input;
 		for (const step of this.steps) {
 			if (step.kind === 'dense') {
-				const { kernel, bias, inputs, outputs, out } = step;
-				for (let j = 0; j < outputs; j++) {
-					let sum = 0;
-					for (let i = 0; i < inputs; i++) sum += x[i] * kernel[i * outputs + j];
-					out[j] = sum + bias[j];
-				}
-				x = out;
+				dense(step, x, step.out);
+				x = step.out;
 			} else if (step.kind === 'lif') {
 				const { v, out, decay, threshold, zero, offset } = step;
 				for (let j = 0; j < v.length; j++) {

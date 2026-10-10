@@ -1,6 +1,7 @@
 import { brunel } from '../../src/engines/brunel';
 const regimes = [['SR', 3, 2], ['AI', 5, 2], ['SIfast', 6, 4], ['SIslow', 4.5, 0.9]] as const;
-const configs: [number, number][] = [];
+// Network order and synapse strength J (mV), as results/regimes-scan.txt records them.
+const configs: [number, number][] = [[250, 0.1], [250, 0.5], [250, 1], [500, 0.1], [500, 0.3], [500, 0.5], [1000, 0.2], [2500, 0.1]];
 for (const [order, j] of configs) {
 	const rows: string[] = [];
 	for (const [name, g, eta] of regimes) {

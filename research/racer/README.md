@@ -14,12 +14,13 @@ python research/racer/summarize.py <out dir> research/racer/results/<sweep>.json
 ## Why the published racer is weak
 
 Training is unstable. Gradients carried back through 150 steps of car, camera and network explode.
-In sweep 2 (`results/sweep2.json`) the one seed that learned had a median gradient norm of 97 and a
-largest of 1.2e7. The three that failed had medians of 6.8e6, 5.3e3 and 2.8e4, and largest norms up to
-2.6e15. Clipping to norm 1 holds the step's size, but its direction comes from whichever path exploded.
-Seed 2 learned to drive backwards: a mean speed of -1.6 m/s at step 750, and 45% of its time off the
-road. The run at a learning rate of 7e-4 settled on crawling at 0.4 m/s. One seed of four learned to
-drive.
+Sweep 2 (`results/sweep2.json`) ran four configurations: seeds 1 and 2 of the published recipe, seed 1
+at a learning rate of 7e-4, and seed 3 at a batch of 64. The run that learned, seed 1 of the published
+recipe, had a median gradient norm of 97 and a largest of 1.2e7. The three that failed had medians of
+6.8e6, 5.3e3 and 2.8e4, and largest norms up to 2.6e15. Clipping to norm 1 holds the step's size, but its
+direction comes from whichever path exploded. Seed 2 learned to drive backwards: a mean speed of -1.6 m/s
+at step 750, and 45% of its time off the road. The run at 7e-4 settled on crawling at 0.4 m/s. One run of
+four learned to drive.
 
 The camera is coarse and aliased. Each of its 24 × 12 pixels samples one point of the ground. The columns
 are 0.05 m apart 0.6 m ahead, 0.18 m apart at 2.3 m and 0.55 m apart at 7 m, so the 0.16 m centre dash is
@@ -45,14 +46,15 @@ on bends tighter than a metre.
    tracks, the harder sets by bend, lap time, parameters, and multiply-adds per step counted two ways
    (below).
 
-4. Spike precision, on A's network, budget and seeds: binary spikes (A); spikes of 2 and 4 bits, as
-   Loihi 2's graded spikes carry, where a spike says how many thresholds the membrane reached, up to 3 or
-   15, and resets it (`--bits`, `FewBit` in `site/lab/stack.py`); and sigma-delta units, B's graded units
-   that send the change in their activation once it reaches 0.1 (`--neuron sigma-delta`, as Lava's
-   `SigmaDelta` does on Loihi 2). Sigma-delta at a threshold of 0 is B. Reported beside the success
-   rate: events per step, the bits each event carries, and how fast the network steers back when its car
-   is moved 0.3 m sideways 2 s into a drive (`response` in `site/lab/racer.py`): the time until the
-   steering's difference from the same drive unnudged reaches a tenth of its largest, and half. The
+4. Spike precision, on A's network, budget and seeds: binary spikes (A); spikes of 2 and 4 bits, as Loihi
+   2's graded spikes carry, where a spike says how many thresholds the membrane reached, up to 3 or 15,
+   and resets it (`--bits`, `FewBit` in `site/lab/stack.py`); and sigma-delta units, B's graded units that
+   send the change in their activation once it reaches 0.1 and receivers that add the changes up
+   (`--neuron sigma-delta`), sigma-delta coding as Lava's `SigmaDelta` neurons do it on Loihi 2, though
+   with a leaky membrane and unrounded changes. Sigma-delta at a threshold of 0 is B. Reported beside the
+   success rate: events per step, the bits each event carries, and how fast the network steers back when
+   its car is moved 0.3 m sideways 2 s into a drive (`response` in `site/lab/racer.py`): the time until
+   the steering's difference from the same drive unnudged reaches a tenth of its largest, and half. The
    published racer reaches half in a median of 180 ms on 99 tracks of 100.
 5. Active dendrites. sparx has no multi-compartment neuron: each of its models is one compartment,
    `Serial` chains models one way, and `GapJunction` couples two populations' membranes both ways only in
@@ -66,7 +68,13 @@ on bends tighter than a metre.
 
 Multiply-adds per step: *dense* counts every connection, which is what a GPU or CPU computes; *triggered*
 counts only those from inputs and units that are not zero, which is what event-driven hardware would
-compute. A smaller triggered count is not a speed on a GPU. The dendritic arm's GPU computes each
+compute, each input or unit charged the connections it actually has (a pixel at the image's edge reaches
+fewer of a convolution's outputs). A smaller triggered count is not a speed on a GPU.
+
+The loss's band on firing rates (`--rate-low`, `--rate-high`) trains the spiking arms, A, the few-bit
+arms and the dendritic arm, through their spikes' surrogate gradients. The graded arms, B, C and
+sigma-delta, report the share of their units that are active or send, but the band has no gradient
+through them and does not train them, as a ReLU network is ordinarily trained. The dendritic arm's GPU computes each
 input's product for every branch, four times its dense count, of which three are zeros.
 
 The browser runs the convolutional network as sparx does (`site/src/engines/vision.ts`): on small
@@ -79,7 +87,7 @@ output matches sparx's float64 run, and the car's position, heading and speed ag
 | Run | Seeds that learned | Unseen tracks finished | Notes |
 | --- | --- | --- | --- |
 | sweep 1: 1,500 steps, seed 1 | 1 of 1 | 187 of 200 | `results/sweep1.json` |
-| sweep 2: 3,000 steps, horizon 150 | 1 of 4 | 200, 2, 0 and 2 of 200 | `results/sweep2.json`; seed 1 is the published racer |
+| sweep 2: 3,000 steps, horizon 150 | 1 of 4 runs | 200, 2, 0 and 2 of 200 | `results/sweep2.json`: seeds 1 and 2, seed 1 at a learning rate of 7e-4, seed 3 at a batch of 64; seed 1 is the published racer |
 
 One training step of each arm, batch 32 and 300 steps of driving cut every 50, on an RTX 4080: 0.42 s for
 each conv arm, the 2- and 4-bit and sigma-delta arms included, 0.45 s for the dendritic arm, and 0.042 s

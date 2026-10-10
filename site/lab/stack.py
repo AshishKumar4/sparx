@@ -56,7 +56,8 @@ def act(net: nn.Module, params: dict, carried: dict, x: jax.Array):
 
 class Graded(nn.Module):
     """The non-spiking counterpart of `LIF`: the same leaky membrane, read out through a ReLU instead of a
-    threshold and reset. It records the share of its units that are active, as `LIF` records spikes."""
+    threshold and reset. It records which of its units are active, as `LIF` records spikes, for the count
+    of multiply-adds; the record has no gradient, so the racer's band on firing rates does not train it."""
 
     tau: float
 
@@ -91,8 +92,9 @@ class FewBitCell:
 
 
 class FewBit(Neuron):
-    """`FewBitCell` as a layer: spikes of `bits` bits. It records the share of its neurons that fire, as
-    `LIF` records spikes."""
+    """`FewBitCell` as a layer: spikes of `bits` bits. It records which of its neurons fire, as `LIF`
+    records spikes, through the first level's surrogate, so the racer's band on firing rates trains it as
+    it trains `LIF`."""
 
     tau: float = 3.0
     bits: int = 2
@@ -102,7 +104,7 @@ class FewBit(Neuron):
 
     def __call__(self, x: jax.Array) -> jax.Array:
         payload = self.run(self.model(x), x)
-        record_rates(self, payload != 0)
+        record_rates(self, jnp.minimum(payload, 1.0))
         return payload
 
 
@@ -117,10 +119,12 @@ class SigmaDeltaState(NamedTuple):
 @struct.dataclass
 class SigmaDeltaCell:
     """`Graded`'s unit, a leaky membrane read through a ReLU, that sends the change in its activation
-    since it last sent, when that change reaches `threshold`: the sigma-delta neuron of Lava's `SigmaDelta`
-    for Loihi 2 (after O'Connor and Welling, arXiv 1611.02024). Its receivers add up the changes, so what
-    they see is the activation as last sent, within `threshold` of the activation. Its gradient is the
-    activation's. At `threshold = 0` it is `Graded`, sending every change."""
+    since it last sent once that change reaches `threshold`, and receivers that add up the changes:
+    sigma-delta coding (O'Connor and Welling, arXiv 1611.02024) as Lava's `SigmaDelta` neurons do it on
+    Loihi 2. Unlike Lava's, the unit's membrane leaks, as `Graded`'s does, the change is sent unrounded, and
+    the cell returns what the receivers hold, the activation as last sent, within `threshold` of the
+    activation, rather than the stream of changes. Its gradient is the activation's. At `threshold = 0` it
+    is `Graded`, sending every change."""
 
     decay: jax.Array | float
     threshold: jax.Array | float = 0.1
@@ -142,7 +146,8 @@ class SigmaDeltaCell:
 
 
 class SigmaDelta(Neuron):
-    """`SigmaDeltaCell` as a layer. It records the share of its units that send a change each step."""
+    """`SigmaDeltaCell` as a layer. It records which of its units send a change each step, for the count
+    of multiply-adds; as `Graded`'s, the record has no gradient."""
 
     tau: float = 3.0
     threshold: float = 0.1
@@ -235,36 +240,35 @@ class Vision(nn.Module):
             h = self.unit(last)(nn.Dense(self.hidden)(h))
         return LI(tau=self.readout_tau)(nn.Dense(self.outputs)(h))
 
-    def layers(self) -> list[tuple[int, int, int]]:
-        """Each layer of connections: its inputs, its outputs, and how many outputs one input reaches."""
+    def fanouts(self) -> tuple[np.ndarray, np.ndarray, int]:
+        """How many connections each input and unit sends on: the multiply-adds it triggers when it is not
+        zero. For the image's inputs `[pixels]` in the input's order, for the units `[units]` in `act`'s
+        order, and for each input past the image, which reaches every hidden neuron (one branch of each,
+        for `Dendrites`). A convolution's input reaches the outputs whose windows cover it, fewer at the
+        edges."""
         rows, columns, channels = self.shape
         h, w, c = rows, columns, channels
-        out = []
-        for features, kernel in zip(self.features, self.kernels, strict=True):
-            # A stride of 2 sends each input to about a quarter of the kernel's positions in each output map.
-            out.append((h * w * c, -(-h // 2) * -(-w // 2) * features, kernel * kernel * features // 4))
+        image, units = np.zeros(0, int), []
+        for k, (features, kernel) in enumerate(zip(self.features, self.kernels, strict=True)):
+            spread = np.outer(reach(h, kernel), reach(w, kernel)).ravel() * features
+            if k == 0:
+                image = np.tile(spread, c)  # each channel's image in turn
+            else:
+                units.append(np.repeat(spread, c))  # the previous population's units, channels innermost
             h, w, c = -(-h // 2), -(-w // 2), features
+        units.append(np.full(h * w * c, self.hidden))
         if self.neuron == "dendritic":
-            # Each input reaches one branch of every neuron, and each branch its soma.
-            hidden = [(h * w * c, self.hidden * self.branches, self.hidden),
-                      (self.hidden * self.branches, self.hidden, 1)]
-        else:
-            hidden = [(h * w * c, self.hidden, self.hidden)]
-        return [*out, *hidden, (self.hidden, self.outputs, self.outputs)]
+            units.append(np.ones(self.hidden * self.branches, int))  # each branch reaches its soma
+        units.append(np.full(self.hidden, self.outputs))
+        return image, np.concatenate(units), self.hidden
 
-    def operations(self, inputs: jax.Array, units: jax.Array, extra: int) -> tuple[int, jax.Array]:
-        """Multiply-adds per step: every connection's, a constant, and the count triggered, `[...]`, those
-        from inputs and units that are not zero, given the image's non-zero `inputs` `[...]` and every
-        unit's output `units` `[..., units]`, as `act` returns them. The `extra` inputs of the dense layer
-        are never zero."""
-        layers = self.layers()
-        dense = sum(fan_in * fan for fan_in, _, fan in layers) + extra * self.hidden
-        sources, at = [inputs], 0
-        for _, outputs, _ in layers[:-1]:
-            sources.append(jnp.sum(units[..., at:at + outputs] != 0, -1))
-            at += outputs
-        triggered = sum(n * fan for n, (_, _, fan) in zip(sources, layers, strict=True)) + extra * self.hidden
-        return dense, triggered
+
+def reach(size: int, kernel: int) -> np.ndarray:
+    """How many outputs of a stride-2 convolution with `SAME` padding each of `size` inputs along one axis
+    reaches: those whose `kernel` taps, starting `2 i - pad` for output `i`, cover it."""
+    outputs = -(-size // 2)
+    pad = max((outputs - 1) * 2 + kernel - size, 0) // 2
+    return np.array([sum(0 <= r + pad - 2 * i < kernel for i in range(outputs)) for r in range(size)])
 
 
 def to_layers(net: nn.Sequential, params: dict) -> list[dict]:
@@ -349,14 +353,8 @@ def vision_from_json(model: dict) -> tuple[Vision, dict]:
     return net, params
 
 
-def stack_operations(net: nn.Sequential, total: int, inputs: jax.Array, units: jax.Array,
-                     extra: int) -> tuple[int, jax.Array]:
-    """`Vision.operations` for a stack of `total` inputs: every connection's multiply-adds per step, and those
-    triggered by the non-zero `inputs` (beside `extra` inputs never zero) and units."""
+def stack_fanouts(net: nn.Sequential, image: int) -> tuple[np.ndarray, np.ndarray, int]:
+    """`Vision.fanouts` for a stack whose first `image` inputs are the image."""
     widths = [layer.features for layer in net.layers if isinstance(layer, nn.Dense)]
-    dense = total * widths[0] + sum(a * b for a, b in itertools.pairwise(widths))
-    triggered, at = (inputs + extra) * widths[0], 0
-    for fan_in, width in itertools.pairwise(widths):
-        triggered = triggered + jnp.sum(units[..., at:at + fan_in] != 0, -1) * width
-        at += fan_in
-    return dense, triggered
+    units = [np.full(width, after) for width, after in itertools.pairwise(widths)]
+    return np.full(image, widths[0]), np.concatenate(units), widths[0]

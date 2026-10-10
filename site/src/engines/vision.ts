@@ -2,6 +2,7 @@
 // convolutions, each into a population of units, a dense layer with the inputs past the image, and
 // leaky-integrator readouts, stepped in double precision. Its units are LIF neurons that reset to zero,
 // or graded units, a leaky membrane read through a ReLU.
+import { dense, floats } from './stack';
 
 export interface VisionModel {
 	config: {
@@ -46,11 +47,6 @@ interface Units {
 	v: Float64Array;
 	out: Float64Array;
 	offset: number;
-}
-
-function floats(base64: string): Float64Array {
-	const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-	return Float64Array.from(new Float32Array(bytes.buffer));
 }
 
 /** XLA's `SAME` padding: the output is the input's size over the stride, rounded up, and the padding that
@@ -195,14 +191,5 @@ export class Vision {
 			drive[j] = s;
 			this.spikes[offset + j] = s > 0 ? 1 : 0;
 		}
-	}
-}
-
-function dense(layer: Dense, x: ArrayLike<number>, into: Float64Array): void {
-	const { kernel, bias, inputs, outputs } = layer;
-	for (let j = 0; j < outputs; j++) {
-		let sum = 0;
-		for (let i = 0; i < inputs; i++) sum += x[i] * kernel[i * outputs + j];
-		into[j] = sum + bias[j];
 	}
 }

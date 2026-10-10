@@ -37,7 +37,7 @@ from stack import (
     at_rest,
     from_layers,
     stack,
-    stack_operations,
+    stack_fanouts,
     to_layers,
     vision_from_json,
     vision_json,
@@ -371,32 +371,73 @@ def train(args: argparse.Namespace) -> None:
         print(json.dumps(harder["by_bend"]))
 
 
+NUDGE = (100, 0.3)
+"""The response probe's nudge: 2 s into the drive, every car moved 0.3 m to its left."""
+WINDOW = 50
+"""The steps after the nudge over which the response is measured."""
+
+
+def drives(net, params, world: World, ground, points: jax.Array, car0: jax.Array, steps: int,
+           nudge: tuple[int, float] | None = None, chunk: int = 25) -> dict[str, np.ndarray]:
+    """`race` on each track of `points`, `chunk` tracks at a time, reduced on the device to what an
+    evaluation reads, each `[T, B]` unless noted: the cars every fifth step `[T / 5, B, 4]`, the steering
+    after the nudge would come `[WINDOW, B]`, the distance from the middle and the speed along the road,
+    the events, the units not silent, and the multiply-adds those inputs and units trigger (`fanouts`)."""
+    image, units, extra = (net.fanouts() if isinstance(net, Vision)
+                           else stack_fanouts(net, (2 if world.sees == "events" else 1) * world.pixels))
+    extras = world.features - image.size
+    image, units = jnp.asarray(image, jnp.float32), jnp.asarray(units, jnp.float32)
+    ground = tuple(jnp.asarray(g) for g in ground)
+    at = NUDGE[0]
+
+    @jax.jit
+    def run(p, pts, c):
+        cars, u, on, off, spikes, distance, _, along = race(net, p, world, ground, pts, c, steps, nudge=nudge)
+        frame = jnp.ones((*on.shape[:2], image.size))  # every pixel's value, every step
+        sent = jnp.concatenate([on, off], -1) if world.sees == "events" else frame
+        active = (spikes != 0).astype(jnp.float32)
+        return {
+            "cars": cars[::5],
+            "steer": jnp.tanh(u[at:at + WINDOW, :, 0]) if steps >= at + WINDOW else u[:0, :, 0],
+            "distance": distance,
+            "along": along,
+            "events": jnp.sum(on + off, -1),
+            "active": jnp.sum(active, -1),
+            "triggered": (sent != 0).astype(jnp.float32) @ image + active @ units + extras * extra,
+        }
+
+    parts = [jax.device_get(run(params, points[k:k + chunk], car0[k:k + chunk]))
+             for k in range(0, points.shape[0], chunk)]
+    out = {name: np.concatenate([part[name] for part in parts], 1) for name in parts[0]}
+    out["units"], out["dense"] = units.size, int(image.sum() + units.sum()) + extras * extra
+    return out
+
+
 def evaluation(net, params, world: World, ground, points: jax.Array, seconds: float = 30.0) -> dict:
     """Each car starts in the middle of an unseen track of `points`, at rest, pointing along it, and drives
     for `seconds`. A lap counts when the car has gone the track's length forward without leaving the road
-    by more than a metre; a car that does leave it that far has failed."""
+    by more than a metre; a car that does leave it that far has failed. A drive long enough to include
+    the response probe's window (`response`) runs it too."""
     steps = round(seconds / world.dt)
     tracks = points.shape[0]
     d = points[:, 1] - points[:, 0]
     car0 = jnp.stack([points[:, 0, 0], points[:, 0, 1], jnp.arctan2(d[:, 1], d[:, 0]), jnp.zeros(tracks)], -1)
-    run = jax.jit(lambda p, pts, c: race(net, p, world, tuple(jnp.asarray(g) for g in ground), pts, c, steps))
-    cars, u, on, off, spikes, distance, _, along = run(params, points, car0)
+    out = drives(net, params, world, ground, points, car0, steps)
     length = np.asarray(track_tables(points)[2].sum(-1))
-    covered = np.cumsum(np.asarray(along) * world.dt, 0)
-    distance = np.asarray(distance)
+    covered = np.cumsum(out["along"] * world.dt, 0)
+    distance = out["distance"]
     crashed = np.maximum.accumulate(distance > world.half_width + 1.0, 0)
     lap = (covered >= length) & ~crashed
     finished = lap.any(0)
     lap_time = np.where(finished, np.argmax(lap, 0) + 1, -1) * world.dt
     off_road = (distance > world.half_width).mean(0)
     bend = tightest(np.asarray(points))
-    nonzero = np.asarray(on + off).sum(-1) if world.sees == "events" else np.full(on.shape[:2], world.pixels)
-    if isinstance(net, Vision):
-        dense, triggered = net.operations(nonzero, np.asarray(spikes), 1)
-    else:
-        dense, triggered = stack_operations(net, world.features, nonzero, np.asarray(spikes), 1)
     parameters = sum(int(np.size(leaf)) for leaf in jax.tree.leaves(params))
-    latency = response(net, params, world, ground, points, car0, np.asarray(u), ~crashed[NUDGE[0]])
+    latency = {}
+    if steps >= NUDGE[0] + WINDOW:
+        # The cars still running when the nudge comes, at the end of the step before it.
+        running = ~crashed[NUDGE[0] - 1]
+        latency = response(net, params, world, ground, points, car0, out["steer"], running)
     per_track = [
         {
             "finished": bool(f),
@@ -417,47 +458,38 @@ def evaluation(net, params, world: World, ground, points: jax.Array, seconds: fl
             "finished": float(finished.mean()),
             "crashed": float(crashed[-1].mean()),
             "median_lap_time": float(np.median(lap_time[finished])) if finished.any() else None,
-            "median_speed": float(np.median(np.asarray(along)[:, finished].mean(0)))
-            if finished.any()
-            else None,
+            "median_speed": float(np.median(out["along"][:, finished].mean(0))) if finished.any() else None,
             "off_road": float(off_road.mean()),
-            "events_per_step": float(np.mean(np.asarray(on) + np.asarray(off)) * world.pixels),
-            "spikes_per_step": float(np.mean(np.asarray(spikes)) * np.asarray(spikes).shape[-1]),
-            "units": int(np.asarray(spikes).shape[-1]),
+            "events_per_step": float(out["events"].mean()),
+            "spikes_per_step": float(out["active"].mean()),
+            "units": out["units"],
             "parameters": parameters,
-            "dense_macs_per_step": int(dense),
-            "triggered_macs_per_step": float(np.mean(triggered)),
+            "dense_macs_per_step": out["dense"],
+            "triggered_macs_per_step": float(out["triggered"].mean()),
             **latency,
         },
         "tracks": per_track,
         "worst": {
             "index": worst,
             "points": np.asarray(points[worst]).round(4).tolist(),
-            "path": np.asarray(cars[::5, worst, :2]).round(3).tolist(),
+            "path": out["cars"][:, worst, :2].round(3).tolist(),
             **per_track[worst],
         },
     }
 
 
-NUDGE = (100, 0.3)
-"""The response probe's nudge: 2 s into the drive, every car moved 0.3 m to its left."""
-
-
-def response(net, params, world: World, ground, points: jax.Array, car0: jax.Array, u: np.ndarray,
-             running: np.ndarray, window: int = 50) -> dict:
+def response(net, params, world: World, ground, points: jax.Array, car0: jax.Array, steer: np.ndarray,
+             running: np.ndarray) -> dict:
     """How fast the network steers back when its car is moved sideways (`NUDGE`): on each track whose car is
-    still running at the nudge, the steering's difference from the same drive unnudged, `u` `[T, B, 2]`,
-    over the next `window` steps. Its onset is the time until that difference first reaches a tenth of its
-    largest, and its response the time until it reaches half: the medians over the tracks that responded,
-    in ms, and how many did."""
-    at, metres = NUDGE
-    steps = at + window
-    run = jax.jit(lambda p, pts, c: race(net, p, world, tuple(jnp.asarray(g) for g in ground), pts, c, steps,
-                                         nudge=NUDGE))
-    nudged = np.asarray(run(params, points, car0)[1])
-    turn = np.tanh(nudged[at:, :, 0]) - np.tanh(u[at:steps, :, 0])
+    still running at the nudge, the steering's difference from the same drive unnudged, whose steering
+    over the `WINDOW` steps from the nudge is `steer` `[WINDOW, B]`. Its onset is the time until that
+    difference first reaches a tenth of its largest, and its response the time until it reaches half: the
+    medians over the tracks that responded, in ms, and how many did."""
+    nudged = drives(net, params, world, ground, points, car0, NUDGE[0] + WINDOW, nudge=NUDGE)["steer"]
+    turn = nudged - steer
     peak = np.abs(turn).max(0)
     responded = running & (peak > 1e-3)
+
     def median_ms(share: float) -> float | None:
         first = np.argmax(np.abs(turn) >= share * peak, 0)
         return float(np.median(first[responded]) * world.dt * 1000) if responded.any() else None
@@ -467,7 +499,7 @@ def response(net, params, world: World, ground, points: jax.Array, car0: jax.Arr
         "response_ms": median_ms(0.5),
         "responded": int(responded.sum()),
         "nudged": int(running.sum()),
-        "nudge_m": metres,
+        "nudge_m": NUDGE[1],
     }
 
 
