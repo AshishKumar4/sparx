@@ -109,7 +109,8 @@ and 5 finished 99.5 to 100% of every set, seed 2 95.5 to 99%, and seeds 3 and 4 
 published racer finished 100, 99.5, 94 and 88.5% of the same sets (`results/difficulty-published.json`).
 Each run of the new recipe took 72 to 93 minutes on one container.
 
-One training step of each arm, batch 32 and 300 steps of driving cut every 50, on an RTX 4080: 0.42 s for
-each conv arm, the 2- and 4-bit and sigma-delta arms included, 0.45 s for the dendritic arm, and 0.042 s
-for the published network (`results/timing-rtx4080.json`). The step's time grows with the batch, 0.88 s
-at 64 and 2.39 s at 160, so training several seeds in one batch would save nothing on this GPU.
+One training step of each arm, batch 32 and 300 steps of driving cut every 50, on an RTX 4080, each arm in
+a process of its own: 0.37 to 0.38 s for the conv arms, 0.40 s for the dendritic arm and 0.039 s for the
+published network, peaking at 1.0 to 1.4 GB (`results/timing-rtx4080.json`). The step's time grows with
+the batch, 0.88 s at 64 and 2.39 s at 160, so training several seeds in one batch would save nothing on
+this GPU. On an 8-core CPU on armada a conv step takes 35 s against the dense stack's 1.9 s.

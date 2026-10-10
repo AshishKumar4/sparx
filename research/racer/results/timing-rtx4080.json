@@ -1,72 +1,79 @@
 {
  "gpu": "NVIDIA GeForce RTX 4080 (16 GB)",
  "via": "~/.cache/dew/dew-gpu-run, jax 0.11.2.post3 cuda12",
- "commit": "5f615fc; the new arms and batches at 28bbf58 and after",
+ "commit": "08b324a",
  "batch": 32,
  "horizon": 300,
  "truncate": 50,
  "arms": [
   {
    "arm": "A spiking conv on 64x32 events",
-   "compile_s": 7.3,
-   "step_s": 0.423,
-   "peak_gb": 1.14
+   "batch": 32,
+   "compile_s": 1.2,
+   "step_s": 0.367,
+   "peak_gb": 1.15
   },
   {
    "arm": "B graded conv on 64x32 events",
-   "compile_s": 5.2,
-   "step_s": 0.416,
-   "peak_gb": 1.14
+   "batch": 32,
+   "compile_s": 3.7,
+   "step_s": 0.376,
+   "peak_gb": 1.02
   },
   {
    "arm": "C graded conv on 64x32 frames",
-   "compile_s": 4.7,
-   "step_s": 0.404,
-   "peak_gb": 1.14
-  },
-  {
-   "arm": "dense stack on 24x12 events (the published network)",
-   "compile_s": 7.6,
-   "step_s": 0.042,
-   "peak_gb": 1.14
+   "batch": 32,
+   "compile_s": 3.4,
+   "step_s": 0.367,
+   "peak_gb": 1.02
   },
   {
    "arm": "A2 2-bit spiking conv on 64x32 events",
-   "compile_s": 4.1,
-   "step_s": 0.416,
+   "batch": 32,
+   "compile_s": 4.0,
+   "step_s": 0.37,
    "peak_gb": 1.15
   },
   {
    "arm": "A4 4-bit spiking conv on 64x32 events",
-   "compile_s": 4.5,
-   "step_s": 0.42,
+   "batch": 32,
+   "compile_s": 4.4,
+   "step_s": 0.371,
    "peak_gb": 1.15
   },
   {
    "arm": "S sigma-delta conv on 64x32 events",
-   "compile_s": 3.8,
-   "step_s": 0.422,
+   "batch": 32,
+   "compile_s": 1.2,
+   "step_s": 0.379,
    "peak_gb": 1.43
   },
   {
    "arm": "D spiking conv with dendrites on 64x32 events",
-   "compile_s": 6.5,
-   "step_s": 0.447,
-   "peak_gb": 1.43
+   "batch": 32,
+   "compile_s": 1.3,
+   "step_s": 0.398,
+   "peak_gb": 1.18
+  },
+  {
+   "arm": "dense stack on 24x12 events (the published network)",
+   "batch": 32,
+   "compile_s": 0.7,
+   "step_s": 0.039,
+   "peak_gb": 0.03
   },
   {
    "arm": "A spiking conv on 64x32 events, batch 64",
    "batch": 64,
    "compile_s": 9.4,
-   "step_s": 0.878,
-   "peak_gb": 2.28
+   "step_s": 0.878
   },
   {
    "arm": "A spiking conv on 64x32 events, batch 160",
    "batch": 160,
    "compile_s": 12.1,
-   "step_s": 2.391,
-   "peak_gb": 5.53
+   "step_s": 2.391
   }
- ]
+ ],
+ "note": "each arm and batch in a process of its own (peak memory is a process's high-water mark); the batch-64 and -160 rows are from 28bbf58, measured in one process after batch 32"
 }
