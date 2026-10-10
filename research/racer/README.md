@@ -20,6 +20,16 @@ that drove farthest on 32 held-out tracks, scored every 250 steps (`--select`). 
 by seed, all seven arms of seed 1 first, so any prefix compares every arm. It runs on the workstation's RTX
 4080 through `queue.sh`, one run at a time, each committing the sweep's summary before the next begins.
 
+Phase 2 stopped after 9 runs because arm C, seed 1, never moved: its frames reached the network as raw log
+brightness, and from the first step the speed readout's sigmoid sat at zero, with gradient norms falling to
+1e-12. The graded arms on events started slow too, at 0.08 to 0.48 m/s on the first step against the
+spiking arms' 1.9 to 2.1, because a graded unit's summing membrane, with no reset to bound it, grows its
+activity at each layer. From commit 98b... on, frames are standardized per image and the graded units'
+membranes average their input (`configs/phase2b.json`, the same runs). Every arm's first step, at seeds 1
+and 2, then has a finite gradient of norm 54 to 431 (`configs/phase2-start.json`). The runs of seed 1's
+spiking arms and seed 2's A, whose code did not change, stand; B, C and sigma-delta of seed 1 and B of
+seed 2 run again.
+
 ## Why the first published racer was weak
 
 The racer on the site was sweep 2's seed 1 until Phase 0b; it is now Phase 0b's seed 1, the seed whose
