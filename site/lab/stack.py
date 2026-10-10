@@ -219,7 +219,7 @@ class Vision(nn.Module):
     neurons that reset to zero (`neuron="lif"`), sending spikes of `bits` bits (`FewBit`) when `bits` is
     above 1; `Graded` units for the non-spiking counterpart (`"relu"`); or `SigmaDelta` units that send
     their changes of at least `delta` (`"sigma-delta"`). With `"dendritic"`, the units are LIF neurons
-    and the dense layer's are `Dendrites` of `branches` branches."""
+    and the dense layer's are `Dendrites` of `branches` branches. The readout's weights start at zero."""
 
     shape: tuple[int, int, int]
     features: tuple[int, ...] = (16, 32)
@@ -256,7 +256,9 @@ class Vision(nn.Module):
             h = Dendrites(self.hidden, self.branches, self.tau, name=last)(h)
         else:
             h = self.unit(last)(nn.Dense(self.hidden)(h))
-        return LI(tau=self.readout_tau)(nn.Dense(self.outputs)(h))
+        # The readout starts at zero, as policy heads often do: every arm's car starts straight at half its
+        # top speed, whatever its units, rather than spinning where a graded network's activity points it.
+        return LI(tau=self.readout_tau)(nn.Dense(self.outputs, kernel_init=nn.initializers.zeros)(h))
 
     def fanouts(self) -> tuple[np.ndarray, np.ndarray, int]:
         """How many connections each input and unit sends on: the multiply-adds it triggers when it is not
