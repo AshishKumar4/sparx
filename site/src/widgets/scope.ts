@@ -28,7 +28,7 @@ export function scope(canvas: HTMLCanvasElement, trace: Trace, { steps = 360, pe
 			count += out.fired;
 			return { values: [out.v, out.input], event: out.fired === 1 };
 		},
-		{ steps, perFrame, events: 'spike' },
+		{ steps, perFrame, marks: 'spike' },
 	);
 	return {
 		/** Spikes since the last call. */
