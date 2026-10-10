@@ -9,6 +9,7 @@ results. Models and raw logs stay out of git; each sweep's are attached to a Git
 ```bash
 research/racer/sweep.sh research/racer/configs/<sweep>.json <label> <out dir> [pool]   # on armada
 python research/racer/run.py research/racer/configs/<sweep>.json <out dir>              # on a GPU
+research/racer/queue.sh research/racer/configs/<sweep>.json <out dir> <results checkout> <first> <last>
 python research/racer/summarize.py <out dir> research/racer/results/<sweep>.json
 ```
 
@@ -16,7 +17,8 @@ python research/racer/summarize.py <out dir> research/racer/results/<sweep>.json
 and the dendritic arm, five seeds each, at Phase 0's recipe (truncated at 50 steps of a 300-step drive, the
 curriculum from bends of 0.3 to 1.3, a reverse penalty of 2, 3,000 steps), each run keeping the parameters
 that drove farthest on 32 held-out tracks, scored every 250 steps (`--select`). Its runs are ordered seed
-by seed, all seven arms of seed 1 first, so any prefix compares every arm.
+by seed, all seven arms of seed 1 first, so any prefix compares every arm. It runs on the workstation's RTX
+4080 through `queue.sh`, one run at a time, each committing the sweep's summary before the next begins.
 
 ## Why the published racer is weak
 
