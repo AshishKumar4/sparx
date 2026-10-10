@@ -14,7 +14,9 @@ python research/racer/summarize.py <out dir> research/racer/results/<sweep>.json
 
 `configs/phase2.json` is the comparison: the seven arms below, A, B, C, the 2- and 4-bit arms, sigma-delta
 and the dendritic arm, five seeds each, at Phase 0's recipe (truncated at 50 steps of a 300-step drive, the
-curriculum from bends of 0.3 to 1.3, a reverse penalty of 2, 3,000 steps).
+curriculum from bends of 0.3 to 1.3, a reverse penalty of 2, 3,000 steps), each run keeping the parameters
+that drove farthest on 32 held-out tracks, scored every 250 steps (`--select`). Its runs are ordered seed
+by seed, all seven arms of seed 1 first, so any prefix compares every arm.
 
 ## Why the published racer is weak
 
