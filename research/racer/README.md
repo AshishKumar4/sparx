@@ -45,9 +45,34 @@ on bends tighter than a metre.
    tracks, the harder sets by bend, lap time, parameters, and multiply-adds per step counted two ways
    (below).
 
+4. Spike precision, on A's network, budget and seeds: binary spikes (A); spikes of 2 and 4 bits, as
+   Loihi 2's graded spikes carry, where a spike says how many thresholds the membrane reached, up to 3 or
+   15, and resets it (`--bits`, `FewBit` in `site/lab/stack.py`); and sigma-delta units, B's graded units
+   that send the change in their activation once it reaches 0.1 (`--neuron sigma-delta`, as Lava's
+   `SigmaDelta` does on Loihi 2). Sigma-delta at a threshold of 0 is B. Reported beside the success
+   rate: events per step, the bits each event carries, and how fast the network steers back when its car
+   is moved 0.3 m sideways 2 s into a drive (`response` in `site/lab/racer.py`): the time until the
+   steering's difference from the same drive unnudged reaches a tenth of its largest, and half. The
+   published racer reaches half in a median of 180 ms on 99 tracks of 100.
+5. Active dendrites. sparx has no multi-compartment neuron: each of its models is one compartment,
+   `Serial` chains models one way, and `GapJunction` couples two populations' membranes both ways only in
+   a simulated `Network`, not in a layer trained by gradients. What the racer can train is Poirazi,
+   Brannon and Mel's (2003) two-layer neuron, spiking (`--neuron dendritic`, `Dendrites`): each of the
+   128 hidden neurons has 4 branches, each a LIF membrane fed by its own random quarter of the inputs,
+   and a branch's spike reaches the soma through a learned coupling, with as many input weights as the
+   dense layer it replaces. It lacks current flowing back from the soma into the branches, the long
+   plateaus of NMDA spikes (Schiller et al. 2000), and a cable between compartments. A model in
+   `sparx.dynamics` with a soma and dendrites coupled both ways would add them.
+
 Multiply-adds per step: *dense* counts every connection, which is what a GPU or CPU computes; *triggered*
 counts only those from inputs and units that are not zero, which is what event-driven hardware would
-compute. A smaller triggered count is not a speed on a GPU.
+compute. A smaller triggered count is not a speed on a GPU. The dendritic arm's GPU computes each
+input's product for every branch, four times its dense count, of which three are zeros.
+
+The browser runs the convolutional network as sparx does (`site/src/engines/vision.ts`): on small
+networks at their random start, spiking on events and graded on frames, every event and every unit's
+output matches sparx's float64 run, and the car's position, heading and speed agree within 1e-14
+(`site/test/racer-conv.test.ts`).
 
 ## Results
 
@@ -57,4 +82,6 @@ compute. A smaller triggered count is not a speed on a GPU.
 | sweep 2: 3,000 steps, horizon 150 | 1 of 4 | 200, 2, 0 and 2 of 200 | `results/sweep2.json`; seed 1 is the published racer |
 
 One training step of each arm, batch 32 and 300 steps of driving cut every 50, on an RTX 4080: 0.42 s for
-each conv arm, 0.042 s for the published network (`results/timing-rtx4080.json`).
+each conv arm, the 2- and 4-bit and sigma-delta arms included, 0.45 s for the dendritic arm, and 0.042 s
+for the published network (`results/timing-rtx4080.json`). The step's time grows with the batch, 0.88 s
+at 64 and 2.39 s at 160, so training several seeds in one batch would save nothing on this GPU.
