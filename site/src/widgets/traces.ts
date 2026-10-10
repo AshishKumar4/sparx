@@ -76,11 +76,17 @@ export function traces(
 		}
 		ctx.stroke();
 
+		// A band below its floor gets the floor, from the share of the bands without one.
+		const share = bands.map((band) => (band.weight / total) * usable);
+		const floored = bands.map((band, k) => Math.min(usable, Math.max(band.min ?? 0, share[k])));
+		const extra = floored.reduce((n, h, k) => n + h - share[k], 0);
+		const free = bands.reduce((n, band, k) => n + (floored[k] === share[k] ? share[k] : 0), 0);
+		const heights = floored.map((h, k) => (h === share[k] && free > 0 ? h - (extra * h) / free : h));
 		let top = marks + 6;
 		let column = 0;
 		ctx.font = `10px ${getComputedStyle(canvas).getPropertyValue('--sx-mono')}`;
-		for (const band of bands) {
-			const height = Math.max(band.min ?? 0, (band.weight / total) * usable);
+		for (const [index, band] of bands.entries()) {
+			const height = heights[index];
 			const [lo, hi] = band.range;
 			const y = (v: number) => top + height - ((Math.min(Math.max(v, lo), hi) - lo) / (hi - lo)) * height;
 			if (band.grid) {

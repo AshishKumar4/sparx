@@ -13,8 +13,7 @@ export interface Trace {
 }
 
 export function scope(canvas: HTMLCanvasElement, trace: Trace, { steps = 360, perFrame = 1 } = {}) {
-	// As the scope drew before it drew through traces: a stronger threshold, taller spike marks and an
-	// input band of at least 28 px.
+	// A strong threshold, tall spike marks, and an input band of at least 28 px.
 	const threshold = { at: trace.threshold, label: '', role: 'spike' as const, opacity: 0.7 };
 	const bands: Band[] = [
 		{ weight: 0.82, range: trace.range, lines: ['membrane'], grid: 4, guides: [threshold] },
