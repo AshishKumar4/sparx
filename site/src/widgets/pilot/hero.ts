@@ -103,8 +103,13 @@ export function hero(root: HTMLElement, model: PilotModel): void {
 		for (let k = 0; k < 2; k++) nodes[O0 + k] = { x: left2 + grid + 18 + outW / 2, y: top + grid * (k ? 0.72 : 0.28) };
 	};
 	layout();
-	new ResizeObserver(layout).observe(canvas);
-	desk.addEventListener('change', layout);
+	// Fitting the canvas clears it, so a new layout is drawn at once, paused or not.
+	const relayout = () => {
+		layout();
+		frame(0);
+	};
+	new ResizeObserver(relayout).observe(canvas);
+	desk.addEventListener('change', relayout);
 	onTheme((p) => (colors = p));
 
 	// Wide, the drone idles right of the copy and above the panel; narrow, below the copy.
