@@ -1,0 +1,4 @@
+[
+ "fixture --neuron lif --sees events --steps 300",
+ "fixture --neuron relu --sees frames --steps 100"
+]

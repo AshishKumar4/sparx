@@ -173,7 +173,7 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 			flash[i] = racer.network.spikes[i] ? 1 : flash[i] * 0.8;
 			spikes += racer.network.spikes[i];
 		}
-		for (let p = 0; p < 2 * pixels; p++) seen[p] = racer.input[p] ? 1 : seen[p] * 0.75;
+		for (let p = 0; p < 2 * pixels; p++) seen[p] = racer.events[p] ? 1 : seen[p] * 0.75;
 		let d = racer.place[1] - along;
 		if (d < -track.total / 2) d += track.total;
 		if (d > track.total / 2) d -= track.total;

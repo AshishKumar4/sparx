@@ -2,6 +2,7 @@
 // stepped in double precision with the same operations in the same order. test/racer.test.ts holds it to
 // sparx's own float64 laps.
 import { type Layer, Stack } from './stack';
+import { Vision, type VisionModel } from './vision';
 
 export interface World {
 	dt: number;
@@ -20,12 +21,18 @@ export interface World {
 	points: number;
 	behind: number;
 	ahead: number;
+	/** Ground points per pixel along each side, which a pixel averages; 1 when absent. */
+	supersample?: number;
+	/** What the network reads: each pixel's events, or its log brightness. Events when absent. */
+	sees?: 'events' | 'frames';
 }
 
 export interface RacerModel {
 	world: World;
 	ground: { forward: number[]; side: number[] };
-	layers: Layer[];
+	/** A dense stack's layers, or a convolutional network. */
+	layers?: Layer[];
+	vision?: VisionModel;
 	meta?: Record<string, unknown>;
 }
 
@@ -106,15 +113,19 @@ export class Track {
 
 export class Racer {
 	readonly world: World;
-	readonly network: Stack;
+	readonly network: Stack | Vision;
 	readonly forward: Float64Array;
 	readonly side: Float64Array;
 	readonly pixels: number;
+	/** Each ground point's brightness, before a pixel averages its points. */
+	private readonly light: Float64Array;
 	/** x, y, heading, speed: metres, radians, metres per second. */
 	readonly car = new Float64Array(4);
 	readonly level: Float64Array;
 	readonly seen: Float64Array;
-	/** This step's events, ON for each pixel then OFF for each pixel, then the speed: the network's input. */
+	/** This step's events, ON for each pixel then OFF for each pixel. */
+	readonly events: Uint8Array;
+	/** The network's input: this step's events, or each pixel's log brightness; then the speed. */
 	readonly input: Float64Array;
 	/** Where the car is: distance from the middle, distance along the track, the track's heading. */
 	readonly place = new Float64Array(3);
@@ -127,13 +138,18 @@ export class Racer {
 		public track: Track,
 	) {
 		this.world = model.world;
-		this.network = new Stack(model.layers);
+		if (model.vision) this.network = new Vision(model.vision);
+		else if (model.layers) this.network = new Stack(model.layers);
+		else throw new Error('the model has neither layers nor a convolutional network');
 		this.forward = Float64Array.from(model.ground.forward);
 		this.side = Float64Array.from(model.ground.side);
-		this.pixels = this.forward.length;
+		const n = this.world.supersample ?? 1;
+		this.pixels = this.forward.length / (n * n);
+		this.light = new Float64Array(this.forward.length);
 		this.level = new Float64Array(this.pixels);
 		this.seen = new Float64Array(this.pixels);
-		this.input = new Float64Array(2 * this.pixels + 1);
+		this.events = new Uint8Array(2 * this.pixels);
+		this.input = new Float64Array((this.world.sees === 'frames' ? 1 : 2) * this.pixels + 1);
 		if (this.network.inputs !== this.input.length) throw new Error(`the network reads ${this.network.inputs} inputs, not ${this.input.length}`);
 	}
 
@@ -144,21 +160,34 @@ export class Racer {
 		this.network.rest();
 	}
 
-	/** The log brightness each pixel sees from where the car is. */
+	/** The log brightness each pixel sees from where the car is: the mean over its ground points. */
 	look(into: Float64Array): Float64Array {
 		const w = this.world;
 		const [x, y, psi] = this.car;
 		const c = Math.cos(psi);
 		const s = Math.sin(psi);
 		const k0 = this.track.nearest(x, y);
-		for (let p = 0; p < this.pixels; p++) {
+		for (let p = 0; p < this.forward.length; p++) {
 			const px = x + this.forward[p] * c - this.side[p] * s;
 			const py = y + this.forward[p] * s + this.side[p] * c;
 			const [distance, along] = this.track.locate(w, px, py, k0, this.scratch);
 			const verge = sigmoid((distance - w.half_width) / w.edge);
 			const dash = sigmoid((w.dash_width - distance) / 0.03) * sigmoid(6 * Math.sin((2 * Math.PI * along) / this.track.dashPeriod));
-			into[p] = Math.log(0.12 + 0.7 * verge + 0.6 * dash * (1 - verge));
+			this.light[p] = 0.12 + 0.7 * verge + 0.6 * dash * (1 - verge);
 		}
+		const n = w.supersample ?? 1;
+		if (n === 1) {
+			for (let p = 0; p < this.pixels; p++) into[p] = Math.log(this.light[p]);
+			return into;
+		}
+		// The ground's points run row by row over a grid n times finer than the pixels each way.
+		const fine = w.columns * n;
+		for (let r = 0; r < w.rows; r++)
+			for (let col = 0; col < w.columns; col++) {
+				let sum = 0;
+				for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) sum += this.light[(r * n + a) * fine + col * n + b];
+				into[r * w.columns + col] = Math.log(sum / (n * n));
+			}
 		return into;
 	}
 
@@ -172,11 +201,16 @@ export class Racer {
 			const on = change - w.threshold >= 0 ? 1 : 0;
 			const off = -change - w.threshold >= 0 ? 1 : 0;
 			this.level[p] += w.threshold * (on - off);
-			this.input[p] = on;
-			this.input[this.pixels + p] = off;
+			this.events[p] = on;
+			this.events[this.pixels + p] = off;
+			if (w.sees === 'frames') this.input[p] = this.seen[p];
+			else {
+				this.input[p] = on;
+				this.input[this.pixels + p] = off;
+			}
 			events += on + off;
 		}
-		this.input[2 * this.pixels] = this.car[3] / w.max_speed;
+		this.input[this.input.length - 1] = this.car[3] / w.max_speed;
 		const u = this.network.step(this.input);
 		this.steer = w.max_steer * Math.tanh(u[0]);
 		this.target = w.max_speed * sigmoid(u[1]);

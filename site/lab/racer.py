@@ -14,6 +14,7 @@ middle.
     python site/lab/racer.py evaluate
     python site/lab/racer.py difficulty
     python site/lab/racer.py record --out site/test/fixtures/racer.json
+    python site/lab/racer.py fixture --neuron lif --sees events
 
 The browser runs the same car, camera and network from racer.json (site/src/engines/racer.ts).
 """
@@ -446,8 +447,9 @@ def response(net, params, world: World, ground, points: jax.Array, car0: jax.Arr
              running: np.ndarray, window: int = 50) -> dict:
     """How fast the network steers back when its car is moved sideways (`NUDGE`): on each track whose car is
     still running at the nudge, the steering's difference from the same drive unnudged, `u` `[T, B, 2]`,
-    over the next `window` steps; the latency is the time until that difference first reaches half its
-    largest. The median over the tracks that responded, in ms, and how many did."""
+    over the next `window` steps. Its onset is the time until that difference first reaches a tenth of its
+    largest, and its response the time until it reaches half: the medians over the tracks that responded,
+    in ms, and how many did."""
     at, metres = NUDGE
     steps = at + window
     run = jax.jit(lambda p, pts, c: race(net, p, world, tuple(jnp.asarray(g) for g in ground), pts, c, steps,
@@ -456,9 +458,13 @@ def response(net, params, world: World, ground, points: jax.Array, car0: jax.Arr
     turn = np.tanh(nudged[at:, :, 0]) - np.tanh(u[at:steps, :, 0])
     peak = np.abs(turn).max(0)
     responded = running & (peak > 1e-3)
-    first = np.argmax(np.abs(turn) >= 0.5 * peak, 0)
+    def median_ms(share: float) -> float | None:
+        first = np.argmax(np.abs(turn) >= share * peak, 0)
+        return float(np.median(first[responded]) * world.dt * 1000) if responded.any() else None
+
     return {
-        "response_ms": float(np.median(first[responded]) * world.dt * 1000) if responded.any() else None,
+        "onset_ms": median_ms(0.1),
+        "response_ms": median_ms(0.5),
         "responded": int(responded.sum()),
         "nudged": int(running.sum()),
         "nudge_m": metres,
@@ -520,20 +526,20 @@ def harder(args: argparse.Namespace) -> None:
     print(json.dumps({"by_bend": result["by_bend"], "by_radius": result["by_radius"]}))
 
 
-def record(args: argparse.Namespace) -> None:
-    """Two laps' worth of driving in float64 for the browser's engine to match, on two unseen tracks, from a
-    scattered start."""
+def laps(model: dict, seed: int, steps: int) -> dict:
+    """Two laps' worth of driving by `model` in float64 for the browser's engine to match, on two unseen
+    tracks, from a scattered start."""
     with jax.enable_x64(new_val=True):
-        net, params, world, ground = from_json(json.loads(Path(args.model).read_text()))
+        net, params, world, ground = from_json(model)
         params = jax.tree.map(lambda p: jnp.asarray(p, jnp.float64), params)
         ground = tuple(jnp.asarray(g, jnp.float64) for g in ground)
-        points = Tracks().draw(world, jax.random.key(args.seed), 2).astype(jnp.float64)
-        car0 = starts(world, jax.random.key(args.seed + 1), points)
-        cars, us, on, off, spikes, *_ = race(net, params, world, ground, points, car0, args.steps)
-        laps = []
+        points = Tracks().draw(world, jax.random.key(seed), 2).astype(jnp.float64)
+        car0 = starts(world, jax.random.key(seed + 1), points)
+        cars, us, on, off, spikes, *_ = race(net, params, world, ground, points, car0, steps)
+        driven = []
         for b in range(2):
             events = np.concatenate([np.asarray(on[:, b]), np.asarray(off[:, b])], -1)
-            laps.append(
+            driven.append(
                 {
                     "points": np.asarray(points[b]).tolist(),
                     "start": np.asarray(car0[b]).tolist(),
@@ -543,7 +549,27 @@ def record(args: argparse.Namespace) -> None:
                     "spikes": [np.flatnonzero(row).tolist() for row in np.asarray(spikes[:, b])],
                 }
             )
-    Path(args.out).write_text(json.dumps({"dtype": "float64", "jax": jax.__version__, "laps": laps}))
+    return {"dtype": "float64", "jax": jax.__version__, "laps": driven}
+
+
+def record(args: argparse.Namespace) -> None:
+    """The published network's laps (`laps`)."""
+    model = json.loads(Path(args.model).read_text())
+    Path(args.out).write_text(json.dumps(laps(model, args.seed, args.steps)))
+
+
+def fixture(args: argparse.Namespace) -> None:
+    """A small convolutional racer at its random start, with its laps (`laps`): what the browser's engine
+    must match for the networks the published racer does not use, written to `<out>/racer-conv-<neuron>-
+    <sees>.json`."""
+    world = World(columns=16, rows=8, supersample=2, sees=args.sees)
+    net = vision(world, args.neuron)
+    params = net.init(jax.random.key(args.seed), jnp.zeros((1, 1, world.features)))["params"]
+    model = json.loads(json.dumps(model_json(net, params, world, {"fixture": True})))
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    driven = laps(model, args.seed, args.steps)
+    (out / f"racer-conv-{args.neuron}-{args.sees}.json").write_text(json.dumps({"model": model, **driven}))
 
 
 def main() -> None:
@@ -601,6 +627,13 @@ def main() -> None:
     r.add_argument("--steps", type=int, default=500)
     r.add_argument("--seed", type=int, default=31)
     r.set_defaults(func=record)
+    f = commands.add_parser("fixture")
+    f.add_argument("--out", default="site/test/fixtures")
+    f.add_argument("--neuron", choices=("lif", "relu"), default="lif")
+    f.add_argument("--sees", choices=("events", "frames"), default="events")
+    f.add_argument("--steps", type=int, default=300)
+    f.add_argument("--seed", type=int, default=41)
+    f.set_defaults(func=fixture)
     args = parser.parse_args()
     args.func(args)
 
