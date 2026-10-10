@@ -27,7 +27,7 @@ export function traces(
 	canvas: HTMLCanvasElement,
 	bands: Band[],
 	step: () => Sample,
-	{ steps = 400, perFrame = 1, marks = 'ink' as Role } = {},
+	{ steps = 400, perFrame = 1, eventRole = 'ink' as Role } = {},
 ) {
 	const width = bands.reduce((n, band) => n + band.lines.length, 0);
 	const values = new Float64Array(steps * width);
@@ -65,8 +65,8 @@ export function traces(
 		const first = Math.max(0, head - steps);
 		const x = (t: number) => ((steps - (head - t)) / (steps - 1)) * w;
 
-		ctx.strokeStyle = marks === 'ink' ? alpha(colors.ink, 0.5) : colors[marks];
-		ctx.lineWidth = marks === 'ink' ? 1.5 : 2;
+		ctx.strokeStyle = eventRole === 'ink' ? alpha(colors.ink, 0.5) : colors[eventRole];
+		ctx.lineWidth = eventRole === 'ink' ? 1.5 : 2;
 		ctx.beginPath();
 		for (let t = first; t < head; t++) {
 			if (!events[t % steps]) continue;
