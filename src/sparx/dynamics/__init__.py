@@ -19,6 +19,7 @@ a new model is written with, stays in `sparx.dynamics.core`.
 """
 
 from sparx.dynamics.core import Gap, Model, NeuronModel, Output, Reset, SynapticInput, Term, decay, run
+from sparx.dynamics.homeostasis import IntrinsicPlasticity, IntrinsicState
 from sparx.dynamics.ml import (
     ACTIVATIONS,
     ALIFCell,
@@ -68,7 +69,10 @@ from sparx.dynamics.plasticity import (
     DopamineTraces,
     PairSTDP,
     Plasticity,
+    Rules,
+    ScalingTraces,
     STDPTraces,
+    SynapticScaling,
     TripletSTDP,
     TripletTraces,
     TsodyksMarkram,
@@ -124,6 +128,8 @@ __all__ = [
     "HebbianRule",
     "HodgkinHuxley",
     "HodgkinHuxleyState",
+    "IntrinsicPlasticity",
+    "IntrinsicState",
     "Izhikevich",
     "IzhikevichState",
     "LICell",
@@ -150,12 +156,15 @@ __all__ = [
     "RecurrentState",
     "Reset",
     "RetroactiveHebb",
+    "Rules",
     "STDPTraces",
+    "ScalingTraces",
     "Serial",
     "Sparse",
     "StochasticRelease",
     "SynapseModel",
     "SynapticInput",
+    "SynapticScaling",
     "Term",
     "TripletSTDP",
     "TripletTraces",

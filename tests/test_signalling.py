@@ -24,8 +24,10 @@ from sparx.dynamics import (
     PointNeuron,
     RateCell,
     Receptor,
+    Rules,
     StochasticRelease,
     SynapticInput,
+    SynapticScaling,
     TsodyksMarkram,
     run,
 )
@@ -374,6 +376,34 @@ def test_dopamine_stdp_in_a_network_is_the_rule_on_the_networks_own_spikes():
     assert a.sum() > 100 and b.sum() > 100 and float(result.records["da"].max()) > 0.01
     # The weights moved apart, some to each bound and some between.
     assert {0.0, 100.0} <= set(learned.tolist()) and np.any((learned > 0) & (learned < 100))
+
+
+def test_stdp_with_synaptic_scaling_in_a_network_is_the_rules_on_the_networks_own_spikes():
+    # Both rules on one projection, each stepped on the weights the one before left, as `Rules` steps them
+    # alone on the network's spikes. The scaling's goal is below what b fires, so it pulls the weights
+    # onto b below what STDP alone learns.
+    stdp = PairSTDP(lambda_=0.05, w_max=100.0)
+    rule = Rules((stdp, SynapticScaling(tau=100.0, goal=0.002, beta=0.05)))
+    network = dopamine_network(rule)
+    variables = network.init(jax.random.key(0))
+    result = simulate(network, variables, duration=400.0, key=jax.random.key(1),
+                      monitors={"a": SpikeRaster("a"), "b": SpikeRaster("b")})
+    edges = network.connections(variables)["a->b:ex"]
+    a, b = (np.asarray(result.records[name], np.float32) for name in "ab")
+    arrived = np.zeros_like(b)
+    arrived[10:] = b[:-10]
+    pre, post = jnp.asarray(edges.pre), jnp.asarray(edges.post)
+
+    def alone(rule):
+        traces, weights = rule.init_state(20, 20, len(edges.pre)), jnp.asarray(edges.weight, jnp.float32)
+        for t in range(len(a)):
+            traces, weights = rule.step(traces, weights, a[t], arrived[t], pre, post, 0.1, modulators={})
+        return np.asarray(weights)
+
+    learned = network.connections(result.variables)["a->b:ex"].weight
+    np.testing.assert_allclose(learned, alone(rule), rtol=1e-5, atol=1e-5)
+    assert a.sum() > 100 and b.sum() > 100
+    assert np.mean(learned / alone(stdp)) < 0.95
 
 
 def test_plasticity_refuses_a_modulator_the_network_lacks_or_another_time_constant():

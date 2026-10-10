@@ -23,6 +23,10 @@ A rule also reads the network's neuromodulators each step, by name
 dopamine's, the third factor of a three-factor rule. `PairSTDP` and
 `TripletSTDP` are two-factor and ignore them; `DopamineSTDP` is
 Izhikevich's (2007) reward-modulated STDP, which reads dopamine.
+
+`SynapticScaling` is homeostatic: it scales each neuron's incoming weights
+toward a target rate. `Rules` runs several rules on one projection, such as
+STDP with scaling.
 """
 
 from __future__ import annotations
@@ -34,8 +38,8 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 
-__all__ = ["DopamineSTDP", "DopamineTraces", "PairSTDP", "Plasticity", "STDPTraces", "TripletSTDP",
-           "TripletTraces", "TsodyksMarkram", "TsodyksMarkramState"]
+__all__ = ["DopamineSTDP", "DopamineTraces", "PairSTDP", "Plasticity", "Rules", "STDPTraces", "ScalingTraces",
+           "SynapticScaling", "TripletSTDP", "TripletTraces", "TsodyksMarkram", "TsodyksMarkramState"]
 
 
 class Plasticity[Traces](Protocol):
@@ -295,3 +299,86 @@ class DopamineSTDP:
         c = (c * jnp.exp(-dt / self.tau_c) + self.a_plus * k_pre[pre] * post_arrivals[post]
              - self.a_minus * k_post[post] * pre_spikes[pre])
         return DopamineTraces(k_pre + pre_spikes, k_post + post_arrivals, c, modulators[self.modulator]), w
+
+
+class ScalingTraces(NamedTuple):
+    activity: jax.Array
+    """Each postsynaptic neuron's slow estimate of its firing rate, spikes per ms."""
+    error: jax.Array
+    """The integral of `goal - activity` over time, for the integral term."""
+
+
+@struct.dataclass
+class SynapticScaling:
+    """Activity-dependent synaptic scaling (Turrigiano et al. 1998), in the model of van Rossum, Bi and
+    Turrigiano (Journal of Neuroscience 2000).
+
+    Each postsynaptic neuron keeps a slow sensor of its activity, which each
+    of its spikes raises, and scales all its incoming weights by the same
+    factor toward a goal rate:
+
+        tau da/dt = -a + sum_i delta(t - t_i)
+        dw/dt = beta w (goal - a) + gamma w int_0^t (goal - a) dt'
+
+    their equation 3, with `a` and `goal` in spikes per ms. The integral term
+    removes the residual error that other plasticity pulling on the weights
+    leaves; `gamma = 0` keeps the proportional term alone. The defaults are
+    theirs: `tau` of 100 s, a goal of 20 Hz, `beta` of 4e-5 (per s per Hz,
+    which is dimensionless) and `gamma` of 1e-7 per s per s per Hz, 1e-10
+    per ms per ms per (spike per ms). Each step the sensor decays exactly and
+    adds `1 / tau` per spike that reached the synapse, then each weight is
+    multiplied by `exp(dt (beta (goal - a) + gamma error))`, which scales it
+    without changing its sign: a weight's ratio to its neighbours onto the
+    same neuron never changes.
+    """
+
+    tau: jax.Array | float = 100_000.0
+    goal: jax.Array | float = 0.02
+    beta: jax.Array | float = 4e-5
+    gamma: jax.Array | float = 1e-10
+
+    def init_state(self, pre: int, post: int, edges: int, dtype: jnp.dtype = jnp.float32) -> ScalingTraces:
+        return ScalingTraces(jnp.zeros(post, dtype), jnp.zeros(post, dtype))
+
+    def modulated_by(self) -> Mapping[str, float | None]:
+        return {}
+
+    def step(self, traces: ScalingTraces, weights: jax.Array, pre_spikes: jax.Array, post_arrivals: jax.Array,
+             pre: jax.Array, post: jax.Array, dt: float, *,
+             modulators: Mapping[str, jax.Array]) -> tuple[ScalingTraces, jax.Array]:
+        """As `Plasticity.step`."""
+        activity = traces.activity * jnp.exp(-dt / self.tau) + post_arrivals / self.tau
+        error = traces.error + dt * (self.goal - activity)
+        factor = jnp.exp(dt * (self.beta * (self.goal - activity) + self.gamma * error))
+        return ScalingTraces(activity, error), weights * factor[post]
+
+
+@struct.dataclass
+class Rules:
+    """Several plasticity rules on one projection, each stepped in turn on the weights the one before it
+    left: STDP with synaptic scaling, say. Each keeps its own traces."""
+
+    rules: tuple[Plasticity, ...]
+
+    def init_state(self, pre: int, post: int, edges: int, dtype: jnp.dtype = jnp.float32) -> tuple:
+        return tuple(rule.init_state(pre, post, edges, dtype) for rule in self.rules)
+
+    def modulated_by(self) -> Mapping[str, float | None]:
+        read: dict[str, float | None] = {}
+        for rule in self.rules:
+            for name, tau in rule.modulated_by().items():
+                if name in read and read[name] != tau:
+                    raise ValueError(f"two rules read modulator {name!r} with different time constants")
+                read[name] = tau
+        return read
+
+    def step(self, traces: tuple, weights: jax.Array, pre_spikes: jax.Array, post_arrivals: jax.Array,
+             pre: jax.Array, post: jax.Array, dt: float, *,
+             modulators: Mapping[str, jax.Array]) -> tuple[tuple, jax.Array]:
+        """As `Plasticity.step`."""
+        stepped = []
+        for rule, own in zip(self.rules, traces, strict=True):
+            own, weights = rule.step(own, weights, pre_spikes, post_arrivals, pre, post, dt,
+                                     modulators=modulators)
+            stepped.append(own)
+        return tuple(stepped), weights

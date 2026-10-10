@@ -47,6 +47,7 @@ A rate has one of two units, depending on which half reports it.
 | --- | --- |
 | `sparx.firing_rates`, `sparx.rate_penalty`, `RateBand`, the `rate/<layer>` training metric, `ActivityFitObjective`'s rates, `sparx.learn.run_converted` | spikes per step |
 | `PopulationRate`, `PoissonInput.rate`, `sparx.spiketrains.rates_hz`, a connectome's stimulus rates | Hz |
+| `IntrinsicPlasticity`'s `target`, `SynapticScaling`'s `goal` | spikes per unit of the model's time: per ms for a physical model and in a `Network`, per step for a dimensionless layer at `dt = 1` |
 
 A rate per step `p` at steps of `dt` ms is `1000 p / dt` Hz. `RateBand(lower=0.01, upper=0.3)` asks each neuron to fire on between 1% and 30% of steps.
 

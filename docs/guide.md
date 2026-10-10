@@ -15,6 +15,7 @@ The README shows what sparx does. This guide covers how to use each part. [Train
 - [Training on dew](#training-on-dew)
 - [Simulating circuits](#simulating-circuits)
 - [Graded signalling and neuromodulation](#graded-signalling-and-neuromodulation)
+- [Homeostasis](#homeostasis)
 - [Learning rules](#learning-rules)
 - [Connectomes, serving and exchange](#connectomes-serving-and-exchange)
 - [Results in detail](#results-in-detail)
@@ -310,6 +311,36 @@ result = simulate(network, network.init(jax.random.key(0)), duration=300.0, key=
 ```
 
 `DopamineSTDP` is Izhikevich's (2007) reward-modulated STDP, NEST's `stdp_dopamine_synapse`. Pair STDP writes an eligibility trace on each synapse, and the weight integrates that trace times the dopamine above a baseline, so a pairing changes the weight only if dopamine arrives within about a second. It reads the modulator named `"dopamine"`, whose `tau` must be the rule's `tau_n` (200 ms), with `release=1 / 200` for NEST's increment per spike.
+
+## Homeostasis
+
+Homeostasis is the slow processes that hold a neuron's firing rate near a set point while the network runs and learns. sparx has two, and a loss term for networks trained by gradients.
+
+`IntrinsicPlasticity` wraps a spiking model and moves each neuron's threshold by its own spikes, `theta += eta (s - target dt)` after each step: the intrinsic plasticity of Lazar, Pipa and Triesch's SORN (2009). A neuron that fires faster than `target` becomes harder to fire, and one that fires slower becomes easier, until on average each fires at `target`. The threshold's net change over a time `t` is `eta (spikes - target t)`, so once it settles the neuron's spike count follows `target t`. `target` is in spikes per unit of time: per step for the dimensionless models at `dt = 1`, per ms for the physical ones and in a `Network`. A physical model's threshold is its field `v_th`. `nn.Homeostatic` wraps another layer's neuron:
+
+```python
+from sparx.dynamics import IntrinsicPlasticity, LeakyIntegrateAndFire
+from sparx.nn import LIF, Homeostatic
+
+layer = Homeostatic(LIF(tau=3.0), target=0.05)  # 5% of steps
+cell = IntrinsicPlasticity(LeakyIntegrateAndFire(), target=0.02,
+                           eta=0.5, field="v_th")  # 20 Hz, mV
+```
+
+The threshold's drift is part of the layer's carried state, so a stream fed in chunks (`mutable=["state"]`) keeps it. In a `Network`, `StateMonitor` reads the voltage of a population whose neuron is wrapped this way.
+
+`SynapticScaling` is a plasticity rule, the model of van Rossum, Bi and Turrigiano (2000) of the scaling Turrigiano et al. (1998) found in cortical cultures. Each postsynaptic neuron keeps a slow estimate of its rate and multiplies all its incoming weights by one factor toward a goal rate. The ratios between a neuron's weights, and so what STDP has written into them, stay as they were. The defaults are the paper's, a 100 s sensor and a 20 Hz goal, which act over minutes of simulated time. `Rules` puts several rules on one projection and steps each on the weights the one before it left:
+
+```python
+from sparx.dynamics import PairSTDP, Rules, SynapticScaling
+from sparx.graph import FixedProbability, Projection
+
+rule = Rules((PairSTDP(w_max=100.0), SynapticScaling()))
+projection = Projection("a", "b", FixedProbability(0.3), weight=20.0,
+                        delay=1.0, receptor="ex", plasticity=rule)
+```
+
+A network trained by gradients can hold its rates in a band through its loss instead: `sparx.rate_penalty` ([above](#encoders-losses-and-firing-rates)), or `RateBand` in an objective.
 
 ## Learning rules
 

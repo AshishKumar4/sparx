@@ -45,6 +45,7 @@ from sparx.dynamics import (
     ALIFCell,
     Dense,
     FastWeights,
+    IntrinsicPlasticity,
     LICell,
     LIFCell,
     NeuronModel,
@@ -68,6 +69,7 @@ __all__ = [
     "RATES",
     "STATE",
     "Dynamics",
+    "Homeostatic",
     "Modelled",
     "Neuron",
     "Rate",
@@ -284,6 +286,32 @@ class Synaptic(Neuron):
         synapse = _decay(self, "synapse_decay", self.tau_synapse, self.learn_tau, features)
         return Serial(LICell(synapse),
                       LIFCell(membrane, self.threshold, self.reset, self.surrogate, self.detach_reset))
+
+
+class Homeostatic(Neuron):
+    """A spiking layer whose neurons' thresholds drift to hold `target` spikes per unit of time
+    (`sparx.dynamics.IntrinsicPlasticity`), around the model of the layer `neuron`.
+
+        Homeostatic(LIF(tau=3.0), target=0.05)
+
+    `field` names the model's threshold (`threshold`, or `v_th` for a
+    physical neuron). The drift is part of the layer's carried state.
+    """
+
+    neuron: Neuron
+    target: float
+    eta: float = 0.001
+    field: str = "threshold"
+
+    def inputs(self, x: jax.Array) -> SynapticInput:
+        return self.neuron.inputs(x)
+
+    def build(self, x: jax.Array) -> IntrinsicPlasticity:
+        if self.dt != self.neuron.dt:
+            raise ValueError(f"Homeostatic steps at dt={self.dt}, its neuron at dt={self.neuron.dt}; "
+                             "give both one dt")
+        inner = adopt(self.neuron, self, "neuron").model(x)
+        return IntrinsicPlasticity(inner, self.target, self.eta, self.field)
 
 
 class ALIF(Neuron):

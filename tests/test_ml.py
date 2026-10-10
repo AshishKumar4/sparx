@@ -10,6 +10,7 @@ from sparx.dynamics import (
     DecayingHebb,
     Dense,
     FastWeights,
+    IntrinsicPlasticity,
     Izhikevich,
     LICell,
     LIFCell,
@@ -362,6 +363,7 @@ MODELS = {
         RateCell(0.6, 0.1),
         Sparse(jnp.asarray(PRE), jnp.asarray(POST), jnp.asarray(np.random.default_rng(16).normal(0, 0.8, 9)),
                F, jnp.asarray(DELAY), 4)),
+    "homeostatic_lif": IntrinsicPlasticity(LIFCell(0.8), target=0.2, eta=0.05),
 }
 
 

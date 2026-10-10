@@ -105,6 +105,18 @@ def test_the_graded_signalling_example_releases_fires_and_modulates():
     assert dopamine.shape == (3000,) and dopamine[-1] > 1
 
 
+def test_the_homeostasis_examples_build_a_layer_a_cell_and_a_projection():
+    scope = {}
+    exec(_block("from sparx.dynamics import IntrinsicPlasticity"), scope)
+    x = jnp.full((50, 2, 3), 0.8)
+    layer = scope["layer"]
+    spikes = layer.apply(layer.init(jax.random.key(0), x), x)
+    assert spikes.shape == x.shape and 0 < float(spikes.mean()) < 1
+    assert scope["cell"].init_state((4,), jnp.float32).shift.shape == (4,)
+    exec(_block("from sparx.dynamics import PairSTDP, Rules"), scope)
+    assert scope["projection"].plasticity is scope["rule"]
+
+
 def test_the_conversion_example_builds_a_spiking_stack():
     scope = {}
     exec(_block("from functools import partial"), scope)
