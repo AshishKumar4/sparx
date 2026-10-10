@@ -21,7 +21,7 @@ import numpy as np
 from flax import struct
 
 import sparx
-from sparx.dynamics import MembraneState, Output, SynapticInput, decay, run
+from sparx.dynamics import Output, SynapticInput, decay, run
 from sparx.dynamics.core import fire
 from sparx.nn import LI, LIF, STATE, Neuron, record_rates
 from sparx.surrogate import ATan, Surrogate, spike
@@ -69,6 +69,12 @@ class Graded(nn.Module):
         return h
 
 
+class FewBitState(NamedTuple):
+    v: jax.Array
+    first: jax.Array
+    """Whether the step's membrane reached the first threshold, differentiated through the surrogate."""
+
+
 @struct.dataclass
 class FewBitCell:
     """LIF neurons that reset to zero, whose spike carries how many thresholds (multiples of 1) the
@@ -80,15 +86,16 @@ class FewBitCell:
     surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
     graded = True
 
-    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> MembraneState:
-        return MembraneState(jnp.zeros(shape, jnp.promote_types(dtype, jnp.float32)))
+    def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> FewBitState:
+        zeros = jnp.zeros(shape, jnp.promote_types(dtype, jnp.float32))
+        return FewBitState(zeros, zeros)
 
-    def step(self, state: MembraneState, inputs: SynapticInput, dt: float) -> tuple[MembraneState, Output]:
+    def step(self, state: FewBitState, inputs: SynapticInput, dt: float) -> tuple[FewBitState, Output]:
         v = self.decay ** dt * state.v + inputs.jump
         after, first = fire(v, 1.0, self.surrogate, "zero")
         payload = first + sum(spike(v - k, self.surrogate) for k in range(2, self.levels + 1))
         payload = payload.astype(inputs.jump.dtype)
-        return MembraneState(after), Output(payload, jnp.ones_like(payload))
+        return FewBitState(after, first), Output(payload, jnp.ones_like(payload))
 
 
 class FewBit(Neuron):
@@ -103,8 +110,8 @@ class FewBit(Neuron):
         return FewBitCell(decay(self.tau), 2 ** self.bits - 1)
 
     def __call__(self, x: jax.Array) -> jax.Array:
-        payload = self.run(self.model(x), x)
-        record_rates(self, jnp.minimum(payload, 1.0))
+        payload, first = run_recorded(self, self.model(x), x, lambda state: state.first)
+        record_rates(self, first)
         return payload
 
 
@@ -156,14 +163,21 @@ class SigmaDelta(Neuron):
         return SigmaDeltaCell(decay(self.tau), self.threshold)
 
     def __call__(self, x: jax.Array) -> jax.Array:
-        carrying = self.is_mutable_collection(STATE) and not self.is_initializing()
-        state = self.get_variable(STATE, "carry") if carrying else None
-        (out, fired), final = run(self.model(x), self.inputs(x), state, dt=self.dt,
-                                  record=lambda s: s.fired, unroll=self.unroll)
-        if carrying:
-            self.put_variable(STATE, "carry", final)
+        value, fired = run_recorded(self, self.model(x), x, lambda state: state.fired)
         record_rates(self, fired)
-        return out.value
+        return value
+
+
+def run_recorded(layer: Neuron, model, x: jax.Array, record):
+    """`layer`'s run of `model` over `x` `[T, ...]`, carrying the `state` collection as `Neuron.run` does,
+    and `record(state)` after each step: the outputs and the records, `[T, ...]` each."""
+    carrying = layer.is_mutable_collection(STATE) and not layer.is_initializing()
+    state = layer.get_variable(STATE, "carry") if carrying else None
+    (out, recorded), final = run(model, layer.inputs(x), state, dt=layer.dt, record=record,
+                                 unroll=layer.unroll)
+    if carrying:
+        layer.put_variable(STATE, "carry", final)
+    return out.value, recorded
 
 
 class Dendrites(nn.Module):
