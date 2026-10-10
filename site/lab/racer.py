@@ -437,8 +437,8 @@ def laps_driven(net, world: World, ground, points: jax.Array, seconds: float = 2
     def score(params):
         out = race(net, params, world, ground, points, at_start(points), steps)
         distance, along = out[5], out[7]
-        crashed = jax.lax.cummax(distance > world.half_width + 1.0, axis=0)
-        return jnp.mean(jnp.sum(jnp.where(crashed, 0.0, along), 0) * world.dt / length)
+        crashed = jax.lax.cummax((distance > world.half_width + 1.0).astype(jnp.float32), axis=0)
+        return jnp.mean(jnp.sum(jnp.where(crashed > 0, 0.0, along), 0) * world.dt / length)
 
     return score
 
