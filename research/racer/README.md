@@ -153,3 +153,15 @@ a process of its own: 0.37 to 0.38 s for the conv arms, 0.40 s for the dendritic
 dense stack, peaking at 1.0 to 1.4 GB (`results/timing-rtx4080.json`). The step's time grows with
 the batch, 0.88 s at 64 and 2.39 s at 160, so training several seeds in one batch would save nothing on
 this GPU. On an 8-core CPU on armada a conv step takes 35 s against the dense stack's 1.9 s.
+
+## Open questions the comparison raised
+
+Spikes of a few bits trained unstably under the common recipe. At seed 2 the 2-bit arm drove at 5.6 m/s
+on its training tracks by step 100, slowed to 0.16 m/s by step 250, and then trained with gradient norms
+of 1e3 to 7e4, ending with 85 of 200 unseen tracks finished. The 4-bit arm at seed 2 collapsed by step
+100 and finished none, with gradient norms of 3e3 to 1e4 for the rest of its run. The spiking arm A,
+from the same start, finished all 200 at that seed. A few-bit spike is the sum of one surrogate step per
+level (`FewBitCell`), so its derivative is the sum of their surrogates: a membrane near several levels
+passes several times a binary spike's gradient, and nothing scales it down. A candidate for the next study:
+the same arms with each level's surrogate scaled by the number of levels, or one surrogate of the
+rounded membrane, against the binary spike. This comparison keeps the recipe as it is.
