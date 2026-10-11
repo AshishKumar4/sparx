@@ -77,7 +77,9 @@ class Learner:
         self.cell = LIFCell(decay(args.tau), reset="zero")
         self.mask = 1 - jnp.eye(args.hidden)
         self.steps = steps
-        self.optimizer = optax.adam(args.lr)
+        # Every learner's gradient is clipped to one global norm before Adam: without it BPTT's loss jumped
+        # between epochs, by up to 1.9 nats on one task, while e-prop's fell smoothly.
+        self.optimizer = optax.chain(optax.clip_by_global_norm(args.clip), optax.adam(args.lr))
         k_in, k_rec, k_out, k_feedback = jax.random.split(jax.random.key(args.seed), 4)
         hidden = args.hidden
         self.params = EPropParams(
@@ -115,7 +117,7 @@ class Learner:
                                  anchor)
         grads = grads._replace(w_rec=grads.w_rec * self.mask)
         changes, state = self.optimizer.update(grads, state, params)
-        return optax.apply_updates(params, changes), state, loss
+        return optax.apply_updates(params, changes), state, loss, optax.global_norm(grads)
 
     def predict_fn(self, params, x):
         y, z = eprop_forward(self.cell, params, x, tau=self.args.readout_tau)
@@ -129,10 +131,11 @@ class Learner:
         grads = jax.vmap(one, in_axes=(1, 0))(x, labels)
         return jax.tree.map(lambda g: jnp.sum(g**2, 0), grads)
 
-    def update(self, x: jax.Array, labels: np.ndarray) -> float:
-        self.params, self.state, loss = self._update(self.params, self.state, x, jnp.asarray(labels),
-                                                     self.feedback, self.fisher, self.anchor)
-        return float(loss)
+    def update(self, x: jax.Array, labels: np.ndarray) -> tuple[float, float]:
+        """The batch's loss and its gradient's global norm before clipping."""
+        self.params, self.state, loss, norm = self._update(self.params, self.state, x, jnp.asarray(labels),
+                                                           self.feedback, self.fisher, self.anchor)
+        return float(loss), float(norm)
 
     def consolidate(self, spikes: np.ndarray, labels: np.ndarray, rng: np.random.Generator) -> None:
         """For EWC, the task's Fisher into the running sum, and the parameters as the new anchor."""
@@ -178,6 +181,7 @@ def main() -> None:
     parser.add_argument("--hidden", type=int, default=256)
     parser.add_argument("--batch", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--clip", type=float, default=1.0, help="the gradient's largest global norm")
     parser.add_argument("--ewc", type=float, default=1e4, help="the EWC penalty's lambda")
     parser.add_argument("--fisher-samples", type=int, default=256)
     parser.add_argument("--tau", type=float, default=10.0, help="the neurons' time constant, in steps")
@@ -207,8 +211,10 @@ def main() -> None:
         for _ in range(epochs):
             order = rng.permutation(len(labels))
             batches = [order[s:s + args.batch] for s in range(0, len(order) - args.batch + 1, args.batch)]
-            loss = float(np.mean([learner.update(time_major(spikes[b]), labels[b]) for b in batches]))
-            losses.append({"task": k, "loss": loss})
+            results = np.array([learner.update(time_major(spikes[b]), labels[b]) for b in batches])
+            loss = float(np.mean(results[:, 0]))
+            losses.append({"task": k, "loss": loss, "grad_norm_median": float(np.median(results[:, 1])),
+                           "grad_norm_max": float(np.max(results[:, 1]))})
             if not np.isfinite(loss):
                 raise SystemExit(f"task {k}: the loss is not finite")
         learner.consolidate(spikes, labels, rng)
