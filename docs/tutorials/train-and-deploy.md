@@ -92,4 +92,4 @@ x = np.moveaxis(test["spikes"][:8], 1, 0).astype(np.float32)              # [T, 
 same = np.array_equal(back.apply(back_variables, x), classifier.model.apply(classifier.variables, x))
 ```
 
-The graph holds an `Affine`, a `LIF`, an `Affine` and an `LI` node, and the network read back computes the trained one's membranes exactly. [The NIR module's documentation](../../src/sparx/nir.py) lists what exports: dense and convolutional layers, `Flatten`, `LIF` and `IF` with NIR's reset, `LI`, and `Recurrent(LIF)`.
+The graph holds an `Affine`, a `LIF`, an `Affine` and an `LI` node, and the network read back computes the trained one's membranes exactly. [The NIR module's documentation](../../src/sparx/nir.py) lists what exports: dense and convolutional layers, `Flatten`, `LIF` and `IF` with NIR's reset, `LI`, and `Recurrent(LIF)`, with fixed or learned time constants, and a `SpikingMLP` without delays or batch norm.

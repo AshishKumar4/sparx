@@ -384,7 +384,7 @@ rates = run_converted(snn, snn_variables, images, steps=100)  # output firing ra
 
 `sparx.serve.StreamServer` serves streaming models to many sessions at once, each with its own neuron state in a slot of one batch, and a session's outputs equal a direct call over its stream. A reloaded run is served with `StreamServer(classifier.model, classifier.variables, call=classifier.call, slots=8, frame=10, sample_shape=(700,))`, which runs the model as the classifier does, with `train=False` and its recorded keyword arguments. A model that cannot stream, a `PSN` or a readout averaged over time, is refused when the server is built.
 
-`sparx.nir` exchanges networks through NIR: dense and 2-D convolutional layers, `Flatten`, hard-reset `LIF` and `IF`, the `LI` readout, and `Recurrent(LIF)`. A stack of them is a flax `nn.Sequential`, which `SpikingClassifierObjective` trains as it is. Networks exported by snnTorch run in sparx spike for spike and export back with the same parameters.
+`sparx.nir` exchanges networks through NIR: dense and 2-D convolutional layers, `Flatten`, hard-reset `LIF` and `IF`, the `LI` readout, and `Recurrent(LIF)`, with fixed time constants or one learned per feature. A stack of them is a flax `nn.Sequential`, which `SpikingClassifierObjective` trains as it is; a `SpikingMLP` without delays or batch norm exports through the stack it states (`as_sequential`). Networks exported by snnTorch run in sparx spike for spike and export back with the same parameters.
 
 ## Results in detail
 
