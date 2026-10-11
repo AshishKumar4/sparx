@@ -28,6 +28,14 @@ else refused:
 - `sparx.nn.Recurrent(LIF(...))` on a flat input, as a `LIF` node with a
   `Linear` edge from its output back to its input.
 
+A `LIF` or `LI` layer that learns its time constant per feature
+(`learn_tau=True`) exports each feature's as NIR's per-neuron `tau`, the
+same over an image's height and width. A `LIF` or `LI` node whose `tau`
+differs from neuron to neuron imports as a layer with `learn_tau=True`,
+each channel's decay its learned parameter, trainable as any other; a
+`tau` that differs within a channel is refused. A node whose `tau` is one
+value imports as a fixed time constant, as before.
+
 Images. NIR follows PyTorch: one example of a 2-d convolution's input is
 `[C, H, W]`, and its weight is `[C_out, C_in / groups, kH, kW]`. Flax is
 channels last: the input is `[..., H, W, C]` and the kernel
@@ -90,12 +98,17 @@ type StackVariables = Mapping[str, Mapping[str, LayerParams]]
 """A sequential stack's variables, `{"params": {"layers_k": {...}}}`."""
 type Pair = tuple[int, int]
 type Edges = list[tuple[str, str]]
+type Imported = dict[str, np.ndarray | dict[str, np.ndarray]]
+"""One imported layer's parameters: a weight layer's arrays, or a recurrent layer's, its neuron's nested."""
 
 
-def _continuous(kept: float, dt: float, discretization: Discretization) -> tuple[float, float]:
-    """`(tau, r)` of the continuous LIF whose `discretization` at `dt` is `v <- kept * v + x`."""
+def _continuous(kept: float | np.ndarray, dt: float,
+                discretization: Discretization) -> tuple[float | np.ndarray, float | np.ndarray]:
+    """`(tau, r)` of the continuous LIF whose `discretization` at `dt` is `v <- kept * v + x`, for one
+    decay or one per neuron."""
     if discretization == "exact":
-        return -dt / math.log(kept), 1 / (1 - kept)
+        log = math.log(kept) if isinstance(kept, float) else np.log(kept)
+        return -dt / log, 1 / (1 - kept)
     tau = dt / (1 - kept)
     return tau, tau / dt
 
@@ -116,6 +129,11 @@ def _to_nir_shape(shape: Sequence[int]) -> tuple[int, ...]:
 def _to_sparx_layout(values: np.ndarray) -> np.ndarray:
     """A NIR per-neuron array in sparx's layout: the channel axis moves last."""
     return values if values.ndim < 2 else np.moveaxis(values, 0, -1)
+
+
+def _to_nir_layout(values: np.ndarray) -> np.ndarray:
+    """A sparx per-neuron array in NIR's layout: the channel axis moves first."""
+    return values if values.ndim < 2 else np.moveaxis(values, -1, 0)
 
 
 def _pair(value: int | Sequence[int] | np.ndarray | None, default: int = 1) -> Pair:
@@ -146,20 +164,36 @@ def _export_neuron(cell: NeuronModel, step: float, shape: tuple[int, ...], dt: f
 
     ones = np.ones(_to_nir_shape(shape))
     if isinstance(cell, LICell):
-        if np.ndim(cell.decay):
-            raise NotImplementedError("NIR's LI holds one time constant: export a fixed tau")
-        tau, r = _continuous(float(cell.decay) ** step, dt, discretization)
+        tau, r = _per_neuron(cell.decay, step, shape, dt, discretization)
         return nir.LI(tau=tau * ones, r=r * ones, v_leak=0 * ones)
     if not isinstance(cell, LIFCell):
         raise NotImplementedError(f"NIR has no neuron for a {type(cell).__name__}: LIF and IF export")
-    if cell.reset != "zero" or np.ndim(cell.decay) or np.ndim(cell.threshold):
-        raise NotImplementedError("NIR's LIF and IF reset to v_reset and hold one time constant and "
-                                  "threshold: export reset='zero' with a fixed tau")
+    if cell.reset != "zero" or np.ndim(cell.threshold):
+        raise NotImplementedError("NIR's LIF and IF reset to v_reset, and sparx exports one threshold per "
+                                  "layer: export reset='zero' with a fixed threshold")
     threshold = float(cell.threshold) * ones
-    if cell.decay == 1.0:
+    if not np.ndim(cell.decay) and cell.decay == 1.0:
         return nir.IF(r=ones / dt, v_threshold=threshold, v_reset=0 * ones)
-    tau, r = _continuous(float(cell.decay) ** step, dt, discretization)
+    tau, r = _per_neuron(cell.decay, step, shape, dt, discretization)
     return nir.LIF(tau=tau * ones, r=r * ones, v_leak=0 * ones, v_threshold=threshold, v_reset=0 * ones)
+
+
+def _per_neuron(kept: jax.Array | float, step: float, shape: tuple[int, ...], dt: float,
+                discretization: Discretization) -> tuple[float | np.ndarray, float | np.ndarray]:
+    """`(tau, r)` of a layer's neurons from its decay per unit of time, stepped at `step`: one value for a
+    fixed decay, or NIR's per-neuron arrays for a decay per feature (the last axis of `shape`), the
+    same over the axes before it."""
+    if not np.ndim(kept):
+        return _continuous(float(kept) ** step, dt, discretization)
+    per_feature = np.asarray(kept, np.float64) ** step
+    if per_feature.shape != shape[-1:]:
+        raise NotImplementedError(f"a decay of shape {per_feature.shape} is not one per feature of {shape}")
+    if not np.all((per_feature > 0) & (per_feature < 1)):
+        raise NotImplementedError("each feature's decay must lie in (0, 1) to export: one that keeps the "
+                                  "whole membrane is an IF neuron, and a layer of LIF and IF neurons has "
+                                  "no NIR node")
+    tau, r = _continuous(per_feature, dt, discretization)
+    return (_to_nir_layout(np.broadcast_to(tau, shape)), _to_nir_layout(np.broadcast_to(r, shape)))
 
 
 def _export_dense(params: LayerParams, shape: tuple[int, ...]) -> nir.Affine:
@@ -374,7 +408,7 @@ def _chain(graph: nir.NIRGraph) -> list[tuple[nir.NIRNode, nir.NIRNode | None]]:
     return chain
 
 
-def _import_affine(node: nir.Affine | nir.Linear) -> tuple[nn.Module, dict[str, np.ndarray]]:
+def _import_affine(node: nir.Affine | nir.Linear) -> tuple[nn.Module, Imported]:
     import nir
 
     weight = np.asarray(node.weight)
@@ -393,7 +427,7 @@ def _import_padding(node: nir.Conv2d, kernel: Pair, dilation: Pair) -> list[Pair
     return [(p, p) for p in _pair(padding)]
 
 
-def _import_conv(node: nir.Conv2d) -> tuple[nn.Module, dict[str, np.ndarray]]:
+def _import_conv(node: nir.Conv2d) -> tuple[nn.Module, Imported]:
     weight = np.asarray(node.weight)
     if weight.ndim != 4:
         raise NotImplementedError("a Conv2d weight is [C_out, C_in / groups, kH, kW]")
@@ -414,29 +448,47 @@ def _import_flatten(node: nir.Flatten) -> Flatten:
     return Flatten(ndim=ndim)
 
 
-def _per_channel(values: np.ndarray) -> np.ndarray:
-    """A neuron node's per-neuron `r` as one value per output channel (feature), which a weight layer
-    absorbs."""
+def _per_channel(values: np.ndarray, name: str = "r") -> np.ndarray:
+    """A neuron node's per-neuron `values` (its `r`, or its `tau`) as one value per output channel
+    (feature): a weight layer absorbs an `r`, and a layer learns a decay per feature."""
     values = _to_sparx_layout(np.asarray(values, float))
     rows = values.reshape(-1, values.shape[-1]) if values.ndim else values.reshape(1, 1)
     if not np.all(rows == rows[0]):
-        raise NotImplementedError("a LIF node imports with one r per channel")
+        raise NotImplementedError(f"a neuron node imports with one {name} per channel")
     return rows[0]
 
 
-def _fold_input_scale(previous: dict[str, np.ndarray] | None, scales: np.ndarray, bias: np.ndarray,
+def _learned_decay(tau: np.ndarray, dt: float, discretization: Discretization
+                   ) -> tuple[dict[str, np.ndarray], np.ndarray]:
+    """For a node whose `tau` differs between channels, the parameters of a layer that learns its decay
+    per feature, `{"decay": logit}` as `learn_tau=True` holds it, and each channel's input scale."""
+    per_channel = _per_channel(tau, "tau")
+    if not np.all(np.isfinite(per_channel) & (per_channel > 0)):
+        raise NotImplementedError("each tau must be positive and finite to import")
+    if discretization == "exact":
+        kept = np.exp(-dt / per_channel)
+        scale = 1 - kept
+    else:
+        kept, scale = 1 - dt / per_channel, dt / per_channel
+    if not np.all((kept > 0) & (kept < 1)):
+        raise NotImplementedError(f"Euler steps of {dt} s need every tau above it")
+    return {"decay": np.log(kept / (1 - kept)).astype(np.float32)}, scale
+
+
+def _fold_input_scale(previous: Imported | None, scales: np.ndarray, bias: np.ndarray,
                       kind: str) -> None:
     """Fold a neuron node's input scale, and a constant input `bias`, into the weight layer before it."""
     if previous is not None and "kernel" in previous:
         # NIR's r scales the input current, which a constant feedback bias joins.
-        kernel = previous["kernel"]
+        kernel, before = previous["kernel"], previous["bias"]
+        assert isinstance(kernel, np.ndarray) and isinstance(before, np.ndarray)  # a weight layer's arrays
         previous["kernel"] = (kernel * scales).astype(kernel.dtype)
-        previous["bias"] = ((previous["bias"] + bias) * scales).astype(kernel.dtype)
+        previous["bias"] = ((before + bias) * scales).astype(kernel.dtype)
     elif not np.allclose(scales, 1) or np.any(bias != 0):
         raise NotImplementedError(f"a {kind} node must follow an Affine, Linear or Conv2d node to import")
 
 
-def _import_if(node: nir.IF, previous: dict[str, np.ndarray] | None, dt: float) -> IF:
+def _import_if(node: nir.IF, previous: Imported | None, dt: float) -> IF:
     """The layer of an `IF` node, with `r dt` folded into `previous`."""
     if not np.allclose(0.0 if node.v_reset is None else node.v_reset, 0):
         raise NotImplementedError("only IF nodes with v_reset = 0 import")
@@ -446,8 +498,8 @@ def _import_if(node: nir.IF, previous: dict[str, np.ndarray] | None, dt: float) 
     return IF(threshold=float(np.ravel(node.v_threshold)[0]), reset="zero")
 
 
-def _import_lif(node: nir.LIF, w_rec: nir.NIRNode | None, previous: dict[str, np.ndarray] | None,
-                dt: float, discretization: Discretization) -> tuple[nn.Module, dict[str, np.ndarray]]:
+def _import_lif(node: nir.LIF, w_rec: nir.NIRNode | None, previous: Imported | None,
+                dt: float, discretization: Discretization) -> tuple[nn.Module, Imported]:
     """The layer of a `LIF` node, its feedback through `w_rec` if any, with `r` folded into `previous`."""
     import nir
 
@@ -455,42 +507,54 @@ def _import_lif(node: nir.LIF, w_rec: nir.NIRNode | None, previous: dict[str, np
     reset = 0.0 if node.v_reset is None else node.v_reset
     if not np.allclose(node.v_leak, 0) or not np.allclose(reset, 0):
         raise NotImplementedError("only LIF nodes with v_leak = v_reset = 0 import")
-    if np.unique(tau).size != 1 or np.unique(node.v_threshold).size != 1:
-        raise NotImplementedError("a LIF node imports with one tau and one threshold")
-    kept, scale = _discrete(float(tau.ravel()[0]), dt, discretization)
+    if np.unique(node.v_threshold).size != 1:
+        raise NotImplementedError("a LIF node imports with one threshold")
+    threshold = float(np.ravel(node.v_threshold)[0])
+    learned: dict[str, np.ndarray] = {}
+    if np.unique(tau).size == 1:
+        kept, scale = _discrete(float(tau.ravel()[0]), dt, discretization)
+        lif = LIF(tau=-1 / math.log(kept), threshold=threshold, reset="zero")
+    else:
+        learned, scale = _learned_decay(tau, dt, discretization)
+        lif = LIF(tau=float(np.median(tau)) / dt, threshold=threshold, reset="zero", learn_tau=True)
     scales = _per_channel(np.asarray(node.r)) * scale
     bias = np.asarray(w_rec.bias) if isinstance(w_rec, nir.Affine) else np.zeros(())
     _fold_input_scale(previous, scales, bias, "LIF")
-    lif = LIF(tau=-1 / math.log(kept), threshold=float(np.ravel(node.v_threshold)[0]), reset="zero")
     if w_rec is None:
-        return lif, {}
+        return lif, dict(learned)
     if not isinstance(w_rec, nir.Affine | nir.Linear):
         raise NotImplementedError(f"cannot import a {type(w_rec).__name__} feedback")
     weight = np.asarray(w_rec.weight)
-    return Recurrent(neuron=lif), {"recurrent": (weight.T * scales).astype(weight.dtype)}
+    recurrent: Imported = {"recurrent": (weight.T * scales).astype(weight.dtype)}
+    if learned:
+        recurrent["neuron"] = learned
+    return Recurrent(neuron=lif), recurrent
 
 
-def _import_li(node: nir.LI, previous: dict[str, np.ndarray] | None, dt: float,
-               discretization: Discretization) -> LI:
-    """The layer of an `LI` node, with `r` folded into `previous`."""
+def _import_li(node: nir.LI, previous: Imported | None, dt: float,
+               discretization: Discretization) -> tuple[LI, Imported]:
+    """The layer of an `LI` node and its parameters, with `r` folded into `previous`."""
     tau = np.asarray(node.tau, float)
     if not np.allclose(node.v_leak, 0):
         raise NotImplementedError("only LI nodes with v_leak = 0 import")
-    if np.unique(tau).size != 1:
-        raise NotImplementedError("an LI node imports with one tau")
-    kept, scale = _discrete(float(tau.ravel()[0]), dt, discretization)
+    if np.unique(tau).size == 1:
+        kept, scale = _discrete(float(tau.ravel()[0]), dt, discretization)
+        layer, learned = LI(tau=-1 / math.log(kept)), dict[str, np.ndarray]()
+    else:
+        learned, scale = _learned_decay(tau, dt, discretization)
+        layer = LI(tau=float(np.median(tau)) / dt, learn_tau=True)
     _fold_input_scale(previous, _per_channel(np.asarray(node.r)) * scale, np.zeros(()), "LI")
-    return LI(tau=-1 / math.log(kept))
+    return layer, dict(learned)
 
 
 def from_nir(graph: nir.NIRGraph, *, dt: float, discretization: Discretization = "exact"
-             ) -> tuple[nn.Sequential, dict[str, dict[str, dict[str, np.ndarray]]]]:
+             ) -> tuple[nn.Sequential, dict[str, dict[str, Imported]]]:
     """A sequential stack and its variables from a NIR graph of a chain of the nodes above, read with
     `discretization` at `dt` seconds. Image layers take inputs `[T, B, H, W, C]`."""
     import nir
 
     layers: list[nn.Module] = []
-    params: dict[str, dict[str, np.ndarray]] = {}
+    params: dict[str, Imported] = {}
     for node, w_rec in _chain(graph):
         k = len(layers)
         if w_rec is not None and not isinstance(node, nir.LIF):
@@ -506,7 +570,7 @@ def from_nir(graph: nir.NIRGraph, *, dt: float, discretization: Discretization =
         elif isinstance(node, nir.IF):
             layer, layer_params = _import_if(node, params.get(f"layers_{k - 1}"), dt), {}
         elif isinstance(node, nir.LI):
-            layer, layer_params = _import_li(node, params.get(f"layers_{k - 1}"), dt, discretization), {}
+            layer, layer_params = _import_li(node, params.get(f"layers_{k - 1}"), dt, discretization)
         else:
             raise NotImplementedError(f"cannot import NIR node {type(node).__name__}")
         layers.append(layer)

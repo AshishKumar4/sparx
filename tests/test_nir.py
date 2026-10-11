@@ -254,6 +254,75 @@ def test_a_weight_layer_without_its_parameters_is_refused_by_name():
             to_nir(model, given, dt=1e-3, input_shape=input_shape)
 
 
+def unequal_decays(variables, rng):
+    """`variables` with every learned decay set to a different value per feature, in (0.5, 0.95)."""
+    def spread(path, leaf):
+        if path[-1].key != "decay":
+            return leaf
+        kept = rng.uniform(0.5, 0.95, leaf.shape)
+        return jnp.asarray(np.log(kept / (1 - kept)), leaf.dtype)
+    return jax.tree_util.tree_map_with_path(spread, variables)
+
+
+@pytest.mark.parametrize("discretization", ["exact", "euler"])
+@pytest.mark.parametrize(("layer_dt", "nir_dt"), [(1.0, 1e-3), (2.0, 1e-4)])
+@pytest.mark.parametrize("use_bias", [True, False])
+def test_learned_time_constants_per_feature_round_trip(discretization, layer_dt, nir_dt, use_bias):
+    # Each feature's learned decay leaves as its own NIR tau and comes back as a learned decay: the
+    # membranes agree to float32 rounding (sigmoid(logit(decay)) is not exactly the decay), the spikes
+    # exactly.
+    model = nn.Sequential([nn.Dense(6, use_bias=use_bias),
+                           LIF(tau=5.0, learn_tau=True, reset="zero", dt=layer_dt),
+                           nn.Dense(3, use_bias=use_bias), LI(tau=5.0, learn_tau=True, dt=layer_dt)])
+    x = jnp.asarray(np.random.default_rng(0).random((30, 2, 4)), jnp.float32)
+    variables = model.init(jax.random.key(0), x)
+    variables = {"params": {k: ({**v, "kernel": 3 * v["kernel"]} if "kernel" in v else v)
+                            for k, v in variables["params"].items()}}
+    variables = unequal_decays(variables, np.random.default_rng(1))
+    graph = to_nir(model, variables, dt=nir_dt, discretization=discretization)
+    assert np.unique(graph.nodes["1"].tau).size == 6 and np.unique(graph.nodes["3"].tau).size == 3
+    back, back_variables = from_nir(graph, dt=nir_dt, discretization=discretization)
+    assert back.layers[1].learn_tau and back.layers[3].learn_tau
+    expected = np.asarray(model.apply(variables, x))
+    np.testing.assert_allclose(np.asarray(back.apply(back_variables, x)), expected, rtol=2e-5, atol=2e-5)
+    spikes = nn.Sequential(model.layers[:2]).apply({"params": {k: variables["params"][k]
+                                                              for k in ("layers_0", "layers_1")}}, x)
+    back_spikes = nn.Sequential(back.layers[:2]).apply({"params": {k: back_variables["params"][k]
+                                                                  for k in ("layers_0", "layers_1")}}, x)
+    np.testing.assert_array_equal(np.asarray(back_spikes), np.asarray(spikes))
+    assert 0 < float(np.asarray(spikes).mean()) < 1
+
+
+def test_learned_time_constants_round_trip_through_convolution_and_recurrence():
+    model = nn.Sequential([nn.Conv(3, (3, 3), padding="VALID"), LIF(tau=4.0, learn_tau=True, reset="zero"),
+                           Flatten(), nn.Dense(5), Recurrent(LIF(tau=4.0, learn_tau=True, reset="zero")),
+                           nn.Dense(2), LI(tau=3.0, learn_tau=True)])
+    x = jnp.asarray(np.random.default_rng(2).random((25, 2, 6, 5, 2)), jnp.float32)
+    variables = unequal_decays(jax.tree.map(lambda w: 3 * w, model.init(jax.random.key(0), x)),
+                               np.random.default_rng(3))
+    graph = to_nir(model, variables, dt=1e-3, input_shape=(6, 5, 2))
+    tau = np.asarray(graph.nodes["1"].tau)
+    assert tau.shape == (3, 4, 3) and np.unique(tau).size == 3  # per channel, the same over H and W
+    back, back_variables = from_nir(graph, dt=1e-3)
+    assert back.layers[4].neuron.learn_tau
+    expected = np.asarray(model.apply(variables, x))
+    np.testing.assert_allclose(np.asarray(back.apply(back_variables, x)), expected, rtol=2e-5, atol=2e-5)
+
+
+def test_a_tau_that_differs_within_a_channel_or_leaves_its_domain_is_refused():
+    graph = to_nir(nn.Sequential([nn.Dense(2), LI(tau=3.0)]),
+                   nn.Sequential([nn.Dense(2), LI(tau=3.0)]).init(jax.random.key(0), jnp.ones((1, 1, 3))),
+                   dt=1e-3)
+    node = graph.nodes["1"]
+    for tau, match in (([0.003, -0.004], "positive"), ([0.003, np.inf], "positive")):
+        node.tau = np.asarray(tau)
+        with pytest.raises(NotImplementedError, match=match):
+            from_nir(graph, dt=1e-3)
+    node.tau = np.asarray([0.003, 0.0005])
+    with pytest.raises(NotImplementedError, match="above"):
+        from_nir(graph, dt=1e-3, discretization="euler")
+
+
 def test_unsupported_layers_are_refused():
     model = nn.Sequential([nn.Dense(4), LIF(tau=2.0)])  # a soft reset NIR cannot state
     variables = model.init(jax.random.key(0), jnp.zeros((2, 1, 3)))
