@@ -9,7 +9,10 @@ interface Recorded {
 	laps: { points: number[][]; start: number[]; cars: number[][]; events: number[][]; spikes: number[][] }[];
 }
 
-// Each fixture's bound on the car, in units in the last place. On the spiking fixture the browser measured
+// Each fixture's bound on the car, in units in the last place of each component's largest magnitude. The
+// reference is sparx's float64 run on the same machine. Events and spikes match exactly; the car's numbers
+// cannot, since the browser's transcendentals (V8's fdlibm) and XLA's on the CPU round differently in the
+// last bits, and that divergence is what each bound admits. On the spiking fixture the browser measured
 // 0.3 and 1.0 on armada and on CI's runner alike. On the graded one, sparx's own float64 run differs by up
 // to 14.5 between those two machines (site/lab/probes/references.py), and the browser measured up to 9.5
 // against armada's and 24.0 against the runner's.

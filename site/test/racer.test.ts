@@ -50,8 +50,10 @@ for (const [k, lap] of recorded.laps.entries()) {
 		car = Math.max(...error.map((e, i) => e / ulp(size[i])));
 		console.log(`lap ${k}: ${events} events and ${spikes} spikes matched; the car within ${car.toFixed(1)} units in the last place; ` +
 			`readouts ${maxRelative.toExponential(1)} max-relative, ${rmsRelative.toExponential(1)} RMS-relative`);
-		// Measured 5.5 and 12.2 on armada and on CI's runner alike, whose float64 runs agree exactly
-		// (site/lab/probes/references.py): the difference is the browser's transcendentals against XLA's.
+		// The reference is sparx's float64 run on the same machine. Events and spikes match exactly; the car's
+		// numbers differ in the last bits because the browser's transcendentals (V8's fdlibm) and XLA's on the
+		// CPU round differently, and the bound admits that divergence. Measured 5.5 and 12.2 on armada and on
+		// CI's runner alike, whose float64 runs agree exactly (site/lab/probes/references.py).
 		expect(car).toBeLessThan(16);
 		expect(maxRelative).toBeLessThan(1e-15);
 		// A step of the published network's 64 x 32 camera takes about 10 ms on a CI runner's core.
