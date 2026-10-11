@@ -318,26 +318,34 @@ def test_learned_time_constants_round_trip_through_convolution_and_recurrence():
 
 
 @pytest.mark.parametrize("discretization", ["exact", "euler"])
-def test_a_graph_with_a_tau_per_neuron_imports_its_decays_and_input_scales(discretization):
-    # A graph made outside sparx, three LIF neurons with their own tau and r after an Affine node: each
-    # neuron's decay is its learned parameter, and the Affine's rows carry each neuron's input scale.
+@pytest.mark.parametrize("feedback", [False, True])
+def test_a_graph_with_a_tau_per_neuron_imports_its_decays_and_input_scales(discretization, feedback):
+    # A graph made outside sparx, three LIF neurons with their own tau and r after an Affine node, and
+    # an Affine feedback: each neuron's decay is its learned parameter, and the input weights, the
+    # feedback's weights and both biases carry each neuron's input scale.
     rng = np.random.default_rng(6)
     weight, bias = rng.normal(size=(3, 4)), rng.normal(size=3)
+    loop, loop_bias = rng.normal(size=(3, 3)), rng.normal(size=3)
     tau, r, dt = np.asarray([0.002, 0.005, 0.02]), np.asarray([1.5, 2.0, 3.0]), 1e-3
-    graph = nir.NIRGraph(nodes={"input": nir.Input(input_type={"input": np.array([4])}),
-                                "0": nir.Affine(weight=weight, bias=bias),
-                                "1": nir.LIF(tau=tau, r=r, v_leak=np.zeros(3), v_threshold=np.ones(3),
-                                             v_reset=np.zeros(3)),
-                                "output": nir.Output(output_type={"output": np.array([3])})},
-                         edges=[("input", "0"), ("0", "1"), ("1", "output")])
-    model, variables = from_nir(graph, dt=dt, discretization=discretization)
+    lif = nir.LIF(tau=tau, r=r, v_leak=np.zeros(3), v_threshold=np.ones(3), v_reset=np.zeros(3))
+    nodes = {"input": nir.Input(input_type={"input": np.array([4])}),
+             "0": nir.Affine(weight=weight, bias=bias), "1.lif": lif,
+             "output": nir.Output(output_type={"output": np.array([3])})}
+    edges = [("input", "0"), ("0", "1.lif"), ("1.lif", "output")]
+    if feedback:
+        nodes["1.w_rec"] = nir.Affine(weight=loop, bias=loop_bias)
+        edges += [("1.lif", "1.w_rec"), ("1.w_rec", "1.lif")]
+    model, variables = from_nir(nir.NIRGraph(nodes=nodes, edges=edges), dt=dt, discretization=discretization)
     kept = np.exp(-dt / tau) if discretization == "exact" else 1 - dt / tau
     scale = r * ((1 - kept) if discretization == "exact" else dt / tau)
     params = variables["params"]
-    assert model.layers[1].learn_tau
-    np.testing.assert_allclose(jax.nn.sigmoid(params["layers_1"]["decay"]), kept, rtol=1e-6)
+    neuron = params["layers_1"]["neuron"] if feedback else params["layers_1"]
+    assert (model.layers[1].neuron if feedback else model.layers[1]).learn_tau
+    np.testing.assert_allclose(jax.nn.sigmoid(neuron["decay"]), kept, rtol=1e-6)
     np.testing.assert_allclose(params["layers_0"]["kernel"], weight.T * scale, rtol=1e-6)
-    np.testing.assert_allclose(params["layers_0"]["bias"], bias * scale, rtol=1e-6)
+    np.testing.assert_allclose(params["layers_0"]["bias"], (bias + feedback * loop_bias) * scale, rtol=1e-6)
+    if feedback:
+        np.testing.assert_allclose(params["layers_1"]["recurrent"], loop.T * scale, rtol=1e-6)
 
 
 def test_a_tau_that_differs_within_a_channel_or_leaves_its_domain_is_refused():
