@@ -61,7 +61,9 @@ def measure(model: dict) -> dict:
     drive = jax.jit(lambda p: racer.race(net, p, world, ground, points, car0, steps))
     cars, _, on, off, spikes, *_ = drive(params)
     image = jnp.concatenate([on, off], -1)
-    speed = cars[:, :, 3:4] / world.max_speed
+    # `race` returns each step's car after it moved; the network read the speed before the move.
+    before = jnp.concatenate([car0[None], cars[:-1]])
+    speed = before[:, :, 3:4] / world.max_speed
     inputs = jnp.concatenate([image, speed], -1)  # [T, 1, F]
     activity = float(jnp.mean(spikes != 0))
 

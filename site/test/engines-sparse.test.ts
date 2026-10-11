@@ -68,3 +68,10 @@ test('the dense layer, 9% and all of its inputs nonzero: bit for bit', () => {
 		expect(Array.from(out)).toEqual(Array.from(reference));
 	}
 });
+
+test('a weight that is not finite is refused when the model loads', () => {
+	for (const bad of [Number.POSITIVE_INFINITY, Number.NaN]) {
+		const bytes = new Uint8Array(new Float32Array([0.5, bad, 1]).buffer);
+		expect(() => floats(btoa(String.fromCharCode(...bytes)))).toThrow('not finite');
+	}
+});

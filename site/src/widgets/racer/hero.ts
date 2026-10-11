@@ -84,13 +84,10 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 	const maps =
 		racer.network instanceof Vision
 			? racer.network.maps
-			: (model.layers ?? [])
-					// A dense layer into LIF neurons is a population; the last, into the readout, is not.
-					.flatMap((l, k, all) => (l.kind === 'dense' && all[k + 1]?.kind === 'lif' ? [l.outputs] : []))
-					.map((width, k, widths) => ({ rows: 1, columns: width, features: 1, offset: widths.slice(0, k).reduce((a, b) => a + b, 0) }));
+			: racer.network.steps.flatMap((step) => (step.kind === 'lif' ? [{ rows: 1, columns: step.v.length, features: 1, offset: step.offset }] : []));
+	// Each position's light: 1 the step any of its features fires, fading after.
 	const lit = maps.map((m) => new Float32Array(m.rows * m.columns));
 	const seen = new Float32Array(2 * pixels);
-	const flash = new Float32Array(hidden);
 	let colors: Palette;
 	let view = fit(canvas);
 	let region = { x: 0, y: 0, w: 0, h: 0 };
@@ -121,7 +118,6 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 		started = clock;
 		crashedAt = -1;
 		seen.fill(0);
-		flash.fill(0);
 		for (const l of lit) l.fill(0);
 		fitTrack();
 	}
@@ -180,15 +176,13 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 		}
 		events = racer.step();
 		spikes = 0;
-		for (let i = 0; i < hidden; i++) {
-			flash[i] = racer.network.spikes[i] ? 1 : flash[i] * 0.8;
-			spikes += racer.network.spikes[i];
-		}
+		const fired = racer.network.spikes;
 		for (const [k, m] of maps.entries())
 			for (let q = 0; q < m.rows * m.columns; q++) {
 				let any = 0;
-				for (let f = 0; f < m.features; f++) any = Math.max(any, flash[m.offset + q * m.features + f]);
-				lit[k][q] = any;
+				for (let f = 0; f < m.features; f++) any += fired[m.offset + q * m.features + f];
+				spikes += any;
+				lit[k][q] = any ? 1 : lit[k][q] * 0.8;
 			}
 		for (let p = 0; p < 2 * pixels; p++) seen[p] = racer.events[p] ? 1 : seen[p] * 0.75;
 		let d = racer.place[1] - along;

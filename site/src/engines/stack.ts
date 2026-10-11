@@ -11,10 +11,13 @@ type Step =
 	| { kind: 'lif'; decay: number; threshold: number; zero: boolean; v: Float64Array; out: Float64Array; offset: number }
 	| { kind: 'li'; decay: number; v: Float64Array };
 
-/** Weights sent as base64 float32, widened to float64. */
+/** Weights sent as base64 float32, widened to float64. Every weight must be finite: the layers below skip
+ * zero inputs, which equals the full sum only when no weight is infinite or NaN. */
 export function floats(base64: string): Float64Array {
 	const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-	return Float64Array.from(new Float32Array(bytes.buffer));
+	const values = Float64Array.from(new Float32Array(bytes.buffer));
+	if (!values.every(Number.isFinite)) throw new Error('a weight is not finite');
+	return values;
 }
 
 /** A dense layer's outputs into `out`: each the sum over inputs in order, then the bias. The kernel is

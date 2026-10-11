@@ -9,13 +9,16 @@ const racer = new Racer(model, new Track(points, model.world));
 racer.reset([points[0][0], points[0][1], Math.PI / 2, 0]);
 for (let t = 0; t < 50; t++) racer.step();
 const steps = 1000;
-let network = 0;
+// The whole step, timed on the racer alone, and the network's part on a second copy fed the same inputs.
+const inputs: Float64Array[] = [];
 const start = performance.now();
 for (let t = 0; t < steps; t++) {
 	racer.step();
-	const before = performance.now();
-	racer.network.step(racer.input);
-	network += performance.now() - before;
+	inputs.push(Float64Array.from(racer.input));
 }
-const total = performance.now() - start - network;
-console.log(`${(total / steps).toFixed(2)} ms a step in all, of which about ${(network / steps).toFixed(2)} ms the network (timed once more apart); a step is ${model.world.dt * 1000} ms of driving`);
+const total = (performance.now() - start) / steps;
+const twin = new Racer(model, new Track(points, model.world));
+const before = performance.now();
+for (const x of inputs) twin.network.step(x);
+const network = (performance.now() - before) / steps;
+console.log(`${total.toFixed(2)} ms a step in all, ${network.toFixed(2)} ms of it the network's; a step is ${model.world.dt * 1000} ms of driving`);

@@ -40,11 +40,12 @@ and 2b's results stay in `results/phase2.json` and `results/phase2b.json` on the
 
 ## Why the first published racer was weak
 
-The racer on the site was sweep 2's seed 1 until Phase 0b; it is now Phase 0b's seed 1, the seed whose
-parameters drove farthest on their held-out tracks (`site/public/racer/`). On the evaluation's 200 tracks
-it finished every one in a median lap of 9.5 s, never left the road, and on the harder sets finished
-100, 100, 100 and 99.5% by bend, its one failure of 800 on a bend tighter than a metre. What follows is
-about the first.
+The racer on the site was sweep 2's seed 1, then Phase 0b's seed 1 (a median lap of 9.5 s, every one of
+the 200 tracks, 100, 100, 100 and 99.5% of the harder sets by bend). It is now Phase 2's run 7, arm A at
+seed 2, the spiking convolutional network whose parameters drove farthest on their held-out tracks of
+the five A seeds (`site/public/racer/`): every one of the 200 tracks in a median lap of 9.85 s, never off
+the road, and 100, 100, 100 and 99% of the harder sets by bend, its two failures of 800 on bends tighter
+than a metre. What follows is about the first.
 
 Training is unstable. Gradients carried back through 150 steps of car, camera and network explode.
 Sweep 2 (`results/sweep2.json`) ran four configurations: seeds 1 and 2 of the first recipe, seed 1

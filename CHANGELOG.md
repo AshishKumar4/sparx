@@ -19,8 +19,9 @@ Fixes and additions from GitHub issues #1 to #5, on the same dependencies as
 - `nir.to_nir` exports any model that states itself as a sequential stack
   (`nir.Sequentialized`), and `models.SpikingMLP.as_sequential` does, for a
   network without delays or batch norm (#4). Export refuses a weight layer
-  that holds or computes in other than float32, and recurrence around other
-  than LIF, which NIR cannot state.
+  that holds or computes in other than float32, which NIR's weights cannot
+  state, and recurrence around other than LIF, which sparx reads back only
+  around LIF.
 - NIR carries time constants learned per feature (`learn_tau=True`) both
   ways: they export as per-neuron `tau`, and a node whose `tau` differs
   between channels imports as a learned decay, trainable as before (#5).
