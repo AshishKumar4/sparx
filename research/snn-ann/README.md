@@ -21,15 +21,18 @@ CUDA command buffers on (its default), and `results/latency-rtx4080-no-command-b
 
 | Arm | Units active a step | One step, median | One step, 99th percentile | Per step in a stream |
 | --- | --- | --- | --- | --- |
-| A, spiking | 9.0% | 0.40 ms | 0.76 ms | 0.029 ms |
-| B, graded, events | 45.5% | 0.40 ms | 0.77 ms | 0.028 ms |
-| sigma-delta | 7.7% | 0.43 ms | 0.85 ms | 0.028 ms |
-| dendritic | 11.2% | 0.42 ms | 0.87 ms | 0.031 ms |
+| A, spiking | 9.0% | 0.53 / 0.39 ms | 3.52 / 0.75 ms | 0.028 / 0.032 ms |
+| B, graded, events | 45.5% | 0.41 / 0.39 ms | 1.85 / 0.83 ms | 0.027 / 0.034 ms |
+| sigma-delta | 7.7% | 0.41 / 0.57 ms | 0.86 / 1.30 ms | 0.029 / 0.033 ms |
+| dendritic | 11.2% | 0.41 / 0.53 ms | 0.81 / 1.09 ms | 0.031 / 0.034 ms |
 
-Every arm takes the same time. A step called alone costs 0.40 to 0.43 ms, which is the cost of
-dispatching a compiled function from Python and reading its readout back, not of its 1.46 million
-multiply-adds: in a stream the same step takes 0.03 ms. Command buffers off moved each median by at
-most 0.03 ms and each 99th percentile by at most 0.09 ms. As XLA computes these networks, the spiking arm's sparsity buys no latency on this GPU.
+Each cell gives command buffers on, then off. Every arm takes about the same time. A step called alone
+costs 0.39 to 0.57 ms, which is the cost of dispatching a compiled function from Python and reading its
+readout back, not of its 1.46 million multiply-adds: in a stream the same step takes 0.027 to 0.034 ms.
+The two runs of each arm differ by up to 0.17 ms in their medians and 2.8 ms in their 99th percentiles,
+in both directions, so command buffers make no measurable difference here; the spread is the host's,
+shared with other jobs. As XLA computes these networks, the spiking arm's sparsity buys no latency on this
+GPU.
 
 ## Next
 
