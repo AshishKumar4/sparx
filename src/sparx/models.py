@@ -50,7 +50,7 @@ a declaration in every model in the process.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import flax.linen as nn
 import jax
@@ -60,6 +60,9 @@ from flax.typing import Dtype, PrecisionLike
 
 from sparx.nn.delays import DelayedDense
 from sparx.nn.neurons import LI, LIF, Neuron, Recurrent, adopt
+
+if TYPE_CHECKING:
+    from sparx.nir import LayerParams, StackVariables
 
 __all__ = ["SEWBlock", "SEWResNet", "SpikingMLP", "connect", "sew_resnet18", "sew_resnet34"]
 
@@ -281,6 +284,39 @@ class SpikingMLP(nn.Module):
         # The layers are numbered, so their axes are declared once the hidden layers are known, as the
         # model is built: before a checkpoint is restored onto a mesh, which reads them.
         logical_axes(_mlp_axes(len(self.hidden)))(SpikingMLP)
+
+    def as_sequential(self, variables: StackVariables) -> tuple[nn.Sequential, StackVariables]:
+        """This network as an `nn.Sequential` of its layers, with `variables`' parameters renamed to
+        match (`layers_k`), as it runs at inference (`train=False`) on flat inputs `[T, B, F]`: each hidden
+        layer a `Dense` and a copy of `neuron` (or a `Recurrent` around it), then the readout's `Dense`
+        and `LI`. Dropout is the identity at inference and is left out. `sparx.nir.to_nir` exports a
+        `SpikingMLP` through it. Delayed synapses and batch norm have no layer there and are refused.
+        """
+        if any(self.max_delays()):
+            raise NotImplementedError("a delayed synapse (DelayedDense) has no layer in a sequential stack")
+        if self.batch_norm:
+            raise NotImplementedError("batch norm has no layer in a sequential stack: fold it into the "
+                                      "synapses first")
+        params = variables.get("params", {})
+        numerics = {"dtype": self.dtype, "param_dtype": self.param_dtype, "precision": self.precision}
+        layers: list[nn.Module] = []
+        renamed: dict[str, LayerParams] = {}
+
+        def add(layer: nn.Module, name: str) -> None:
+            if name in params:
+                renamed[f"layers_{len(layers)}"] = params[name]
+            layers.append(layer)
+
+        for layer, width in enumerate(self.hidden):
+            add(nn.Dense(width, use_bias=self.use_bias, **numerics), f"dense_{layer}")
+            if self.recurrent:
+                add(Recurrent(neuron=self.neuron.clone(parent=None), precision=self.precision),
+                    f"recurrent_{layer}")
+            else:
+                add(self.neuron.clone(parent=None), f"neuron_{layer}")
+        add(nn.Dense(self.classes, use_bias=self.use_bias, **numerics), "readout")
+        add(LI(tau=self.readout_tau, learn_tau=self.learn_readout_tau, dt=self.neuron.dt), "integrator")
+        return nn.Sequential(layers), {"params": renamed}
 
     def max_delays(self) -> tuple[int, ...]:
         """Each synapse's largest delay, hidden layers then the readout; 0 for a dense synapse."""

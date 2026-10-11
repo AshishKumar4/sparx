@@ -14,8 +14,9 @@ time was discretized:
   which snnTorch's NIR import and export assume at `dt = 1e-4` s.
 
 `r` is folded into the preceding weight layer on import. NIR times are in
-seconds. Supported: `nn.Sequential` stacks of these layers, with anything
-else refused:
+seconds. Supported: `nn.Sequential` stacks of these layers, and a model that
+states itself as one (`Sequentialized`, as `sparx.models.SpikingMLP` does),
+with anything else refused:
 
 - `flax.linen.Dense`, as NIR `Affine` (or `Linear` on import);
 - `flax.linen.Conv` with a 2-d kernel, as `Conv2d`;
@@ -76,7 +77,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 import flax.linen as nn
 import jax
@@ -89,7 +90,7 @@ from sparx.nn import IF, LI, LIF, Flatten, Flattens, Modelled, Recurrent
 if TYPE_CHECKING:
     import nir
 
-__all__ = ["from_nir", "to_nir"]
+__all__ = ["Sequentialized", "from_nir", "to_nir"]
 
 Discretization = Literal["exact", "euler"]
 type LayerParams = Mapping[str, jax.Array | np.ndarray]
@@ -98,6 +99,16 @@ type StackVariables = Mapping[str, Mapping[str, LayerParams]]
 """A sequential stack's variables, `{"params": {"layers_k": {...}}}`."""
 type Pair = tuple[int, int]
 type Edges = list[tuple[str, str]]
+
+
+@runtime_checkable
+class Sequentialized(Protocol):
+    """A model that states itself as an `nn.Sequential` of the layers above, with its variables renamed
+    to match, as it runs at inference: `sparx.models.SpikingMLP`. `to_nir` exports it through that
+    stack."""
+
+    def as_sequential(self, variables: StackVariables) -> tuple[nn.Sequential, StackVariables]: ...
+
 type Imported = dict[str, np.ndarray | dict[str, np.ndarray]]
 """One imported layer's parameters: a weight layer's arrays, or a recurrent layer's, its neuron's nested."""
 
@@ -311,10 +322,11 @@ def _own_params(layer: nn.Module, params: Mapping[str, LayerParams], k: int,
     return {}
 
 
-def to_nir(model: nn.Sequential, variables: StackVariables, *, dt: float,
+def to_nir(model: nn.Sequential | Sequentialized, variables: StackVariables, *, dt: float,
            discretization: Discretization = "exact",
            input_shape: Sequence[int] | None = None) -> nir.NIRGraph:
-    """The NIR graph of a sequential stack of the layers above, at step `dt` seconds.
+    """The NIR graph of a sequential stack of the layers above, or of a model that states itself as one
+    (`Sequentialized`), at step `dt` seconds.
 
     `input_shape` is one example's input shape in sparx's layout, `(H, W, C)`
     for images; a stack that starts with a `Dense` layer has it from the
@@ -323,6 +335,11 @@ def to_nir(model: nn.Sequential, variables: StackVariables, *, dt: float,
     """
     import nir
 
+    if not isinstance(model, nn.Sequential):
+        if not isinstance(model, Sequentialized):
+            raise NotImplementedError(f"cannot export a {type(model).__name__}: to_nir takes an "
+                                      f"nn.Sequential or a model with as_sequential")
+        model, variables = model.as_sequential(variables)
     params = variables.get("params", {})
     shape = _first_shape(model, params, input_shape)
     nodes: dict[str, nir.NIRNode] = {"input": nir.Input(input_type={"input": np.array(_to_nir_shape(shape))})}

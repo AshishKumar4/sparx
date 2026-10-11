@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from sparx.dynamics import LIFCell, decay
+from sparx.models import SpikingMLP
 from sparx.nir import from_nir, to_nir
 from sparx.nn import IF, LI, LIF, Flatten, Neuron, Recurrent
 
@@ -321,6 +322,34 @@ def test_a_tau_that_differs_within_a_channel_or_leaves_its_domain_is_refused():
     node.tau = np.asarray([0.003, 0.0005])
     with pytest.raises(NotImplementedError, match="above"):
         from_nir(graph, dt=1e-3, discretization="euler")
+
+
+@pytest.mark.parametrize("recurrent", [False, True])
+def test_a_spiking_mlp_exports_as_the_stack_it_states(recurrent):
+    # The stack SpikingMLP states runs as the model does at inference, dropout and all, and its graph
+    # comes back from NIR to the same outputs.
+    model = SpikingMLP(hidden=(8, 6), classes=3, neuron=LIF(tau=5.0, reset="zero", learn_tau=True),
+                       recurrent=recurrent, dropout=0.3, readout_tau=4.0, learn_readout_tau=True)
+    x = jnp.asarray(np.random.default_rng(4).random((30, 2, 10)), jnp.float32)
+    variables = unequal_decays(jax.tree.map(lambda w: 2 * w, model.init(jax.random.key(0), x)),
+                               np.random.default_rng(5))
+    expected = np.asarray(model.apply(variables, x))
+    stack, stack_variables = model.as_sequential(variables)
+    np.testing.assert_array_equal(np.asarray(stack.apply(stack_variables, x)), expected)
+    graph = to_nir(model, variables, dt=1e-3)
+    assert ("1.w_rec" in graph.nodes) == recurrent
+    back, back_variables = from_nir(graph, dt=1e-3)
+    np.testing.assert_allclose(np.asarray(back.apply(back_variables, x)), expected, rtol=2e-5, atol=2e-5)
+    assert np.abs(expected).max() > 0.1
+
+
+@pytest.mark.parametrize(("options", "match"), [({"delays": 3}, "delayed"),
+                                                ({"batch_norm": True}, "batch norm")])
+def test_a_spiking_mlp_with_layers_nir_cannot_state_is_refused(options, match):
+    model = SpikingMLP(hidden=(4,), classes=2, neuron=LIF(reset="zero"), **options)
+    variables = model.init(jax.random.key(0), jnp.zeros((6, 1, 5)))
+    with pytest.raises(NotImplementedError, match=match):
+        to_nir(model, variables, dt=1e-3)
 
 
 def test_unsupported_layers_are_refused():
