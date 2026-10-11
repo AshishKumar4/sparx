@@ -242,10 +242,12 @@ class Vision(nn.Module):
             return Graded(tau=self.tau, name=name)
         if self.neuron == "sigma-delta":
             return SigmaDelta(tau=self.tau, threshold=self.delta, name=name)
+        if self.neuron == "homeostatic":
+            if self.bits > 1:
+                raise ValueError("homeostatic units send binary spikes; leave bits at 1")
+            return Homeostatic(LIF(tau=self.tau, reset="zero"), target=self.target, name=name)
         if self.bits > 1:
             return FewBit(tau=self.tau, bits=self.bits, name=name)
-        if self.neuron == "homeostatic":
-            return Homeostatic(LIF(tau=self.tau, reset="zero"), target=self.target, name=name)
         return LIF(tau=self.tau, reset="zero", name=name)
 
     @nn.compact
