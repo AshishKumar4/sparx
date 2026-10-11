@@ -27,7 +27,7 @@ for (const name of ['lif-events', 'relu-frames']) {
 			}
 			console.log(`${name}, lap ${k}: ${active} unit outputs matched; the car within ${car.toExponential(1)}`);
 			expect(active).toBeGreaterThan(0);
-			expect(car).toBeLessThan(1e-9);
+			expect(car).toBeLessThan(5e-15);
 		});
 	}
 }

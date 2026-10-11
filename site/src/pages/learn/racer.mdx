@@ -96,7 +96,7 @@ No track failed and the car never left the road, so here is its slowest lap:
 	its first lap in {evaluation.worst.lap_time.toFixed(1)} s and spent {(evaluation.worst.off_road * 100).toFixed(1)}% of its 30 s off the road.
 </RacerTrack>
 
-The browser drives the same network from the same weights, in double precision, with the same operations in the same order. Its test holds two drives of 10 s, on two unseen tracks, to sparx's own float64 run: every event and every spike at the same step, and the car's path within $10^{-9}$ m.
+The browser drives the same network from the same weights, in double precision, with the same operations in the same order. Its test holds two drives of 10 s, on two unseen tracks, to sparx's own float64 run: every event and every spike at the same step, the car's path within $5 \times 10^{-14}$ m and its readouts within $10^{-15}$ of their size. The two drives measured $9.8 \times 10^{-15}$ and $2.2 \times 10^{-14}$ m.
 
 ## Do the spikes matter?
 

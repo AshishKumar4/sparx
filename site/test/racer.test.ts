@@ -42,7 +42,8 @@ for (const [k, lap] of recorded.laps.entries()) {
 		const rmsRelative = Math.sqrt(squares / norm);
 		console.log(`lap ${k}: ${events} events and ${spikes} spikes matched; the car within ${car.toExponential(1)}; ` +
 			`readouts ${maxRelative.toExponential(1)} max-relative, ${rmsRelative.toExponential(1)} RMS-relative`);
-		expect(car).toBeLessThan(1e-9);
-		expect(maxRelative).toBeLessThan(1e-9);
-	});
+		expect(car).toBeLessThan(5e-14);
+		expect(maxRelative).toBeLessThan(1e-15);
+		// A step of the published network's 64 x 32 camera takes about 10 ms on a CI runner's core.
+	}, 60_000);
 }
