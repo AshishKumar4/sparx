@@ -219,6 +219,13 @@ What the comparison says:
   measure of driving, and trained the most stably of all, with a median gradient norm of 0.1 at four seeds
   of five.
 
+A homeostatic arm trained afterwards (`configs/phase2-homeostatic.json`, `results/phase2-homeostatic.json`):
+A's network with each neuron's threshold drifting toward 3% of steps (`sparx.nn.Homeostatic`, the default
+rate η = 0.001 a spike). It drove as A did, every track at every seed, laps of 9.8 ± 0.2 s, 95.9 ± 3.2% at
+bend 1.8 and a 20 ms response, and it did not change the network's activity: 1,157 ± 173 units sent a
+step, 9.3% of them, against A's 1,161 ± 78. At η = 0.001 and about 9% of steps firing, a threshold rises by
+about 0.1 over a 30 s drive, too little to bring the rate toward 3%.
+
 Five seeds an arm make these coarse: an arm's deviation is often larger than the difference between two
 arms, and only the few-bit arms' failures and the latency gap stand clear of it.
 

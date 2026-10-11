@@ -21,6 +21,7 @@ NAMES = {
     ("lif", 4, "events"): "spikes of 4 bits",
     ("sigma-delta", 1, "events"): "sigma-delta",
     ("dendritic", 1, "events"): "dendritic",
+    ("homeostatic", 1, "events"): "homeostatic",
 }
 """Each arm's name by its units, the bits its spikes carry, and what it sees."""
 
