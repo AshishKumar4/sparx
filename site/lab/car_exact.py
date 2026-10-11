@@ -4,7 +4,8 @@ The car's update (`drive` in site/lab/racer.py, `Racer.step` in src/engines/race
 mpmath at 60 digits, and beside it, by running error analysis, a budget for each result: every basic
 operation may round by half a unit in the last place of its result, every transcendental (tanh, exp, tan,
 cos, sin) by `TRANSCENDENTAL` units, and errors already in an operation's inputs pass through it by its
-derivative. The readouts enter with the error the parity tests allow them, 1e-15 of their largest size.
+derivative. The readouts enter with the error the parity tests allow them (`READOUT_LIMIT` in
+test/parity.ts, which the drives file carries), relative to their largest size.
 
 For each fixture drive and each implementation, every step is redone exactly from the state that
 implementation held, on sparx's readouts. The difference from the state it then held is that step's
@@ -19,7 +20,7 @@ bound each implementation's distance from the exact car, and their sum bounds th
 sparx at every step, in units in the last place of each of x, y, heading and speed's largest value. The
 script exits 1 if a step's rounding exceeds its budget or the browser's distance exceeds its bound. The
 parity tests (test/racer.test.ts, test/racer-conv.test.ts) hold events and spikes exactly and readouts to
-1e-15; the Site workflow runs this after them:
+that limit; the Site workflow runs this after them:
 
     bun lab/racer-drives.ts drives.json
     uv run --no-project --with mpmath==1.3.0 python lab/car_exact.py test/fixtures drives.json parity.json
@@ -39,8 +40,6 @@ UNIT = mpmath.mpf(2) ** -53
 TRANSCENDENTAL = 4
 """The units in the last place a library's tanh, exp, tan, cos or sin may be off by: fdlibm's, which the
 browser uses, promise 1, and XLA's on the CPU are taken to be within 4."""
-READOUT = mpmath.mpf("1e-15")
-"""The readouts' error the parity tests allow, relative to their largest size."""
 
 
 class Value:
@@ -96,17 +95,19 @@ class Car:
 
 
 def drive(car: Car, start: list[float], cars: list[list[float]], readout: list[list[float]],
-          readout_error) -> tuple[list, list[float]]:
-    """Each step's budget, and each component's largest rounding as a share of its budget, at most 1 when
-    every step stayed within it."""
-    budgets, worst, before = [], [0.0] * 4, start
+          readout_error) -> tuple[list, bool, list[float]]:
+    """Each step's budget; whether every step's rounding fit its budget; and, to report, each component's
+    largest rounding as a share of its budget over the steps whose budget is not zero."""
+    budgets, fits, worst, before = [], True, [0.0] * 4, start
     for held, u in zip(cars, readout, strict=True):
         exact = car.step(before, u, readout_error)
-        for i, (h, e) in enumerate(zip(held, exact, strict=True)):
-            worst[i] = max(worst[i], float(abs(mpmath.mpf(h) - e.value) / e.error) if e.error else math.inf)
+        residual = [abs(mpmath.mpf(h) - e.value) for h, e in zip(held, exact, strict=True)]
+        fits &= all(r <= e.error for r, e in zip(residual, exact, strict=True))
+        worst = [max(w, float(r / e.error)) if e.error else w
+                 for w, r, e in zip(worst, residual, exact, strict=True)]
         budgets.append([e.error for e in exact])
         before = held
-    return budgets, worst
+    return budgets, fits, worst
 
 
 def propagate(car: Car, cars: list[list[float]], readout: list[list[float]], budgets: list) -> list:
@@ -143,7 +144,9 @@ def wrong_car(world: dict, start: list[float], readout: list[list[float]]) -> li
 
 
 def main() -> None:
-    fixtures, browser, out = Path(sys.argv[1]), json.loads(Path(sys.argv[2]).read_text()), Path(sys.argv[3])
+    fixtures, out = Path(sys.argv[1]), Path(sys.argv[3])
+    recorded_drives = json.loads(Path(sys.argv[2]).read_text())
+    browser, limit = recorded_drives["drives"], mpmath.mpf(recorded_drives["readout_limit"])
     public = json.loads((Path(__file__).resolve().parents[1] / "public/racer/racer.json").read_text())
     report = {}
     for name, drives in browser.items():
@@ -152,9 +155,10 @@ def main() -> None:
         rows = []
         for lap, mine in zip(recorded["laps"], drives, strict=True):
             scale = [math.ulp(max(abs(c[i]) for c in lap["cars"])) for i in range(4)]
-            readout_error = READOUT * max(abs(v) for step in lap["readout"] for v in step)
-            sparx_budgets, sparx_within = drive(car, lap["start"], lap["cars"], lap["readout"], 0)
-            ours_budgets, ours_within = drive(car, lap["start"], mine["cars"], lap["readout"], readout_error)
+            readout_error = limit * max(abs(v) for step in lap["readout"] for v in step)
+            sparx_budgets, sparx_fits, sparx_shares = drive(car, lap["start"], lap["cars"], lap["readout"], 0)
+            ours_budgets, ours_fits, ours_shares = drive(car, lap["start"], mine["cars"], lap["readout"],
+                                                         readout_error)
             sparx = propagate(car, lap["cars"], lap["readout"], sparx_budgets)
             ours = propagate(car, mine["cars"], lap["readout"], ours_budgets)
             bounds = [[float(s[i] + o[i]) / scale[i] for i in range(4)]
@@ -164,9 +168,9 @@ def main() -> None:
             covered = all(d[i] <= b[i] for d, b in zip(distances, bounds, strict=True) for i in range(4))
             largest = [max(b[i] for b in bounds) for i in range(4)]
             seen = [max(d[i] for d in distances) for i in range(4)]
-            rows.append({"steps": len(lap["cars"]),
-                         "sparx_rounding_of_budget": dict(zip(NAMES, sparx_within, strict=True)),
-                         "browser_rounding_of_budget": dict(zip(NAMES, ours_within, strict=True)),
+            rows.append({"steps": len(lap["cars"]), "fits": sparx_fits and ours_fits,
+                         "sparx_rounding_of_budget": dict(zip(NAMES, sparx_shares, strict=True)),
+                         "browser_rounding_of_budget": dict(zip(NAMES, ours_shares, strict=True)),
                          "bound": dict(zip(NAMES, largest, strict=True)),
                          "observed": dict(zip(NAMES, seen, strict=True)), "covered": covered})
             shown = {k: ({n: round(x, 2) for n, x in v.items()} if isinstance(v, dict) else v)
@@ -175,18 +179,17 @@ def main() -> None:
         report[name] = rows
     world = (recorded.get("model") or public)["world"]
     lap = recorded["laps"][0]
-    _, shares = drive(car, lap["start"], wrong_car(world, lap["start"], lap["readout"]), lap["readout"], 0)
-    caught = max(shares) > 1
+    wrong = wrong_car(world, lap["start"], lap["readout"])
+    _, fits, shares = drive(car, lap["start"], wrong, lap["readout"], 0)
+    caught = not fits
     report["wrong_car_caught"] = caught
-    print("a car with its speed's time constant off by 1e-12 is caught:", caught, round(max(shares), 1),
-          flush=True)
+    print("a car with its speed's time constant off by 1e-12 is caught:", caught,
+          {n: round(x, 1) for n, x in zip(NAMES, shares, strict=True)}, flush=True)
     out.write_text(json.dumps(report, indent=1) + "\n")
     if not caught:
         sys.exit("the budgets did not catch a wrong car")
-    fits = all(max(row[k].values()) <= 1 and row["covered"] for name, rows in report.items()
-               if name != "wrong_car_caught" for row in rows
-               for k in ("sparx_rounding_of_budget", "browser_rounding_of_budget"))
-    if not fits:
+    if not all(row["fits"] and row["covered"] for name, rows in report.items() if name != "wrong_car_caught"
+               for row in rows):
         sys.exit("a step's rounding exceeded its budget, or the browser's car left its bound")
 
 

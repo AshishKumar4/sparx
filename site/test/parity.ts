@@ -1,6 +1,10 @@
 // What the racer's parity tests measure against sparx's float64 runs, step by step: the readout membranes'
 // largest and RMS difference relative to their own size, and the car's largest difference per component
 // in units in the last place of its largest value, which lab/car_exact.py bounds.
+/** How far the browser's readouts may be from sparx's, relative to their largest size: the parity tests
+ * hold them to it, and lab/car_exact.py budgets the car's rounding with it. */
+export const READOUT_LIMIT = 1e-15;
+
 export class Distance {
 	private worst = 0;
 	private scale = 0;

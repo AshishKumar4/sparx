@@ -1,9 +1,9 @@
 // The browser's convolutional racer against sparx: a small spiking network on events at its random start,
 // with its laps recorded in float64 (site/lab/racer.py fixture). Every
-// event and every unit's output must match, the readouts to 1e-15 of their size, and the car's path to rounding.
+// event and every unit's output must match, the readouts to READOUT_LIMIT of their size, and the car's path to rounding.
 import { expect, test } from 'bun:test';
 import { Racer, type RacerModel, Track } from '../src/engines/racer';
-import { Distance } from './parity';
+import { Distance, READOUT_LIMIT } from './parity';
 
 interface Recorded {
 	model: RacerModel;
@@ -30,7 +30,7 @@ for (const name of ['lif-events']) {
 			// tests; here it is reported.
 			console.log(`${name}, lap ${k}: ${active} unit outputs matched; readouts ${distance.readoutMaxRelative.toExponential(1)} ` +
 				`max-relative; the car within ${distance.carUlps.toFixed(1)} units in the last place`);
-			expect(distance.readoutMaxRelative).toBeLessThan(1e-15);
+			expect(distance.readoutMaxRelative).toBeLessThan(READOUT_LIMIT);
 			expect(active).toBeGreaterThan(0);
 		});
 	}

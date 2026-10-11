@@ -2,7 +2,7 @@
 // (site/lab/racer.py record). Every event and every spike must match, and the car's path to rounding.
 import { expect, test } from 'bun:test';
 import { Racer, type RacerModel, Track } from '../src/engines/racer';
-import { Distance } from './parity';
+import { Distance, READOUT_LIMIT } from './parity';
 
 const model: RacerModel = await Bun.file(new URL('../public/racer/racer.json', import.meta.url)).json();
 const recorded: {
@@ -30,7 +30,7 @@ for (const [k, lap] of recorded.laps.entries()) {
 		// tests; here it is reported.
 		console.log(`lap ${k}: ${events} events and ${spikes} spikes matched; readouts ${distance.readoutMaxRelative.toExponential(1)} ` +
 			`max-relative, ${distance.readoutRmsRelative.toExponential(1)} RMS-relative; the car within ${distance.carUlps.toFixed(1)} units in the last place`);
-		expect(distance.readoutMaxRelative).toBeLessThan(1e-15);
+		expect(distance.readoutMaxRelative).toBeLessThan(READOUT_LIMIT);
 		// A step of the published network's 64 x 32 camera takes about 10 ms on a CI runner's core.
 	}, 60_000);
 }

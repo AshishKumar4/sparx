@@ -1,15 +1,17 @@
 // The browser's own drives of the racer fixtures (test/fixtures/racer*.json): each step's readout membranes
-// and car, written as JSON to the file named, for car_exact.py to hold against an exact car.
+// and car, with the readouts' limit the parity tests hold, written as JSON to the file named, for
+// car_exact.py to hold against an exact car.
 //
 //     bun lab/racer-drives.ts <out.json>
 import { Racer, type RacerModel, Track } from '../src/engines/racer';
+import { READOUT_LIMIT } from '../test/parity';
 
 const fixtures = new URL('../test/fixtures/', import.meta.url);
-const out: Record<string, { readout: number[][]; cars: number[][] }[]> = {};
+const drives: Record<string, { readout: number[][]; cars: number[][] }[]> = {};
 for (const name of ['racer', 'racer-conv-lif-events']) {
 	const recorded = await Bun.file(new URL(`${name}.json`, fixtures)).json();
 	const model: RacerModel = recorded.model ?? (await Bun.file(new URL('../public/racer/racer.json', import.meta.url)).json());
-	out[name] = recorded.laps.map((lap: { points: number[][]; start: number[]; cars: number[][] }) => {
+	drives[name] = recorded.laps.map((lap: { points: number[][]; start: number[]; cars: number[][] }) => {
 		const racer = new Racer(model, new Track(lap.points, model.world));
 		racer.reset(lap.start);
 		const readout: number[][] = [];
@@ -22,4 +24,4 @@ for (const name of ['racer', 'racer-conv-lif-events']) {
 		return { readout, cars };
 	});
 }
-await Bun.write(process.argv[2], JSON.stringify(out));
+await Bun.write(process.argv[2], JSON.stringify({ readout_limit: READOUT_LIMIT, drives }));
