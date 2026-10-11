@@ -11,11 +11,13 @@ way. A first-order propagation of those per-step errors through the car's dynami
     b_x <- b_x + dt (|cos psi| b_v + v |sin psi| b_psi) + e_x, and b_y likewise,
 
 bounds each implementation's distance from the exact car, and their sum bounds the browser's distance from
-sparx. The parity tests (test/racer.test.ts, test/racer-conv.test.ts) read the bounds this writes, and hold
-the browser's distance to them, in units in the last place of each of x, y, heading and speed's largest
-value over the drive.
+sparx. This is where the browser's car is held to sparx's: every step's distance must be within that
+step's bound, in units in the last place of each of x, y, heading and speed's largest value over the
+drive. It exits 1 if any is not. The parity tests (test/racer.test.ts, test/racer-conv.test.ts) hold
+events, spikes and readouts exactly or to 1e-15, and the Site workflow runs this after them:
 
-    python car_exact.py <fixtures dir> <browser drives.json> <out.json>    (with mpmath)
+    bun lab/racer-drives.ts drives.json
+    uv run --no-project --with mpmath==1.3.0 python lab/car_exact.py test/fixtures drives.json parity.json
 """
 
 import json
@@ -84,7 +86,7 @@ def propagate(car: Car, cars: list[list[float]], readout: list[list[float]], err
 
 def main() -> None:
     fixtures, browser, out = Path(sys.argv[1]), json.loads(Path(sys.argv[2]).read_text()), Path(sys.argv[3])
-    public = json.loads((Path(__file__).resolve().parents[2] / "public/racer/racer.json").read_text())
+    public = json.loads((Path(__file__).resolve().parents[1] / "public/racer/racer.json").read_text())
     report = {}
     for name, drives in browser.items():
         recorded = json.loads((fixtures / f"{name}.json").read_text())
@@ -113,6 +115,8 @@ def main() -> None:
             print(name, json.dumps(shown), flush=True)
         report[name] = rows
     out.write_text(json.dumps(report, indent=1) + "\n")
+    if not all(row["covered"] for rows in report.values() for row in rows):
+        sys.exit("the browser's car left its rounding bound")
 
 
 if __name__ == "__main__":

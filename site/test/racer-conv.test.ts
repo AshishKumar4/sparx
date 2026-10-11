@@ -9,15 +9,6 @@ interface Recorded {
 	laps: { points: number[][]; start: number[]; cars: number[][]; events: number[][]; spikes: number[][] }[];
 }
 
-// Each fixture's bound on the car, in units in the last place of each component's largest magnitude. The
-// reference is sparx's float64 run on the same machine. Events and spikes match exactly; the car's numbers
-// cannot, since the browser's transcendentals (V8's fdlibm) and XLA's on the CPU round differently in the
-// last bits, and that divergence is what each bound admits. On the spiking fixture the browser measured
-// 0.3 and 1.0 on armada and on CI's runner alike. On the graded one, sparx's own float64 run differs by up
-// to 14.5 between those two machines (site/lab/probes/references.py), and the browser measured up to 9.5
-// against armada's and 24.0 against the runner's.
-const BOUND: Record<string, number> = { 'lif-events': 2, 'relu-frames': 32 };
-
 for (const name of ['lif-events', 'relu-frames']) {
 	const recorded: Recorded = await Bun.file(new URL(`fixtures/racer-conv-${name}.json`, import.meta.url)).json();
 	for (const [k, lap] of recorded.laps.entries()) {
@@ -25,6 +16,8 @@ for (const name of ['lif-events', 'relu-frames']) {
 			const racer = new Racer(recorded.model, new Track(lap.points, recorded.model.world));
 			racer.reset(lap.start);
 			let car = 0;
+			// The car's numbers are held to the bound their rounding can produce by lab/car_exact.py, which the
+			// Site workflow runs after these tests; here they are reported.
 			// The car's x, y, heading and speed: each one's largest error over the drive, in units in the last place
 			// of the largest value it takes.
 			const error = [0, 0, 0, 0];
@@ -44,7 +37,6 @@ for (const name of ['lif-events', 'relu-frames']) {
 			car = Math.max(...error.map((e, i) => e / ulp(size[i])));
 			console.log(`${name}, lap ${k}: ${active} unit outputs matched; the car within ${car.toFixed(1)} units in the last place`);
 			expect(active).toBeGreaterThan(0);
-			expect(car).toBeLessThan(BOUND[name]);
 		});
 	}
 }

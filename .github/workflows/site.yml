@@ -70,8 +70,13 @@ jobs:
     - name: The browser's engines against them
       working-directory: site
       run: bun test test/
-    # sparx's float64 racer runs from this runner, to measure how far they move between machines
-    # (site/lab/probes/references.py).
+    - name: The browser's car within its rounding bound
+      working-directory: site
+      run: |
+        bun lab/racer-drives.ts /tmp/drives.json
+        uv run --no-project --with mpmath==1.3.0 python lab/car_exact.py test/fixtures /tmp/drives.json \
+          test/fixtures/racer-parity.json
+    # sparx's float64 racer runs from this runner and the browser's rounding bound against them.
     - uses: actions/upload-artifact@v4
       if: always()
       with:

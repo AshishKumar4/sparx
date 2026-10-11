@@ -96,7 +96,7 @@ No track failed and the car never left the road, so here is its slowest lap:
 	its first lap in {evaluation.worst.lap_time.toFixed(1)} s and spent {(evaluation.worst.off_road * 100).toFixed(1)}% of its 30 s off the road.
 </RacerTrack>
 
-The browser drives the same network from the same weights, in double precision, with the same operations in the same order. Its test holds two drives of 10 s, on two unseen tracks, to sparx's own float64 run: every event and every spike at the same step, its position, heading and speed each within 16 units in the last place of their largest value, and its readouts within $10^{-15}$ of their size. The two drives measured 5.5 and 12.2 units in the last place, about $2 \times 10^{-14}$ m, and readouts within $1.2 \times 10^{-16}$.
+The browser drives the same network from the same weights, in double precision, with the same operations in the same order. Its test holds two drives of 10 s, on two unseen tracks, to sparx's own float64 run: every event and every spike at the same step, its readouts within $10^{-15}$ of their size, and its position, heading and speed, at every step, within what the two implementations' own rounding can explain: each step of the car is redone exactly from the state each implementation held, and those per-step errors, carried through the car's motion, bound the distance between them. Over the two drives that bound grows to 1,920 units in the last place of the largest coordinate; the distance measured is at most 12.2, about $2 \times 10^{-14}$ m.
 
 ## Do the spikes matter?
 
