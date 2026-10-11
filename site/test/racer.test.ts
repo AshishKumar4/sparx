@@ -13,6 +13,10 @@ for (const [k, lap] of recorded.laps.entries()) {
 		const racer = new Racer(model, new Track(lap.points, model.world));
 		racer.reset(lap.start);
 		let car = 0;
+		// The car's x, y, heading and speed: each one's largest error over the drive, in units in the last place
+		// of the largest value it takes.
+		const error = [0, 0, 0, 0];
+		const size = [0, 0, 0, 0];
 		let events = 0;
 		let spikes = 0;
 		// The readout membranes against sparx's: the largest difference and the RMS difference, each relative
@@ -27,7 +31,10 @@ for (const [k, lap] of recorded.laps.entries()) {
 			expect(fired).toEqual(lap.events[t]);
 			const spiked = [...racer.network.spikes.keys()].filter((i) => racer.network.spikes[i]);
 			expect(spiked).toEqual(lap.spikes[t]);
-			for (let i = 0; i < 4; i++) car = Math.max(car, Math.abs(racer.car[i] - lap.cars[t][i]));
+			for (let i = 0; i < 4; i++) {
+				error[i] = Math.max(error[i], Math.abs(racer.car[i] - lap.cars[t][i]));
+				size[i] = Math.max(size[i], Math.abs(lap.cars[t][i]));
+			}
 			for (let i = 0; i < 2; i++) {
 				const d = racer.network.readout[i] - lap.readout[t][i];
 				worst = Math.max(worst, Math.abs(d));
@@ -40,10 +47,19 @@ for (const [k, lap] of recorded.laps.entries()) {
 		}
 		const maxRelative = worst / scale;
 		const rmsRelative = Math.sqrt(squares / norm);
-		console.log(`lap ${k}: ${events} events and ${spikes} spikes matched; the car within ${car.toExponential(1)}; ` +
+		car = Math.max(...error.map((e, i) => e / ulp(size[i])));
+		console.log(`lap ${k}: ${events} events and ${spikes} spikes matched; the car within ${car.toFixed(1)} units in the last place; ` +
 			`readouts ${maxRelative.toExponential(1)} max-relative, ${rmsRelative.toExponential(1)} RMS-relative`);
-		expect(car).toBeLessThan(5e-14);
+		// sparx's float64 run itself moves by tens of units in the last place between machines (XLA's CPU
+		// transcendentals differ by instruction set): measured 0.3 to 12.2 on armada, 0.3 to 24.0 on CI's runner.
+		expect(car).toBeLessThan(32);
 		expect(maxRelative).toBeLessThan(1e-15);
 		// A step of the published network's 64 x 32 camera takes about 10 ms on a CI runner's core.
 	}, 60_000);
+}
+
+/** The spacing of float64 numbers at `x`'s magnitude: one unit in the last place. */
+function ulp(x: number): number {
+	const a = Math.abs(x);
+	return a < 2 ** -1022 ? 2 ** -1074 : 2 ** (Math.floor(Math.log2(a)) - 52);
 }
