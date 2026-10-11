@@ -21,7 +21,7 @@ export interface VisionModel {
 	params: Record<string, { shape: number[]; data: string }>;
 }
 
-interface Conv {
+export interface Conv {
 	kernel: Float64Array;
 	bias: Float64Array;
 	size: number;
@@ -67,7 +67,8 @@ export class Vision {
 	/** Units silenced by the reader: they neither fire nor hold a charge. */
 	readonly silenced: Uint8Array;
 	readonly readout: Float64Array;
-	private readonly convs: Conv[] = [];
+	/** The convolutions, in order. */
+	readonly convs: Conv[] = [];
 	private readonly hidden: Dense;
 	private readonly output: Dense;
 	private readonly units: Units[] = [];
@@ -143,7 +144,7 @@ export class Vision {
 		let x: Float64Array = this.image;
 		for (const [k, conv] of this.convs.entries()) {
 			const units = this.units[k];
-			this.convolve(conv, x, units.out);
+			convolve(conv, x, units.out);
 			this.fire(units, units.out);
 			x = units.out;
 		}
@@ -155,33 +156,6 @@ export class Vision {
 		dense(this.output, hidden.out, this.drive);
 		for (let j = 0; j < this.readout.length; j++) this.readout[j] = this.readoutDecay * this.readout[j] + this.drive[j];
 		return this.readout;
-	}
-
-	/** The convolution of `x` into `into`, read from the inputs that are not zero: each input adds its part
-	 * to the outputs whose windows cover it. An output's terms arrive in the order of its taps, rows, then
-	 * columns, then channels, so the sum is the one a sum over its window gives, a zero adding nothing. */
-	private convolve(conv: Conv, x: Float64Array, into: Float64Array): void {
-		const { kernel, bias, size, rows, columns, channels, outRows, outColumns, features, top, left } = conv;
-		into.fill(0);
-		for (let r = 0; r < rows; r++)
-			for (let c = 0; c < columns; c++)
-				for (let ch = 0; ch < channels; ch++) {
-					const v = x[(r * columns + c) * channels + ch];
-					if (v === 0) continue;
-					// Output row i takes input row r through tap di = r + top - 2i.
-					for (let di = (r + top) % 2; di < size; di += 2) {
-						const i = (r + top - di) / 2;
-						if (i < 0 || i >= outRows) continue;
-						for (let dj = (c + left) % 2; dj < size; dj += 2) {
-							const j = (c + left - dj) / 2;
-							if (j < 0 || j >= outColumns) continue;
-							const out = (i * outColumns + j) * features;
-							const tap = ((di * size + dj) * channels + ch) * features;
-							for (let f = 0; f < features; f++) into[out + f] += v * kernel[tap + f];
-						}
-					}
-				}
-		for (let o = 0; o < into.length; o += features) for (let f = 0; f < features; f++) into[o + f] += bias[f];
 	}
 
 	/** Each unit's membrane takes in `drive` (which it overwrites with the units' outputs): a LIF neuron sums
@@ -206,3 +180,31 @@ export class Vision {
 		}
 	}
 }
+
+/** The convolution of `x` into `into`, read from the inputs that are not zero: each input adds its part
+ * to the outputs whose windows cover it. An output's terms arrive in the order of its taps, rows, then
+ * columns, then channels, so the sum is the one a sum over its window gives, a zero adding nothing. */
+export function convolve(conv: Conv, x: Float64Array, into: Float64Array): void {
+	const { kernel, bias, size, rows, columns, channels, outRows, outColumns, features, top, left } = conv;
+	into.fill(0);
+	for (let r = 0; r < rows; r++)
+		for (let c = 0; c < columns; c++)
+			for (let ch = 0; ch < channels; ch++) {
+				const v = x[(r * columns + c) * channels + ch];
+				if (v === 0) continue;
+				// Output row i takes input row r through tap di = r + top - 2i.
+				for (let di = (r + top) % 2; di < size; di += 2) {
+					const i = (r + top - di) / 2;
+					if (i < 0 || i >= outRows) continue;
+					for (let dj = (c + left) % 2; dj < size; dj += 2) {
+						const j = (c + left - dj) / 2;
+						if (j < 0 || j >= outColumns) continue;
+						const out = (i * outColumns + j) * features;
+						const tap = ((di * size + dj) * channels + ch) * features;
+						for (let f = 0; f < features; f++) into[out + f] += v * kernel[tap + f];
+					}
+				}
+			}
+	for (let o = 0; o < into.length; o += features) for (let f = 0; f < features; f++) into[o + f] += bias[f];
+}
+

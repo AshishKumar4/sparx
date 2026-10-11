@@ -15,6 +15,12 @@ for (const [k, lap] of recorded.laps.entries()) {
 		let car = 0;
 		let events = 0;
 		let spikes = 0;
+		// The readout membranes against sparx's: the largest difference and the RMS difference, each relative
+		// to the readouts' own size over the drive.
+		let worst = 0;
+		let squares = 0;
+		let scale = 0;
+		let norm = 0;
 		for (let t = 0; t < lap.cars.length; t++) {
 			racer.step();
 			const fired = [...racer.input.keys()].filter((i) => i < 2 * racer.pixels && racer.input[i]);
@@ -22,10 +28,21 @@ for (const [k, lap] of recorded.laps.entries()) {
 			const spiked = [...racer.network.spikes.keys()].filter((i) => racer.network.spikes[i]);
 			expect(spiked).toEqual(lap.spikes[t]);
 			for (let i = 0; i < 4; i++) car = Math.max(car, Math.abs(racer.car[i] - lap.cars[t][i]));
+			for (let i = 0; i < 2; i++) {
+				const d = racer.network.readout[i] - lap.readout[t][i];
+				worst = Math.max(worst, Math.abs(d));
+				scale = Math.max(scale, Math.abs(lap.readout[t][i]));
+				squares += d * d;
+				norm += lap.readout[t][i] ** 2;
+			}
 			events += fired.length;
 			spikes += spiked.length;
 		}
-		console.log(`lap ${k}: ${events} events and ${spikes} spikes matched; the car within ${car.toExponential(1)}`);
+		const maxRelative = worst / scale;
+		const rmsRelative = Math.sqrt(squares / norm);
+		console.log(`lap ${k}: ${events} events and ${spikes} spikes matched; the car within ${car.toExponential(1)}; ` +
+			`readouts ${maxRelative.toExponential(1)} max-relative, ${rmsRelative.toExponential(1)} RMS-relative`);
 		expect(car).toBeLessThan(1e-9);
+		expect(maxRelative).toBeLessThan(1e-9);
 	});
 }
