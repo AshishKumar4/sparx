@@ -40,6 +40,23 @@ def test_event_binning_opens_a_step_at_each_event_past_the_last_steps_reach():
         bin_events(times, units, steps=4, max_time=0.04, channels=700, binning="edges")  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize("binning", ["grid", "events"])
+def test_events_outside_the_recording_or_its_channels_are_refused(binning):
+    # Before, a time of -0.01 s landed in the last step and channel -1 in the last channel: NumPy wraps
+    # negative indices.
+    bins = {"steps": 10, "max_time": 1.0, "channels": 2, "source_channels": 2, "binning": binning}
+    for times, units, match in [([-0.01], [0], "times"), ([np.nan], [0], "times"), ([np.inf], [0], "times"),
+                                ([0.0], [-1], "channel"), ([0.0], [2], "channel"), ([0.0], [0.5], "channel")]:
+        with pytest.raises(ValueError, match=match):
+            bin_events(np.asarray(times), np.asarray(units), **bins)
+
+
+def test_the_grid_holds_time_zero_up_to_just_before_max_time():
+    out = bin_events(np.asarray([0.0, np.nextafter(1.0, 0.0), 1.0]), np.asarray([0, 1, 1]), steps=10,
+                     max_time=1.0, channels=2, source_channels=2)
+    assert out[0, 0] == 1 and out[9, 1] == 1 and out.sum() == 2  # max_time itself is past the last step
+
+
 def test_channels_must_divide_the_source():
     with pytest.raises(ValueError, match="divide"):
         bin_events(np.zeros(1), np.zeros(1), steps=2, max_time=1.0, channels=300)

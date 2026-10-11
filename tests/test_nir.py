@@ -10,7 +10,7 @@ import pytest
 
 from sparx.dynamics import LIFCell, decay
 from sparx.nir import from_nir, to_nir
-from sparx.nn import LI, LIF, Flatten, Neuron, Recurrent
+from sparx.nn import IF, LI, LIF, Flatten, Neuron, Recurrent
 
 nir = pytest.importorskip("nir")
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -229,6 +229,29 @@ def test_a_layer_exports_as_the_model_it_builds():
     assert type(ours) is type(theirs)
     for field in ("tau", "r", "v_threshold", "v_reset"):
         np.testing.assert_array_equal(getattr(ours, field), getattr(theirs, field))
+
+
+@pytest.mark.parametrize("neuron", [LIF(tau=2.0, reset="zero"), IF(reset="zero"), LI(tau=2.0)])
+def test_a_stack_without_parameters_exports_given_its_input_shape(neuron):
+    # A fixed neuron layer declares no parameters, so its variables hold no "params" collection; the
+    # input's shape is given. Before, to_nir read variables["params"] first and raised KeyError.
+    model = nn.Sequential([neuron])
+    x = jnp.asarray(np.random.default_rng(1).random((12, 3, 2)) * 2, jnp.float32)
+    variables = model.init(jax.random.key(0), x)
+    assert "params" not in variables
+    expected = np.asarray(model.apply(variables, x))
+    for given in (variables, {"params": {}}):
+        graph = to_nir(model, given, dt=1e-3, input_shape=(2,))
+        back, back_variables = from_nir(graph, dt=1e-3)
+        np.testing.assert_allclose(np.asarray(back.apply(back_variables, x)), expected, rtol=1e-6, atol=1e-6)
+    assert np.abs(expected).max() > 0
+
+
+def test_a_weight_layer_without_its_parameters_is_refused_by_name():
+    model = nn.Sequential([nn.Dense(2), LIF(tau=2.0, reset="zero")])
+    for given, input_shape in (({}, (3,)), ({"params": {}}, (3,)), ({}, None)):
+        with pytest.raises(ValueError, match="layer 0, a Dense"):
+            to_nir(model, given, dt=1e-3, input_shape=input_shape)
 
 
 def test_unsupported_layers_are_refused():
