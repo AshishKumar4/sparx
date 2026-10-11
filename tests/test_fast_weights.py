@@ -306,8 +306,9 @@ def test_a_rule_of_ones_own_plugs_into_the_layer():
 
 def test_a_plastic_layer_steps_at_its_neurons_dt():
     x = jnp.zeros((3, 1, 2))
+    assert snn.Recurrent(snn.Rate(tau=0, dt=0.5), rule=snn.DecayingTrace()).dt == 0.5
     with pytest.raises(ValueError, match="give both one dt"):
-        snn.Recurrent(snn.Rate(tau=0, dt=0.5), rule=snn.DecayingTrace()).init(jax.random.key(0), x)
+        snn.Recurrent(snn.Rate(tau=0, dt=0.5), rule=snn.DecayingTrace(), dt=1.0).init(jax.random.key(0), x)
 
 
 # Miconi et al.'s (2018) pattern completion (their simple/simple.py), small:

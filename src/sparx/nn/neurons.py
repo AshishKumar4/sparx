@@ -64,6 +64,7 @@ from .hebbian import HebbianTrace
 __all__ = [
     "ALIF",
     "IF",
+    "INHERITED",
     "LI",
     "LIF",
     "RATES",
@@ -288,7 +289,35 @@ class Synaptic(Neuron):
                       LIFCell(membrane, self.threshold, self.reset, self.surrogate, self.detach_reset))
 
 
-class Homeostatic(Neuron):
+INHERITED = math.nan
+"""A wrapping layer's `dt` left unset (`Recurrent`, `Homeostatic`): it steps at its neuron's `dt`."""
+
+
+class _Wrapping(Neuron):
+    """A layer around another layer's model, `neuron`, stepped with it: one clock for both. Its `dt`, left
+    unset, is the neuron's when the layer is made; given, it must equal the neuron's."""
+
+    neuron: Neuron = LIF()
+    dt: float = dataclasses.field(default=INHERITED, kw_only=True)
+
+    def __post_init__(self) -> None:
+        if math.isnan(self.dt):
+            # Before the module is set up, so every copy of it (`clone`, a run's record) holds the number.
+            object.__setattr__(self, "dt", self.neuron.dt)
+        super().__post_init__()
+
+    def inputs(self, x: jax.Array) -> SynapticInput:
+        return self.neuron.inputs(x)
+
+    def wrapped(self, x: jax.Array) -> NeuronModel:
+        """The neuron's model for inputs like `x`, its parameters under `neuron`."""
+        if self.dt != self.neuron.dt:
+            raise ValueError(f"{type(self).__name__} steps at dt={self.dt}, its neuron at "
+                             f"dt={self.neuron.dt}; give both one dt, or leave the layer's unset")
+        return adopt(self.neuron, self, "neuron").model(x)
+
+
+class Homeostatic(_Wrapping):
     """A spiking layer whose neurons' thresholds drift to hold `target` spikes per unit of time
     (`sparx.dynamics.IntrinsicPlasticity`), around the model of the layer `neuron`.
 
@@ -297,7 +326,8 @@ class Homeostatic(Neuron):
     `field` names the model's threshold: `threshold`, or `v_th` for a
     physical LIF (`Dynamics`). The drift is part of the layer's carried
     state.
-    The defaults hold a `LIF` layer's neurons at 5% of steps.
+    The defaults hold a `LIF` layer's neurons at 5% of steps. The layer
+    steps at its neuron's `dt`.
     """
 
     neuron: Neuron = LIF()
@@ -305,15 +335,8 @@ class Homeostatic(Neuron):
     eta: float = 0.001
     field: str = "threshold"
 
-    def inputs(self, x: jax.Array) -> SynapticInput:
-        return self.neuron.inputs(x)
-
     def build(self, x: jax.Array) -> IntrinsicPlasticity:
-        if self.dt != self.neuron.dt:
-            raise ValueError(f"Homeostatic steps at dt={self.dt}, its neuron at dt={self.neuron.dt}; "
-                             "give both one dt")
-        inner = adopt(self.neuron, self, "neuron").model(x)
-        return IntrinsicPlasticity(inner, self.target, self.eta, self.field)
+        return IntrinsicPlasticity(self.wrapped(x), self.target, self.eta, self.field)
 
 
 class ALIF(Neuron):
@@ -381,14 +404,15 @@ class Dynamics(Neuron):
         return self.neuron
 
 
-class Recurrent(Neuron):
+class Recurrent(_Wrapping):
     """Feed `neuron`'s output back into its input through a learned `[F, F]` matrix, fixed or plastic.
 
     `Recurrent(ALIF())` is a recurrent adaptive layer (LSNN). The input
     projection stays outside, as an `nn.Dense` before this layer, so it runs
     over all time steps at once; only the feedback product runs inside the
     loop. The wrapped neuron's parameters live under `neuron`, and the
-    layer's `dt` must be the neuron's.
+    layer steps at the neuron's `dt`: left unset, the layer's `dt` is the
+    neuron's, and given, it must equal it.
 
     With a `rule` (`sparx.nn.DecayingTrace`, `OjaTrace`, `ModulatedTrace`,
     `RetroactiveTrace` or a `HebbianTrace` of your own), the feedback runs
@@ -417,17 +441,12 @@ class Recurrent(Neuron):
     rule: HebbianTrace | None = None
     alpha_init: nn.initializers.Initializer = nn.initializers.normal(0.01)
 
-    def inputs(self, x: jax.Array) -> SynapticInput:
-        return self.neuron.inputs(x)
-
     def build(self, x: jax.Array) -> RecurrentCell:
-        if self.dt != self.neuron.dt:
-            raise ValueError(f"Recurrent steps at dt={self.dt}, its neuron at dt={self.neuron.dt}; "
-                             "give both one dt")
+        inner = self.wrapped(x)
         features = x.shape[-1]
         weight = self.param("recurrent", self.kernel_init, (features, features), jnp.float32)
         fast = None
         if self.rule is not None:
             alpha = self.param("alpha", self.alpha_init, (features, features), jnp.float32)
             fast = FastWeights(alpha, adopt(self.rule, self, "rule")(features))
-        return RecurrentCell(adopt(self.neuron, self, "neuron").model(x), Dense(weight, self.precision), fast)
+        return RecurrentCell(inner, Dense(weight, self.precision), fast)

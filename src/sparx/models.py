@@ -329,7 +329,7 @@ class SpikingMLP(nn.Module):
                 x = nn.BatchNorm(use_running_average=not train, momentum=0.9, epsilon=1e-5, dtype=self.dtype,
                                  param_dtype=self.param_dtype, name=f"norm_{layer}")(x)
             if self.recurrent:
-                x = Recurrent(neuron=self.neuron, precision=self.precision, dt=self.neuron.dt,
+                x = Recurrent(neuron=self.neuron, precision=self.precision,
                               name=f"recurrent_{layer}")(x)
             else:
                 x = adopt(self.neuron, self, f"neuron_{layer}")(x)

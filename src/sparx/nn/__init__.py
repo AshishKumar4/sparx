@@ -5,6 +5,7 @@ from .hebbian import DecayingTrace, HebbianTrace, ModulatedTrace, OjaTrace, Retr
 from .neurons import (
     ALIF,
     IF,
+    INHERITED,
     LI,
     LIF,
     RATES,
@@ -26,6 +27,7 @@ from .reshape import BatchMajor, Flatten, Flattens
 __all__ = [
     "ALIF",
     "IF",
+    "INHERITED",
     "LI",
     "LIF",
     "PSN",

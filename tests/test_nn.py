@@ -7,8 +7,21 @@ import numpy as np
 import pytest
 import reference
 
-from sparx.dynamics import AdEx, Izhikevich, LIFCell, SynapticInput, decay, run
-from sparx.nn import ALIF, IF, LI, LIF, RATES, STATE, Dynamics, Flatten, Rate, Recurrent, Synaptic
+from sparx.dynamics import AdEx, Izhikevich, LeakyIntegrateAndFire, LIFCell, SynapticInput, decay, run
+from sparx.nn import (
+    ALIF,
+    IF,
+    LI,
+    LIF,
+    RATES,
+    STATE,
+    Dynamics,
+    Flatten,
+    Homeostatic,
+    Rate,
+    Recurrent,
+    Synaptic,
+)
 from sparx.surrogate import ATan, FastSigmoid
 
 T, B, D = 24, 4, 6
@@ -252,3 +265,38 @@ def test_an_izhikevich_layer_is_the_dynamics_model_on_currents():
     model = Izhikevich(c=-55.0, v_init=-55.0)
     expected = run(model, SynapticInput(current=x))[0].value
     np.testing.assert_array_equal(Dynamics(model).apply({}, x), expected)
+
+
+@pytest.mark.parametrize("neuron", [LIF(tau=20.0, dt=14.0), ALIF(tau=20.0, tau_adapt=200.0, dt=14.0),
+                                    Dynamics(LeakyIntegrateAndFire(), dt=0.5, drive="jump")])
+def test_a_wrapping_layer_left_without_dt_steps_at_its_neurons(neuron):
+    # Recurrent(neuron) is Recurrent(neuron, dt=neuron.dt): the same outputs and final state.
+    x = jnp.asarray(np.random.default_rng(3).normal(0.5, 1.0, (12, 2, 4)), jnp.float32)
+    if isinstance(neuron, Dynamics):
+        x = 8.0 * x  # mV
+    left, given = Recurrent(neuron), Recurrent(neuron, dt=neuron.dt)
+    assert left.dt == neuron.dt and left.clone().dt == neuron.dt
+    variables = given.init(jax.random.key(0), x)
+    out, state = left.apply(variables, x, mutable=["state"])
+    expected, expected_state = given.apply(variables, x, mutable=["state"])
+    np.testing.assert_array_equal(np.asarray(out), np.asarray(expected))
+    for a, b in zip(jax.tree.leaves(state), jax.tree.leaves(expected_state), strict=True):
+        np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
+    assert Homeostatic(neuron).dt == neuron.dt
+
+
+def test_a_wrapping_layer_given_another_dt_is_refused():
+    x = jnp.zeros((3, 1, 2))
+    refused = (Recurrent(LIF(dt=14.0), dt=1.0), Recurrent(LIF(), dt=2.0), Homeostatic(LIF(dt=14.0), dt=1.0))
+    for layer in refused:
+        with pytest.raises(ValueError, match="give both one dt"):
+            layer.init(jax.random.key(0), x)
+    assert Recurrent(LIF()).dt == 1.0 and Recurrent(LIF(dt=14.0), dt=14.0).dt == 14.0
+
+
+def test_a_wrapping_layers_inherited_dt_survives_dews_record():
+    from dew.registry import from_record, to_record
+
+    layer = Recurrent(LIF(tau=20.0, dt=14.0))
+    rebuilt = from_record(Recurrent, to_record(layer, Recurrent))
+    assert rebuilt.dt == 14.0 and rebuilt.neuron.dt == 14.0
