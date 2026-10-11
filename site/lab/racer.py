@@ -14,7 +14,7 @@ middle.
     python site/lab/racer.py evaluate
     python site/lab/racer.py difficulty
     python site/lab/racer.py record --out site/test/fixtures/racer.json
-    python site/lab/racer.py fixture --neuron lif --sees events
+    python site/lab/racer.py fixture
 
 The browser runs the same car, camera and network from racer.json (site/src/engines/racer.ts).
 """
@@ -635,11 +635,10 @@ def record(args: argparse.Namespace) -> None:
 
 
 def fixture(args: argparse.Namespace) -> None:
-    """A small convolutional racer at its random start, with its laps (`laps`): what the browser's engine
-    must match for the networks the published racer does not use, written to `<out>/racer-conv-<neuron>-
-    <sees>.json`."""
-    world = World(columns=16, rows=8, supersample=2, sees=args.sees)
-    net = vision(world, args.neuron)
+    """A small spiking convolutional racer at its random start, with its laps (`laps`): what the browser's
+    engine must match for a network beside the published one, in `<out>/racer-conv-lif-events.json`."""
+    world = World(columns=16, rows=8, supersample=2)
+    net = vision(world)
     params = net.init(jax.random.key(args.seed), jnp.zeros((1, 1, world.features)))["params"]
     # Training starts the readout at zero; the fixture's is random, so the car depends on every unit.
     readout = max(name for name in params if name.startswith("Dense_"))
@@ -650,7 +649,7 @@ def fixture(args: argparse.Namespace) -> None:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     driven = laps(model, args.seed, args.steps)
-    (out / f"racer-conv-{args.neuron}-{args.sees}.json").write_text(json.dumps({"model": model, **driven}))
+    (out / "racer-conv-lif-events.json").write_text(json.dumps({"model": model, **driven}))
 
 
 def main() -> None:
@@ -716,8 +715,6 @@ def main() -> None:
     r.set_defaults(func=record)
     f = commands.add_parser("fixture")
     f.add_argument("--out", default="site/test/fixtures")
-    f.add_argument("--neuron", choices=("lif", "relu"), default="lif")
-    f.add_argument("--sees", choices=("events", "frames"), default="events")
     f.add_argument("--steps", type=int, default=300)
     f.add_argument("--seed", type=int, default=41)
     f.set_defaults(func=fixture)

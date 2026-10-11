@@ -1,7 +1,7 @@
 // The convolutional network of site/lab/stack.py's Vision: a camera's image through two strided
 // convolutions, each into a population of units, a dense layer with the inputs past the image, and
 // leaky-integrator readouts, stepped in double precision. Its units are LIF neurons that reset to zero,
-// or graded units, a leaky membrane read through a ReLU.
+// the network the site's racer runs. Graded units, which only the study's other arms use, are not here.
 import { dense, floats } from './stack';
 
 export interface VisionModel {
@@ -78,18 +78,16 @@ export class Vision {
 	private readonly pixels: number;
 	private readonly decay: number;
 	private readonly readoutDecay: number;
-	private readonly graded: boolean;
 
 	constructor(model: VisionModel) {
 		const { config, params } = model;
-		if (config.neuron !== 'lif' && config.neuron !== 'relu') throw new Error(`no ${config.neuron} units in the browser`);
+		if (config.neuron !== 'lif') throw new Error(`the browser runs LIF units, not ${config.neuron}`);
 		if ((config.bits ?? 1) !== 1) throw new Error('the browser sends one-bit spikes');
 		const param = (path: string) => {
 			const found = params[path];
 			if (!found) throw new Error(`the model has no ${path}`);
 			return floats(found.data);
 		};
-		this.graded = config.neuron === 'relu';
 		this.decay = config.decay;
 		this.readoutDecay = config.readout_decay;
 		let [rows, columns, channels] = config.shape;
@@ -158,21 +156,17 @@ export class Vision {
 		return this.readout;
 	}
 
-	/** Each unit's membrane takes in `drive` (which it overwrites with the units' outputs): a LIF neuron sums
-	 * it, fires at 1 and resets to zero; a graded unit averages it and sends its membrane through a ReLU. */
+	/** Each LIF neuron's membrane sums `drive` (which it overwrites with the neurons' spikes), fires at 1 and
+	 * resets to zero. */
 	private fire(units: Units, drive: Float64Array): void {
 		const { v, offset } = units;
-		const gain = this.graded ? 1 - this.decay : 1;
 		for (let j = 0; j < v.length; j++) {
-			let u = this.decay * v[j] + (this.graded ? gain * drive[j] : drive[j]);
-			let s: number;
-			if (this.silenced[offset + j]) {
+			let u = this.decay * v[j] + drive[j];
+			let s = 0;
+			if (this.silenced[offset + j]) u = 0;
+			else if (u >= 1) {
+				s = 1;
 				u = 0;
-				s = 0;
-			} else if (this.graded) s = Math.max(u, 0);
-			else {
-				s = u >= 1 ? 1 : 0;
-				if (s) u = 0;
 			}
 			v[j] = u;
 			drive[j] = s;

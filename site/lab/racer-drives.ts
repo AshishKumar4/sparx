@@ -6,7 +6,7 @@ import { Racer, type RacerModel, Track } from '../src/engines/racer';
 
 const fixtures = new URL('../test/fixtures/', import.meta.url);
 const out: Record<string, { readout: number[][]; cars: number[][] }[]> = {};
-for (const name of ['racer', 'racer-conv-lif-events', 'racer-conv-relu-frames']) {
+for (const name of ['racer', 'racer-conv-lif-events']) {
 	const recorded = await Bun.file(new URL(`${name}.json`, fixtures)).json();
 	const model: RacerModel = recorded.model ?? (await Bun.file(new URL('../public/racer/racer.json', import.meta.url)).json());
 	out[name] = recorded.laps.map((lap: { points: number[][]; start: number[]; cars: number[][] }) => {

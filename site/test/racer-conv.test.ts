@@ -1,5 +1,5 @@
-// The browser's convolutional racer against sparx: small networks at their random start, one spiking on
-// events and one graded on frames, with their laps recorded in float64 (site/lab/racer.py fixture). Every
+// The browser's convolutional racer against sparx: a small spiking network on events at its random start,
+// with its laps recorded in float64 (site/lab/racer.py fixture). Every
 // event and every unit's output must match, the readouts to 1e-15 of their size, and the car's path to rounding.
 import { expect, test } from 'bun:test';
 import { Racer, type RacerModel, Track } from '../src/engines/racer';
@@ -10,7 +10,7 @@ interface Recorded {
 	laps: { points: number[][]; start: number[]; cars: number[][]; readout: number[][]; events: number[][]; spikes: number[][] }[];
 }
 
-for (const name of ['lif-events', 'relu-frames']) {
+for (const name of ['lif-events']) {
 	const recorded: Recorded = await Bun.file(new URL(`fixtures/racer-conv-${name}.json`, import.meta.url)).json();
 	for (const [k, lap] of recorded.laps.entries()) {
 		test(`${name}, lap ${k}: ${lap.cars.length} steps`, () => {

@@ -113,10 +113,11 @@ sigma-delta, report the share of their units that are active or send, but the ba
 through them and does not train them, as a ReLU network is ordinarily trained. The dendritic arm's GPU computes each
 input's product for every branch, four times its dense count, of which three are zeros.
 
-The browser runs the convolutional network as sparx does (`site/src/engines/vision.ts`): on small
-networks at their random start, spiking on events and graded on frames, every event and every unit's
-output matches sparx's float64 run, and the car's position, heading and speed agree within 1e-14
-(`site/test/racer-conv.test.ts`).
+The browser runs the spiking convolutional network as sparx does (`site/src/engines/vision.ts`): on the
+published network and a small one at its random start, every event and every spike matches sparx's float64
+run, the readouts agree to 1e-15 of their size, and the car stays within the bound float64's rounding allows
+(`site/lab/car_exact.py`).
+The graded and frame arms run only in sparx.
 
 ## Results
 
