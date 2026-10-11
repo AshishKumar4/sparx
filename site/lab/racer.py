@@ -189,11 +189,11 @@ def network(hidden: tuple[int, ...] = (96, 64), tau: float = 3.0, readout_tau: f
 
 
 def vision(world: World, neuron: str = "lif", tau: float = 3.0, readout_tau: float = 4.0, bits: int = 1,
-           delta: float = 0.1, branches: int = 4) -> Vision:
+           delta: float = 0.1, branches: int = 4, target: float = 0.03) -> Vision:
     """The convolutional network over the camera's image: ON and OFF events, or a frame."""
     channels = 2 if world.sees == "events" else 1
     return Vision((world.rows, world.columns, channels), neuron=neuron, tau=tau, readout_tau=readout_tau,
-                  bits=bits, delta=delta, branches=branches)
+                  bits=bits, delta=delta, branches=branches, target=target)
 
 
 def inputs(world: World, on: jax.Array, off: jax.Array, seen: jax.Array, car: jax.Array) -> jax.Array:
@@ -342,7 +342,8 @@ def train(args: argparse.Namespace) -> None:
     tracks = Tracks()
     ground = tuple(jnp.asarray(g, jnp.float32) for g in world.ground())
     if args.net == "conv":
-        net = vision(world, args.neuron, args.tau, args.readout_tau, args.bits, args.delta, args.branches)
+        net = vision(world, args.neuron, args.tau, args.readout_tau, args.bits, args.delta, args.branches,
+                     args.target_rate)
     else:
         net = network(tuple(args.hidden), args.tau, args.readout_tau)
     params = net.init(jax.random.key(args.seed), jnp.zeros((1, 1, world.features)))["params"]
@@ -682,11 +683,14 @@ def main() -> None:
                    help="keep the parameters that drive farthest on held-out tracks, scored every EVERY")
     t.add_argument("--select-tracks", type=int, default=32)
     t.add_argument("--net", choices=("dense", "conv"), default="dense")
-    t.add_argument("--neuron", choices=("lif", "relu", "sigma-delta", "dendritic"), default="lif",
+    t.add_argument("--neuron", choices=("lif", "relu", "sigma-delta", "dendritic", "homeostatic"),
+                   default="lif",
                    help="the conv network's units")
     t.add_argument("--bits", type=int, default=1, help="lif: the bits each spike carries")
     t.add_argument("--delta", type=float, default=0.1, help="sigma-delta: the smallest change sent")
     t.add_argument("--branches", type=int, default=4, help="dendritic: the branches of each neuron")
+    t.add_argument("--target-rate", type=float, default=0.03,
+                   help="homeostatic: the spikes a step each neuron is held to")
     t.add_argument("--sees", choices=("events", "frames"), default="events")
     t.add_argument("--columns", type=int, default=24)
     t.add_argument("--rows", type=int, default=12)

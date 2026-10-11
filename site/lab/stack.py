@@ -23,7 +23,7 @@ from flax import struct
 import sparx
 from sparx.dynamics import Output, SynapticInput, decay, run
 from sparx.dynamics.core import fire
-from sparx.nn import LI, LIF, STATE, Neuron, record_rates
+from sparx.nn import LI, LIF, STATE, Homeostatic, Neuron, record_rates
 from sparx.surrogate import ATan, Surrogate, spike
 
 
@@ -219,7 +219,9 @@ class Vision(nn.Module):
     neurons that reset to zero (`neuron="lif"`), sending spikes of `bits` bits (`FewBit`) when `bits` is
     above 1; `Graded` units for the non-spiking counterpart (`"relu"`); or `SigmaDelta` units that send
     their changes of at least `delta` (`"sigma-delta"`). With `"dendritic"`, the units are LIF neurons
-    and the dense layer's are `Dendrites` of `branches` branches. The readout's weights start at zero."""
+    and the dense layer's are `Dendrites` of `branches` branches. With `"homeostatic"`, each LIF neuron's
+    threshold drifts to hold it at `target` spikes a step (`sparx.nn.Homeostatic`). The readout's weights
+    start at zero."""
 
     shape: tuple[int, int, int]
     features: tuple[int, ...] = (16, 32)
@@ -232,6 +234,7 @@ class Vision(nn.Module):
     bits: int = 1
     delta: float = 0.1
     branches: int = 4
+    target: float = 0.03
 
     def unit(self, name: str) -> nn.Module:
         """A population of units, named so that `act` lists the populations in order."""
@@ -241,6 +244,8 @@ class Vision(nn.Module):
             return SigmaDelta(tau=self.tau, threshold=self.delta, name=name)
         if self.bits > 1:
             return FewBit(tau=self.tau, bits=self.bits, name=name)
+        if self.neuron == "homeostatic":
+            return Homeostatic(LIF(tau=self.tau, reset="zero"), target=self.target, name=name)
         return LIF(tau=self.tau, reset="zero", name=name)
 
     @nn.compact
@@ -348,7 +353,7 @@ def vision_json(net: Vision, params: dict) -> dict:
     return {
         "config": {**{k: getattr(net, k)
                       for k in ("features", "kernels", "hidden", "outputs", "neuron", "bits", "delta",
-                                "branches")},
+                                "branches", "target")},
                    "shape": list(net.shape), "decay": sparx.dynamics.decay(net.tau),
                    "readout_decay": sparx.dynamics.decay(net.readout_tau)},
         "params": {"/".join(key.key for key in path): {"shape": list(leaf.shape), "data": b64(leaf)}
@@ -361,7 +366,7 @@ def vision_from_json(model: dict) -> tuple[Vision, dict]:
     net = Vision(shape=tuple(config["shape"]), features=tuple(config["features"]),
                  kernels=tuple(config["kernels"]), hidden=config["hidden"], outputs=config["outputs"],
                  neuron=config["neuron"], bits=config.get("bits", 1), delta=config.get("delta", 0.1),
-                 branches=config.get("branches", 4),
+                 branches=config.get("branches", 4), target=config.get("target", 0.03),
                  tau=-1 / math.log(config["decay"]), readout_tau=-1 / math.log(config["readout_decay"]))
     params: dict = {}
     for path, leaf in model["params"].items():
