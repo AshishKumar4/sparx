@@ -132,8 +132,8 @@ What the runs show:
 its largest rise in loss within a task grew to 7.2 nats. It lifted the task-incremental score slightly
 for BPTT and e-prop (41 and 46% against 37 and 36%) and the permuted stream's final score for BPTT (36%
 against 31%). It stalled EWC: the penalty's gradient, scaled by the Fisher information of BPTT's large
-gradients, reached global norms of 1e7 to 1e14, so the clipped step followed the penalty alone, and
-each new permuted task reached only 8%. Clipping is therefore off by default (`--clip 0`).
+gradients, reached global norms of 1e7 to 1e14, so the clipped step followed the penalty alone: each
+permuted task after the first reached 2.9 to 9.7% right after it was learned, 5.5% on average. Clipping is therefore off by default (`--clip 0`).
 
 ### Next
 
