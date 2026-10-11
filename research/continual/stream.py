@@ -77,9 +77,9 @@ class Learner:
         self.cell = LIFCell(decay(args.tau), reset="zero")
         self.mask = 1 - jnp.eye(args.hidden)
         self.steps = steps
-        # Every learner's gradient is clipped to one global norm before Adam: without it BPTT's loss jumped
-        # between epochs, by up to 1.9 nats on one task, while e-prop's fell smoothly.
-        self.optimizer = optax.chain(optax.clip_by_global_norm(args.clip), optax.adam(args.lr))
+        # Clipping is off by default: at norm 1 it did not steady BPTT and stalled EWC (README, results/).
+        clip = [optax.clip_by_global_norm(args.clip)] if args.clip else []
+        self.optimizer = optax.chain(*clip, optax.adam(args.lr))
         k_in, k_rec, k_out, k_feedback = jax.random.split(jax.random.key(args.seed), 4)
         hidden = args.hidden
         self.params = EPropParams(
@@ -181,7 +181,7 @@ def main() -> None:
     parser.add_argument("--hidden", type=int, default=256)
     parser.add_argument("--batch", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--clip", type=float, default=1.0, help="the gradient's largest global norm")
+    parser.add_argument("--clip", type=float, default=0.0, help="the gradient's largest global norm; 0, none")
     parser.add_argument("--ewc", type=float, default=1e4, help="the EWC penalty's lambda")
     parser.add_argument("--fisher-samples", type=int, default=256)
     parser.add_argument("--tau", type=float, default=10.0, help="the neurons' time constant, in steps")

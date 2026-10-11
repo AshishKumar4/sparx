@@ -62,28 +62,82 @@ Accuracy on the last trial at each evaluation during training on four doors:
 - A task whose dynamics change without announcement, the notes' first suggestion for an agent that must retain earlier skills.
 - A faster recurrence over the sparse wiring: since its gathers take rows (`docs/performance.md`), the cores' training steps take 9 and 25 times the dense network's.
 
-## A second study, proposed: forgetting under local rules
+## A second study: forgetting under local rules
 
-The question: when one network learns a stream of tasks in turn, with no replay, do local learning rules
-forget less of the earlier tasks than backpropagation through time, and what do they give up for it? The
-racer study asks whether spikes pay for driving; this one asks whether local rules pay for learning that
-does not stop.
+When one network learns a stream of tasks in turn, with no replay, does a local learning rule forget less
+of the earlier tasks than backpropagation through time? `stream.py` runs it on SHD with one network for
+every learner: 700 inputs into 256 recurrent LIF neurons into 20 leaky readouts. `queue.sh` runs every
+learner, stream and seed in turn on the workstation's RTX 4080.
 
-- The stream: SHD's 20 classes in 5 tasks of 4 classes, each trained to convergence before the next, the
-  readout shared across tasks. A second stream changes the inputs instead of the classes: the same 20
-  classes with each task's channels permuted.
-- The learners, on the same recurrent LIF network as `EPropObjective`'s: backpropagation through time with
-  Adam, the baseline; the same with elastic weight consolidation (Kirkpatrick et al. 2017), the standard
-  regularized baseline; e-prop (`sparx.learn.eprop`, Bellec et al. 2020), whose update is an eligibility
-  trace at each synapse times a learning signal broadcast to its neuron; and a three-factor rule gated by
-  a scalar reward. The reward-gated rule exists in sparx only as REINFORCE (`sparx.learn.reinforce`), on
-  a network of the same shape whose neurons fire at random (`BernoulliCell`), with traces of its own:
-  each synapse's share in the probability of its neuron's spikes. Reward-modulated e-prop (Bellec et
-  al.'s reinforcement-learning variant), the same LIF network and traces gated by a reward, would have to
-  be written first.
-- The measures, over three seeds: the accuracy on every task after each task is learned, the mean of the
-  last row, forgetting as each task's best accuracy minus its last (Chaudhry et al. 2018), and backward
-  transfer (Lopez-Paz and Ranzato 2017).
+- Streams: `classes`, SHD's 20 classes in 5 tasks of 4, 20 epochs each, one 20-way readout; and
+  `permuted`, all 20 classes in every task with each task's 700 channels permuted (the first task's
+  not), 5 epochs each.
+- Learners: `bptt`, backpropagation through time with Adam at 1e-3; `ewc`, the same with elastic weight
+  consolidation (Kirkpatrick et al. 2017) at three strengths; `eprop`, e-prop (`sparx.learn.eprop`,
+  Bellec et al. 2020) with feedback through the readout's weights, and `eprop-random` through fixed
+  random ones; `joint`, BPTT on every task at once for as many epochs, the reference.
+- Measures, over 3 seeds: the accuracy on every task's test set after each task; the final accuracy over
+  all 20 classes (class-incremental, chance 5%) and over each task's own classes (task-incremental, chance
+  25% for `classes`); forgetting, a task's best accuracy before the last task minus its last; and each
+  task's accuracy right after it was learned (for `joint`, the first task's).
 
-Nothing here predicts the answer. e-prop follows an approximation of the same gradient as backpropagation,
-so it may forget as much; the study measures it. It waits until the racer study is done, and for a go.
+### First results
+
+`results/unclipped/`, 42 runs at commit e8bfab3 (`stream.py` as at 0d2b416), means ± sample deviations over seeds 0, 1 and 2
+(`summarize.py`):
+
+Classes in turn:
+
+| Learner | Seeds | All 20 classes, % | Its own classes, % | Forgetting, points | Just learned, % |
+| --- | --- | --- | --- | --- | --- |
+| joint | 3 | 59.3 ± 20.3 | 84.6 ± 8.0 | none | 72.4 ± 8.7 |
+| bptt | 3 | 15.5 ± 3.9 | 37.1 ± 6.4 | 89.7 ± 3.0 | 87.3 ± 5.9 |
+| eprop | 3 | 17.1 ± 1.6 | 36.4 ± 3.0 | 90.0 ± 1.7 | 89.1 ± 2.5 |
+| eprop-random | 3 | 16.2 ± 3.6 | 36.5 ± 1.7 | 89.1 ± 3.3 | 87.5 ± 1.8 |
+| ewc1000 | 3 | 16.6 ± 1.9 | 51.0 ± 5.3 | 83.4 ± 9.5 | 83.3 ± 7.6 |
+| ewc10000 | 3 | 16.1 ± 2.7 | 60.8 ± 9.9 | 87.9 ± 2.4 | 86.4 ± 0.7 |
+| ewc100000 | 3 | 16.8 ± 1.9 | 77.3 ± 8.7 | 87.7 ± 3.9 | 87.0 ± 1.4 |
+
+Permuted channels:
+
+| Learner | Seeds | All 20 classes, % | Its own classes, % | Forgetting, points | Just learned, % |
+| --- | --- | --- | --- | --- | --- |
+| joint | 3 | 38.5 ± 7.9 | 38.5 ± 7.9 | none | 42.3 ± 6.4 |
+| bptt | 3 | 31.3 ± 2.6 | 31.3 ± 2.6 | 14.9 ± 2.2 | 43.1 ± 2.7 |
+| eprop | 3 | 45.9 ± 4.7 | 45.9 ± 4.7 | 33.7 ± 6.4 | 72.8 ± 0.5 |
+| eprop-random | 3 | 36.5 ± 0.2 | 36.5 ± 0.2 | 21.5 ± 6.1 | 53.7 ± 4.9 |
+| ewc1000 | 3 | 27.2 ± 0.6 | 27.2 ± 0.6 | 5.7 ± 0.7 | 30.4 ± 1.7 |
+| ewc10000 | 3 | 19.8 ± 3.1 | 19.8 ± 3.1 | 2.9 ± 3.0 | 21.2 ± 2.6 |
+| ewc100000 | 3 | 15.1 ± 2.7 | 15.1 ± 2.7 | 1.8 ± 1.5 | 16.5 ± 1.5 |
+
+What the runs show:
+
+- Learning classes in turn, every sequential learner ends at 15 to 17% of the 20 classes and forgets 83
+  to 90 points of each earlier task: after the fifth task it answers almost only with the fifth task's
+  classes. e-prop and random e-prop forget as much as BPTT. Joint training reaches 59 ± 20%.
+- Within each task's own classes, e-prop (36%) and BPTT (37%) keep the same share. EWC keeps more as its
+  strength grows, 51, 61 and 77%, without lifting the class-incremental score.
+- With permuted channels, e-prop ends highest, 46 ± 5% against BPTT's 31 ± 3%. It learns each task
+  better in 5 epochs, 73% right after learning it against 43%, and forgets more, 34 points against 15.
+  EWC forgets 2 to 6 points and learns each new task to only 17 to 30%.
+- BPTT trains this network less steadily than e-prop. Its loss rose by up to 1.9 nats from one epoch to
+  the next within a task, and joint training's final accuracy ranges from 36% to 73% across seeds;
+  e-prop's loss never rose by more than 0.14 within a task. Its gradient's median global norm, recorded
+  in the clipped runs below, is 400 to 1,200 a batch for BPTT and 4 to 24 for e-prop.
+
+### Clipping, an A/B
+
+`results/clipped/` repeats every run with the gradient clipped to a global norm of 1 before Adam
+(`--clip 1`, commit ca472b6), from the same initializations, data and batch order. It did not steady BPTT:
+its largest rise in loss within a task grew to 7.2 nats. It lifted the task-incremental score slightly
+for BPTT and e-prop (41 and 46% against 37 and 36%) and the permuted stream's final score for BPTT (36%
+against 31%). It stalled EWC: the penalty's gradient, scaled by the Fisher information of BPTT's large
+gradients, reached global norms of 1e7 to 1e14, so the clipped step followed the penalty alone, and
+each new permuted task reached only 8%. Clipping is therefore off by default (`--clip 0`).
+
+### Next
+
+BPTT's instability makes it a weak baseline here. The next runs train BPTT at lower learning rates and
+with a narrower surrogate, choose each learner's rate on held-out data from the first task, and run the
+permuted stream for 20 epochs a task, so every learner reaches its own best on each task before the
+next arrives.
