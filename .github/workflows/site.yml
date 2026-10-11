@@ -70,6 +70,14 @@ jobs:
     - name: The browser's engines against them
       working-directory: site
       run: bun test test/
+    # sparx's float64 racer runs from this runner, to measure how far they move between machines
+    # (site/lab/probes/references.py).
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: racer-references
+        path: site/test/fixtures/racer*.json
+        retention-days: 14
     - name: Every snippet runs
       env:
         JAX_PLATFORMS: cpu

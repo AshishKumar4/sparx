@@ -38,11 +38,7 @@ REPORT = Path(__file__).parent / "results/kernel-rtx4080.json"
 #   readout 2.4198716849769306e-7 / 3.548737194010247e-7.
 # The Pallas 32-step distances are about 3.4e-8 to 3.9e-8 RMS and 3.8e-8 to 7.3e-8 max,
 # with no spike/active-unit mismatches. Full-drive max errors remain below the same bounds.
-BOUNDS = {
-    "A": dict.fromkeys(kernel.NAMES, (5e-8, 1e-7)),
-    "B": {"conv0": (5e-8, 1.5e-7), "conv1": (5e-8, 1.5e-7),
-          "hidden": (5e-8, 1e-7), "readout": (5e-8, 1.5e-7)},
-}
+# The fixed bounds are measure.TEST_BOUNDS, the table the measurement records with its results.
 
 
 def gpu_device():
@@ -75,9 +71,9 @@ def arm(request):
 
 def assert_distance(name, states, reference):
     measured = measure.distances(states, reference)
-    for population, (rms, maximum) in BOUNDS[name].items():
-        assert measured[population]["rms_rel"] <= rms, (name, population, measured[population])
-        assert measured[population]["max_rel"] <= maximum, (name, population, measured[population])
+    for population, bound in measure.TEST_BOUNDS[name].items():
+        assert measured[population]["rms_rel"] <= bound["rms_rel"], (name, population, measured[population])
+        assert measured[population]["max_rel"] <= bound["max_rel"], (name, population, measured[population])
 
 
 @pytest.mark.parametrize("skip", [True, False], ids=["skip", "dense"])
@@ -97,11 +93,10 @@ def test_real_drive(arm, skip, backend):
 
 
 def test_bounds_are_tighter_than_measured_xla(arm):
-    for output, (rms, maximum) in BOUNDS[arm["name"]].items():
-        assert measure.TEST_BOUNDS[arm["name"]][output] == {"rms_rel": rms, "max_rel": maximum}
+    for output, bound in measure.TEST_BOUNDS[arm["name"]].items():
         for field in ("xla_f32_per_output", "test_xla_f32_per_output"):
-            assert rms <= arm["reported"][field][output]["rms_rel"]
-            assert maximum <= arm["reported"][field][output]["max_rel"]
+            assert bound["rms_rel"] <= arm["reported"][field][output]["rms_rel"]
+            assert bound["max_rel"] <= arm["reported"][field][output]["max_rel"]
 
 
 @pytest.mark.parametrize("skip", [True, False], ids=["skip", "dense"])
