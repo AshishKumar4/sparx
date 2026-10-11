@@ -3,6 +3,33 @@
 sparx's releases, newest first. The version is `sparx.__version__`, and a
 release's tag is that version with a `v` in front (`v0.1.0`).
 
+## 0.1.1
+
+Fixes and additions from GitHub issues #1 to #5, on the same dependencies as
+0.1.0.
+
+- `datasets.bin_events` refuses an event time that is negative or not
+  finite, and a channel that is not an integer in `[0, source_channels)`;
+  before, NumPy's negative indices put such events in the last bins (#1).
+- `nir.to_nir` exports a stack whose layers declare no parameters, such as
+  fixed neurons alone, and names a layer that has parameters but was given
+  none (#2).
+- `nn.Recurrent` and `nn.Homeostatic` left without `dt` step at their
+  neuron's (`nn.INHERITED`); a `dt` given must still equal it (#3).
+- `nir.to_nir` exports any model that states itself as a sequential stack
+  (`nir.Sequentialized`), and `models.SpikingMLP.as_sequential` does, for a
+  network without delays or batch norm (#4). Export refuses a weight layer
+  that holds or computes in other than float32, and recurrence around other
+  than LIF, which NIR cannot state.
+- NIR carries time constants learned per feature (`learn_tau=True`) both
+  ways: they export as per-neuron `tau`, and a node whose `tau` differs
+  between channels imports as a learned decay, trainable as before (#5).
+
+Outside the package, the repository gained the racer study
+(`research/racer`): a spiking convolutional network that drives every one of
+200 unseen tracks at five seeds of five, beside graded, few-bit, sigma-delta
+and dendritic variants, and the network the site's racer now runs.
+
 ## 0.1.0
 
 The first release on PyPI, as `sparxml`: `uv pip install sparxml` for the CPU,

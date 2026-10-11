@@ -8,10 +8,10 @@ How to pick sparx up. [status.md](status.md) is the one ledger of what sparx sup
    on every training recording, sparx with a tenth held out, and the official SNN-delays code, all at
    150 epochs through `tools/shd_comparison.py`. sparx's last epoch is 93.99 ± 0.29% against the
    official code's 93.89 ± 0.26%.
-2. **The release, `sparxml` 0.1.0**, follows it: the GitHub release `v0.1.0` on `main` runs
-   `.github/workflows/python-publish.yml`, which runs the whole CI, builds, checks the tag against
-   `sparx.__version__`, smokes the very wheel from PyPI's index (`tools/smoke_wheel.py`) and uploads
-   through the trusted publisher.
+2. **Releases** (`sparxml` 0.1.0, then 0.1.1 with issues #1 to #5): a GitHub release `v<version>` on
+   `main` runs `.github/workflows/python-publish.yml`, which runs the whole CI, builds, checks the tag
+   against `sparx.__version__`, smokes the very wheel from PyPI's index (`tools/smoke_wheel.py`) and
+   uploads through the trusted publisher. Bump `__version__` and add a `CHANGELOG.md` entry first.
 3. **dew.** sparx is tested against dewml 0.1.0 (`9235af7f`). Open for sparx: `Supervised`'s
    metrics in the validation pass (`status.md`, "dew"). Logical axes stay `(module, parameter)`
    declarations by decision (`status.md` gives the trade); dew's boxed axes would serve too.

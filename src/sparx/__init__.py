@@ -49,7 +49,7 @@ from sparx.surrogate import spike
 if TYPE_CHECKING:
     from sparx import config, datasets, graph, learn, metrics, nir, objectives, serve, tasks
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 _LAZY = ("config", "datasets", "graph", "learn", "metrics", "nir", "objectives", "serve", "tasks")
 
