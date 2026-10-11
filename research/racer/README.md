@@ -160,7 +160,9 @@ Seven arms, five seeds each, one recipe (`configs/phase2c.json`, commit 673c337)
 on the workstation's RTX 4080, about 18 minutes a run. Each arm is the convolutional network of the plan
 on the 64 × 32 camera; only its units change. `results/phase2c.json` holds every run, and
 `results/phase2c-arms.json` each arm's seeds with their means and standard deviations
-(`compare.py`). Means ± sample standard deviations over the five seeds:
+(`compare.py`). Means ± sample standard deviations over the five seeds. A seed's lap is its median over
+the tracks it finished, so the 4-bit arm's lap is over the four seeds that finished any, its seed 2 having
+finished none:
 
 | Arm | Seeds that finished every unseen track | Unseen tracks finished, % | Bend 1.8, % | Lap, s | Steers back, ms |
 | --- | --- | --- | --- | --- | --- |
@@ -188,28 +190,30 @@ events, 485 to 936 a step.
 
 What the comparison says:
 
-- At driving, spikes cost nothing here. The spiking arm finished every unseen track at every seed, and so
-  did sigma-delta and the dendritic arm. The graded arm on events matched it within the seeds' spread, one
-  seed short by a single track; on the harder sets B's mean is above A's, 96.1 against 95.5%, well inside
-  either arm's deviation. The graded arm on frames was the weakest of the three: one seed finished 186 of
-  200 with a median lap of 22.7 s, and of A, B and C it did worst on the sharpest bends.
-- On a GPU there is no saving. Every arm's dense multiply-adds are the same to within 0.1%, apart from C's
-  smaller first layer, and a training step takes 0.37 to 0.40 s for every arm on the RTX 4080
-  (`results/timing-rtx4080.json`).
+- In these five runs under this recipe, the spiking arm finished as many unseen tracks as any arm, every
+  one at every seed, as did sigma-delta and the dendritic arm. The graded arm on events was one track
+  short at one seed; on the harder sets its mean is above A's, 96.1 against 95.5%, inside either arm's
+  deviation. A was the most consistent from seed to seed: its laps were 9.8 ± 0.2 s against B's
+  10.8 ± 1.6 and C's 12.4 ± 5.8. The graded arm on frames was the weakest of the three: one seed finished
+  186 of 200 with a median lap of 22.7 s, and of A, B and C it did worst on the sharpest bends.
+- On a GPU there is no saving. The arms on events have the same dense multiply-adds to within 0.1%; C has
+  13% fewer, 1.27 million against 1.46, because a frame has one channel where events have two. A training
+  step took 0.37 to 0.40 s for every arm on the RTX 4080 (`results/timing-rtx4080.json`).
 - On event-driven hardware the spiking arm would do about a quarter of the graded arm's work: 152,000
   triggered multiply-adds a step against 630,000, because about 9% of its units send in a step against
   53% of B's, and it would send 1 bit where B sends 32, 1,161 bits a step against 211,000. That is a count
   of operations, not a measurement on such hardware.
-- The spiking arms steer back from a sideways nudge within one step, 20 ms; the graded arms take 170 and
-  216 ms to reach half their response. The difference comes from the units, not from spikes as such: a
-  graded unit here averages its input with the LIF's time constant, 3 steps, and three such layers in a
-  row take a median of about 160 ms to pass half of a step change, while a LIF neuron fires as soon as
-  its membrane crosses threshold. A graded unit that summed its input instead would respond faster, but
-  trained badly (the restart paragraph below).
+- A and the dendritic arm steered back from a sideways nudge within one step, 20 ms, at every seed; the
+  few-bit arms took 70 and 96 ms, sigma-delta 112, and the graded arms 170 and 216 ms to reach half
+  their response. These runs do not isolate why. One candidate is the units: a graded unit passes on its
+  membrane, which follows a change in its input over its time constant of 3 steps, while a LIF neuron
+  fires as soon as its membrane crosses threshold. As an idealized illustration only, three linear leaky
+  stages of 3 steps in a row pass half of a step change after a median of about 160 ms; the network's
+  readout, its ReLUs and thresholds, and the car's own response all add to or change that.
 - More bits per spike made things worse, not better: the 2- and 4-bit arms sent more bits, did more
   triggered work and were the least reliable, the 2-bit arm finishing 85 of 200 at seed 2 and the 4-bit
-  arm none (see the open questions below). Sigma-delta matched the spiking arm's reliability and work, but sends real values,
-  32 bits each, and responded in 112 ms. Active dendrites matched or beat the plain spiking arm at every
+  arm none (see the open questions below). Sigma-delta matched the spiking arm's reliability and work, but
+  sends real values, 32 bits each, and responded in 112 ms. Active dendrites matched or beat the plain spiking arm at every
   measure of driving, and trained the most stably of all, with a median gradient norm of 0.1 at four seeds
   of five.
 
