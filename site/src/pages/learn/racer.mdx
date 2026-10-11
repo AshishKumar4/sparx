@@ -104,9 +104,9 @@ The racer above is a small dense network. To ask whether spiking earns its place
 
 | Network | Seeds that finished all 200 unseen tracks | Lap | Units sending a step | Triggered multiply-adds a step |
 | --- | --- | --- | --- | --- |
-| A, spiking, events | {arms['A, spiking'].every_track} of 5 | {arms['A, spiking'].median_lap_time.mean.toFixed(1)} s | {Math.round(arms['A, spiking'].active_units_per_step.mean).toLocaleString('en-US')} | {Math.round(arms['A, spiking'].triggered_macs_per_step.mean).toLocaleString('en-US')} |
-| B, graded, events | {arms['B, graded, events'].every_track} of 5 | {arms['B, graded, events'].median_lap_time.mean.toFixed(1)} s | {Math.round(arms['B, graded, events'].active_units_per_step.mean).toLocaleString('en-US')} | {Math.round(arms['B, graded, events'].triggered_macs_per_step.mean).toLocaleString('en-US')} |
-| C, graded, frames | {arms['C, graded, frames'].every_track} of 5 | {arms['C, graded, frames'].median_lap_time.mean.toFixed(1)} s | {Math.round(arms['C, graded, frames'].active_units_per_step.mean).toLocaleString('en-US')} | {Math.round(arms['C, graded, frames'].triggered_macs_per_step.mean).toLocaleString('en-US')} |
+| A, spiking, events | {arms['A, spiking'].every_track} of 5 | {arms['A, spiking'].median_lap_time.mean.toFixed(1)} s | {Math.round(arms['A, spiking'].active_units_per_step.mean).toLocaleString('en-US')} | {Math.round(arms['A, spiking'].triggered_macs_per_step.mean).toLocaleString('en-US')} |
+| B, graded, events | {arms['B, graded, events'].every_track} of 5 | {arms['B, graded, events'].median_lap_time.mean.toFixed(1)} s | {Math.round(arms['B, graded, events'].active_units_per_step.mean).toLocaleString('en-US')} | {Math.round(arms['B, graded, events'].triggered_macs_per_step.mean).toLocaleString('en-US')} |
+| C, graded, frames | {arms['C, graded, frames'].every_track} of 5 | {arms['C, graded, frames'].median_lap_time.mean.toFixed(1)} s | {Math.round(arms['C, graded, frames'].active_units_per_step.mean).toLocaleString('en-US')} | {Math.round(arms['C, graded, frames'].triggered_macs_per_step.mean).toLocaleString('en-US')} |
 
 In these five runs each, the three finished nearly as many tracks. A finished every track at every seed, B missed one track at one seed, and C, the weakest, finished 186 at one seed with a slow lap. A was also the most consistent: its median laps varied by 0.2 s from seed to seed, B's by 1.6 s and C's by 5.8 s.
 
