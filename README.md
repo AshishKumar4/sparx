@@ -15,10 +15,12 @@ sparx is published as `sparxml` and imported as `sparx`, as [dew](https://github
 
 | Where | Install |
 | --- | --- |
-| CPU | `pip install sparxml` |
-| NVIDIA GPU (CUDA 12 or 13) | `pip install "sparxml[cuda12]"` or `"sparxml[cuda13]"` |
-| TPU | `pip install "sparxml[tpu]"` |
+| CPU | `uv pip install sparxml` |
+| NVIDIA GPU (CUDA 12 or 13) | `uv pip install "sparxml[cuda12]"` or `"sparxml[cuda13]"` |
+| TPU | `uv pip install "sparxml[tpu]"` |
 | SHD and MNIST readers, connectome tables, NIR | add the extras `datasets`, `connectome` and `nir` |
+
+pip takes the same arguments: `pip install sparxml`. In a uv project, `uv add sparxml`.
 
 From a clone, on the dew commit and the jax build the tests run on:
 

@@ -3,6 +3,7 @@ dist/
 .astro/
 .wrangler/
 src/content/docs/docs/
+src/content/docs/docs.md
 src/generated/
 public/repo/
 shots/

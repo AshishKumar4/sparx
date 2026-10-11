@@ -15,7 +15,7 @@ as uint8 images and labels.
 
 `holdout` splits records into a part to train on and a part to validate on.
 
-Reading the files needs h5py (`pip install "sparxml[datasets]"`).
+Reading the files needs h5py (`uv pip install "sparxml[datasets]"`).
 """
 
 from __future__ import annotations

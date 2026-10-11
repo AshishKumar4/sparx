@@ -5,7 +5,7 @@ release's tag is that version with a `v` in front (`v0.1.0`).
 
 ## 0.1.0
 
-The first release on PyPI, as `sparxml`: `pip install sparxml` for the CPU,
+The first release on PyPI, as `sparxml`: `uv pip install sparxml` for the CPU,
 with the `cuda12`, `cuda13` and `tpu` extras for accelerators, on Python 3.12
 or newer, over dew 0.1 (`dewml`).
 

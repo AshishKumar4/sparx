@@ -18,7 +18,7 @@ from pathlib import Path
 
 SITE = Path(__file__).resolve().parents[1]
 SNIPPETS = SITE / "snippets"
-INSTALL = "%pip install -q 'sparxml[nir] @ git+https://github.com/AshishKumar4/sparx'"
+INSTALL = '!uv pip install --system -q "sparxml[nir]"'
 
 NOTEBOOKS = {
     "why-spikes": ("Spikes per synapse", "why-spikes", ["sparsity"]),
