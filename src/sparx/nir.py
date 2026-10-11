@@ -254,9 +254,27 @@ def _first_shape(model: nn.Sequential, params: Mapping[str, LayerParams],
     if input_shape is not None:
         return tuple(int(n) for n in input_shape)
     if model.layers and isinstance(model.layers[0], nn.Dense):
-        return (int(np.shape(params["layers_0"]["kernel"])[0]),)
+        return (int(np.shape(_own_params(model.layers[0], params, 0, None)["kernel"])[0]),)
     raise ValueError("pass input_shape, one example's shape (H, W, C for images), "
                      "for a stack that does not start with a Dense layer")
+
+
+def _own_params(layer: nn.Module, params: Mapping[str, LayerParams], k: int,
+                shape: tuple[int, ...] | None) -> LayerParams:
+    """Layer `k`'s parameters: none for a layer that declares none, such as a neuron with a fixed time
+    constant, and an error naming the layer when one that declares them, given inputs of `shape`, has
+    none in `params`."""
+    if f"layers_{k}" in params:
+        return params[f"layers_{k}"]
+    declares = isinstance(layer, nn.Dense | nn.Conv)
+    if not declares and shape is not None:
+        x = jax.ShapeDtypeStruct((1, 1, *shape), jnp.float32)
+        declares = bool(jax.eval_shape(lambda x: layer.init(jax.random.key(0), x), x).get("params"))
+    if declares:
+        raise ValueError(f"variables['params'] has nothing for layer {k}, a {type(layer).__name__}, "
+                         f"which has parameters; pass the variables the stack was initialized or trained "
+                         f"with")
+    return {}
 
 
 def to_nir(model: nn.Sequential, variables: StackVariables, *, dt: float,
@@ -266,11 +284,12 @@ def to_nir(model: nn.Sequential, variables: StackVariables, *, dt: float,
 
     `input_shape` is one example's input shape in sparx's layout, `(H, W, C)`
     for images; a stack that starts with a `Dense` layer has it from the
-    kernel.
+    kernel. A stack whose layers declare no parameters, such as fixed
+    neurons alone, needs no `"params"` collection.
     """
     import nir
 
-    params = variables["params"]
+    params = variables.get("params", {})
     shape = _first_shape(model, params, input_shape)
     nodes: dict[str, nir.NIRNode] = {"input": nir.Input(input_type={"input": np.array(_to_nir_shape(shape))})}
     edges: Edges = []
@@ -278,7 +297,7 @@ def to_nir(model: nn.Sequential, variables: StackVariables, *, dt: float,
     for k, layer in enumerate(model.layers):
         if not isinstance(layer, nn.Module):
             raise NotImplementedError(f"cannot export the function {layer!r} to NIR")
-        layer_params = params.get(f"layers_{k}", {})
+        layer_params = _own_params(layer, params, k, shape)
         new_nodes, new_edges, port = _export_layer(layer, layer_params, str(k), shape, dt, discretization)
         nodes.update(new_nodes)
         edges += [(previous, port), *new_edges]

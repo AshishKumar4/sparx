@@ -68,19 +68,27 @@ def bin_events(times: ArrayLike, units: ArrayLike, steps: int, max_time: float, 
     dropped; with `binning="events"` steps open at events (`Binning`) and
     steps past the `steps`-th are dropped. `channels` must divide
     `source_channels`; adjacent source channels are pooled into each output
-    channel. Counts saturate at 255.
+    channel. Counts saturate at 255. A time that is negative or not finite,
+    or a channel that is not an integer in `[0, source_channels)`, is
+    refused: an index past either end would otherwise wrap into the bins.
     """
     if source_channels % channels:
         raise ValueError(f"channels must divide {source_channels}, not {channels}")
+    times, ids = np.asarray(times), np.asarray(units)
+    if not np.all(np.isfinite(times) & (times >= 0)):
+        raise ValueError("event times must be finite and at least 0")
+    channel = ids.astype(np.int64)
+    if np.any(channel != ids) or np.any((channel < 0) | (channel >= source_channels)):
+        raise ValueError(f"each event's channel must be an integer in [0, {source_channels})")
     if binning == "grid":
-        step = np.floor(np.asarray(times, np.float64) / max_time * steps).astype(np.int64)
+        step = np.floor(times.astype(np.float64) / max_time * steps).astype(np.int64)
     elif binning == "events":
-        step = _event_frames(np.asarray(times), round(1000 * max_time / steps, 9))
+        step = _event_frames(times, round(1000 * max_time / steps, 9))
     else:
         raise ValueError(f"binning must be grid or events, not {binning!r}")
     kept = step < steps
     counts = np.zeros((steps, channels), np.int64)
-    np.add.at(counts, (step[kept], np.asarray(units, np.int64)[kept] // (source_channels // channels)), 1)
+    np.add.at(counts, (step[kept], channel[kept] // (source_channels // channels)), 1)
     return np.minimum(counts, 255).astype(np.uint8)
 
 
