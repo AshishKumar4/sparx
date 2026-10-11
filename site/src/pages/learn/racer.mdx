@@ -9,6 +9,7 @@ import RacerTrack from '../../components/learn/RacerTrack.astro';
 import RacerTraining from '../../components/learn/RacerTraining.astro';
 import RacerFigure from '../../components/live/RacerFigure.astro';
 import { colab, source } from '../../data/site.mjs';
+import arms from '../../data/racer-arms.json';
 import difficulty from '../../../public/racer/difficulty.json';
 import evaluation from '../../../public/racer/evaluation.json';
 import camera from '../../../snippets/racer.py?raw';
@@ -97,6 +98,24 @@ No track failed and the car never left the road, so here is its slowest lap:
 
 The browser drives the same network from the same weights, in double precision, with the same operations in the same order. Its test holds two drives of 10 s, on two unseen tracks, to sparx's own float64 run: every event and every spike at the same step, and the car's path within $10^{-9}$ m.
 
+## Do the spikes matter?
+
+The racer above is a small dense network. To ask whether spiking earns its place, the same recipe trained a larger convolutional network on a finer camera, 64 × 32 pixels each averaging four points of the ground, five seeds at a time, changing only its units. A spikes as LIF neurons do. B uses the same leaky membrane read through a ReLU, sending a real value every step, on the same events. C is B on an ordinary camera's frames, the log brightness of every pixel every step.
+
+| Network | Seeds that finished all 200 unseen tracks | Lap | Units sending a step | Triggered multiply-adds a step |
+| --- | --- | --- | --- | --- |
+| A, spiking, events | {arms['A, spiking'].every_track} of 5 | {arms['A, spiking'].median_lap_time.mean.toFixed(1)} s | {Math.round(arms['A, spiking'].active_units_per_step.mean).toLocaleString('en-US')} | {Math.round(arms['A, spiking'].triggered_macs_per_step.mean).toLocaleString('en-US')} |
+| B, graded, events | {arms['B, graded, events'].every_track} of 5 | {arms['B, graded, events'].median_lap_time.mean.toFixed(1)} s | {Math.round(arms['B, graded, events'].active_units_per_step.mean).toLocaleString('en-US')} | {Math.round(arms['B, graded, events'].triggered_macs_per_step.mean).toLocaleString('en-US')} |
+| C, graded, frames | {arms['C, graded, frames'].every_track} of 5 | {arms['C, graded, frames'].median_lap_time.mean.toFixed(1)} s | {Math.round(arms['C, graded, frames'].active_units_per_step.mean).toLocaleString('en-US')} | {Math.round(arms['C, graded, frames'].triggered_macs_per_step.mean).toLocaleString('en-US')} |
+
+At driving, the three are close. A finished every track at every seed, B missed one track at one seed, and C, the weakest, finished 186 at one seed with a slow lap. With five seeds each, the differences in lap time and on sharper bends sit inside each network's spread from seed to seed.
+
+The difference is in the work. Each network has the same 1.46 million connections, and a GPU computes every one of them every step, so on a GPU all three cost the same. Hardware that computes only what a nonzero input or unit triggers, as neuromorphic chips do, would do about a quarter of B's work for A: 9% of A's units send in a step against 53% of B's, and each sends one bit against B's 32. That is a count of operations, not a measurement on such a chip.
+
+The spiking network also steered back from a 0.3 m sideways nudge within one step, 20 ms, where the graded ones took {arms['B, graded, events'].response_ms.mean.toFixed(0)} and {arms['C, graded, frames'].response_ms.mean.toFixed(0)} ms to reach half their response. That comes from the units rather than from spikes as such: a graded unit here averages its input over the same time constant, while a LIF neuron fires the moment its membrane crosses threshold.
+
+Four more variants trained the same way. Spikes carrying 2 or 4 bits, as Loihi 2's can, did worse: at one seed the 2-bit network finished 85 tracks and the 4-bit none. Sigma-delta units, which send a real value only when it has changed enough, matched A's reliability and work but responded in about 110 ms. Neurons with four active dendrites matched or beat A at every measure of driving. [The study's notes](https://github.com/AshishKumar4/sparx/blob/main/research/racer/README.md) give every seed and measure.
+
 ## Try this
 
 1. Every drive starts with the car at rest. What does the network see at the first step, and how does the car get moving?
@@ -116,7 +135,7 @@ The browser drives the same network from the same weights, in double precision, 
 
 ## Summary
 
-A spiking network learned to drive from an event camera's output and its own speed, by gradients through its spikes, the car's motion and the pixels' own thresholds, and finished every one of 200 tracks it had never seen. Its first recipe worked for one seed in five. Cutting the gradient every 50 steps, growing the bends over training and keeping the weights that drove farthest on held-out tracks made it work for all five.
+A spiking network learned to drive from an event camera's output and its own speed, by gradients through its spikes, the car's motion and the pixels' own thresholds, and finished every one of 200 tracks it had never seen. Its first recipe worked for one seed in five. Cutting the gradient every 50 steps, growing the bends over training and keeping the weights that drove farthest on held-out tracks made it work for all five. Against networks of graded units trained the same way, the spiking one drove as well, would need about a quarter of the work on event-driven hardware and none less on a GPU, and steered back from a nudge faster.
 
 ## References
 
