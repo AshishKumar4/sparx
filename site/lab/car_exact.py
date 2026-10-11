@@ -95,16 +95,17 @@ class Car:
 
 
 def drive(car: Car, start: list[float], cars: list[list[float]], readout: list[list[float]],
-          readout_error) -> tuple[list, bool]:
-    """Each step's budget, and whether every step's rounding stayed within it."""
-    budgets, within, before = [], True, start
+          readout_error) -> tuple[list, list[float]]:
+    """Each step's budget, and each component's largest rounding as a share of its budget, at most 1 when
+    every step stayed within it."""
+    budgets, worst, before = [], [0.0] * 4, start
     for held, u in zip(cars, readout, strict=True):
         exact = car.step(before, u, readout_error)
-        residual = [abs(mpmath.mpf(h) - e.value) for h, e in zip(held, exact, strict=True)]
-        within &= all(r <= e.error for r, e in zip(residual, exact, strict=True))
+        for i, (h, e) in enumerate(zip(held, exact, strict=True)):
+            worst[i] = max(worst[i], float(abs(mpmath.mpf(h) - e.value) / e.error) if e.error else math.inf)
         budgets.append([e.error for e in exact])
         before = held
-    return budgets, within
+    return budgets, worst
 
 
 def propagate(car: Car, cars: list[list[float]], readout: list[list[float]], budgets: list) -> list:
@@ -162,8 +163,9 @@ def main() -> None:
             covered = all(d[i] <= b[i] for d, b in zip(distances, bounds, strict=True) for i in range(4))
             largest = [max(b[i] for b in bounds) for i in range(4)]
             seen = [max(d[i] for d in distances) for i in range(4)]
-            rows.append({"steps": len(lap["cars"]), "sparx_rounding_within_budget": sparx_within,
-                         "browser_rounding_within_budget": ours_within,
+            rows.append({"steps": len(lap["cars"]),
+                         "sparx_rounding_of_budget": dict(zip(NAMES, sparx_within, strict=True)),
+                         "browser_rounding_of_budget": dict(zip(NAMES, ours_within, strict=True)),
                          "bound": dict(zip(NAMES, largest, strict=True)),
                          "observed": dict(zip(NAMES, seen, strict=True)), "covered": covered})
             shown = {k: ({n: round(x, 2) for n, x in v.items()} if isinstance(v, dict) else v)
@@ -172,15 +174,18 @@ def main() -> None:
         report[name] = rows
     world = (recorded.get("model") or public)["world"]
     lap = recorded["laps"][0]
-    _, caught = drive(car, lap["start"], wrong_car(world, lap["start"], lap["readout"]), lap["readout"], 0)
-    report["wrong_car_caught"] = not caught
-    print("a car with its speed's time constant off by 1e-12 is caught:", not caught, flush=True)
+    _, shares = drive(car, lap["start"], wrong_car(world, lap["start"], lap["readout"]), lap["readout"], 0)
+    caught = max(shares) > 1
+    report["wrong_car_caught"] = caught
+    print("a car with its speed's time constant off by 1e-12 is caught:", caught, round(max(shares), 1),
+          flush=True)
     out.write_text(json.dumps(report, indent=1) + "\n")
-    if caught:
+    if not caught:
         sys.exit("the budgets did not catch a wrong car")
-    checks = ("sparx_rounding_within_budget", "browser_rounding_within_budget", "covered")
-    if not all(row[k] for name, rows in report.items() if name != "wrong_car_caught" for row in rows
-               for k in checks):
+    fits = all(max(row[k].values()) <= 1 and row["covered"] for name, rows in report.items()
+               if name != "wrong_car_caught" for row in rows
+               for k in ("sparx_rounding_of_budget", "browser_rounding_of_budget"))
+    if not fits:
         sys.exit("a step's rounding exceeded its budget, or the browser's car left its bound")
 
 
