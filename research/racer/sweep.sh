@@ -13,7 +13,7 @@ mkdir -p "$out"
 echo "$commit" > "$out/commit"
 cp "$config" "$out/config.json"
 lab=$(cd "$(dirname "$0")/../../site/lab" && pwd)
-exec bun /mnt/local/dew/tmp/armada/src/cli.ts map --connection="$HOME/.config/armada/armada-dew2.json" \
+exec bun /mnt/local/dew/tmp/armada/src/cli.ts map --connection="${ARMADA_CONNECTION:-$HOME/.config/armada/armada-dew3.json}" \
   --env="$lab/armada/recipe.json" --size=medium --pool="$pool" --timeout=14400 --items="$config" \
   --artifacts="$out/artifacts" --json --label="$label" -- \
   sh -c "cd \$HOME/sparx && git fetch -q origin $commit && git checkout -q --detach $commit && JAX_PLATFORMS=cpu .venv/bin/python site/lab/racer.py {item} --out {artifacts}" \
