@@ -50,9 +50,9 @@ for (const [k, lap] of recorded.laps.entries()) {
 		car = Math.max(...error.map((e, i) => e / ulp(size[i])));
 		console.log(`lap ${k}: ${events} events and ${spikes} spikes matched; the car within ${car.toFixed(1)} units in the last place; ` +
 			`readouts ${maxRelative.toExponential(1)} max-relative, ${rmsRelative.toExponential(1)} RMS-relative`);
-		// sparx's float64 run itself moves by tens of units in the last place between machines (XLA's CPU
-		// transcendentals differ by instruction set): measured 0.3 to 12.2 on armada, 0.3 to 24.0 on CI's runner.
-		expect(car).toBeLessThan(32);
+		// Measured 5.5 and 12.2 on armada and on CI's runner alike, whose float64 runs agree exactly
+		// (site/lab/probes/references.py): the difference is the browser's transcendentals against XLA's.
+		expect(car).toBeLessThan(16);
 		expect(maxRelative).toBeLessThan(1e-15);
 		// A step of the published network's 64 x 32 camera takes about 10 ms on a CI runner's core.
 	}, 60_000);

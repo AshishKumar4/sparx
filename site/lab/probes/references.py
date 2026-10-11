@@ -31,7 +31,8 @@ def compare(a: dict, b: dict) -> list[dict]:
             size = max(abs(v) for step in one["readout"] for v in step)
             error = max(abs(p - q) for s, t in zip(one["readout"], two["readout"], strict=True)
                         for p, q in zip(s, t, strict=True))
-            row["readout_max_relative"] = error / size
+            # A drive whose readouts stay at zero has only an absolute difference to give.
+            row["readout_max_relative" if size else "readout_max"] = error / size if size else error
         row["events_equal"] = one.get("events") == two.get("events")
         row["spikes_equal"] = one.get("spikes") == two.get("spikes")
         rows.append(row)

@@ -9,6 +9,12 @@ interface Recorded {
 	laps: { points: number[][]; start: number[]; cars: number[][]; events: number[][]; spikes: number[][] }[];
 }
 
+// Each fixture's bound on the car, in units in the last place. On the spiking fixture the browser measured
+// 0.3 and 1.0 on armada and on CI's runner alike. On the graded one, sparx's own float64 run differs by up
+// to 14.5 between those two machines (site/lab/probes/references.py), and the browser measured up to 9.5
+// against armada's and 24.0 against the runner's.
+const BOUND: Record<string, number> = { 'lif-events': 2, 'relu-frames': 32 };
+
 for (const name of ['lif-events', 'relu-frames']) {
 	const recorded: Recorded = await Bun.file(new URL(`fixtures/racer-conv-${name}.json`, import.meta.url)).json();
 	for (const [k, lap] of recorded.laps.entries()) {
@@ -35,9 +41,7 @@ for (const name of ['lif-events', 'relu-frames']) {
 			car = Math.max(...error.map((e, i) => e / ulp(size[i])));
 			console.log(`${name}, lap ${k}: ${active} unit outputs matched; the car within ${car.toFixed(1)} units in the last place`);
 			expect(active).toBeGreaterThan(0);
-			// sparx's float64 run itself moves by tens of units in the last place between machines (XLA's CPU
-			// transcendentals differ by instruction set): measured 0.3 to 12.2 on armada, 0.3 to 24.0 on CI's runner.
-			expect(car).toBeLessThan(32);
+			expect(car).toBeLessThan(BOUND[name]);
 		});
 	}
 }
