@@ -50,13 +50,14 @@ class Value:
         self.value, self.error = mpmath.mpf(value), mpmath.mpf(error)
 
     def rounded(self, error):
+        """This value as an operation's result: `error` carried from its inputs, and its own rounding."""
         return Value(self.value, error + UNIT * abs(self.value))
 
     def __add__(self, other):
-        return Value(self.value + other.value, self.error + other.error).rounded(0)
+        return Value(self.value + other.value).rounded(self.error + other.error)
 
     def __sub__(self, other):
-        return Value(self.value - other.value, self.error + other.error).rounded(0)
+        return Value(self.value - other.value).rounded(self.error + other.error)
 
     def __mul__(self, other):
         value = self.value * other.value
