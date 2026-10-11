@@ -117,6 +117,8 @@ export class Racer {
 	readonly forward: Float64Array;
 	readonly side: Float64Array;
 	readonly pixels: number;
+	/** Where each pixel looks on the ground, ahead and to the side of the car: the middle of its points. */
+	readonly centres: { forward: Float64Array; side: Float64Array };
 	/** Each ground point's brightness, before a pixel averages its points. */
 	private readonly light: Float64Array;
 	/** x, y, heading, speed: metres, radians, metres per second. */
@@ -146,6 +148,14 @@ export class Racer {
 		const n = this.world.supersample ?? 1;
 		this.pixels = this.forward.length / (n * n);
 		this.light = new Float64Array(this.forward.length);
+		this.centres = { forward: new Float64Array(this.pixels), side: new Float64Array(this.pixels) };
+		const fine = this.world.columns * n;
+		for (let q = 0; q < this.forward.length; q++) {
+			// The ground's points run row by row over a grid n times finer than the pixels each way.
+			const p = Math.floor(Math.floor(q / fine) / n) * this.world.columns + Math.floor((q % fine) / n);
+			this.centres.forward[p] += this.forward[q] / (n * n);
+			this.centres.side[p] += this.side[q] / (n * n);
+		}
 		this.level = new Float64Array(this.pixels);
 		this.seen = new Float64Array(this.pixels);
 		this.events = new Uint8Array(2 * this.pixels);

@@ -1,12 +1,15 @@
 ---
 // The racer of the front page in a figure: the trained network driving tracks the reader picks or draws
 // (src/widgets/racer/hero.ts on src/engines/racer.ts, held to sparx).
+import racer from '../../../public/racer/evaluation.json';
 import Figure from './Figure.astro';
+
+const neurons = racer.summary.units.toLocaleString('en-US');
 ---
 
 <div class="racer-figure" data-racer-figure>
 	<Figure engine="Racer" height="26rem">
-		<canvas data-racer-stage role="img" aria-label="A car driven by a spiking network around a closed track from its event camera's output, above the camera's pixels as they fire, the network's 160 neurons as they spike, and its steering and speed"></canvas>
+		<canvas data-racer-stage role="img" aria-label={`A car driven by a spiking network around a closed track from its event camera's output, above the camera's pixels as they fire, the network's ${neurons} neurons as they spike, and its steering and speed`}></canvas>
 		<div class="net" data-racer-net aria-hidden="true"></div>
 		<div slot="controls" class="sx-buttons">
 			<button class="sx-button" type="button" data-racer-act="track">New track</button>

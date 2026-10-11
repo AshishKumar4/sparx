@@ -59,6 +59,9 @@ function before(size: number, kernel: number, stride: number): number {
 export class Vision {
 	readonly inputs: number;
 	readonly neurons: number;
+	/** Each population of units in `spikes`' order: a convolution's as rows, columns and features, the dense
+	 * layer's as one row. */
+	readonly maps: { rows: number; columns: number; features: number; offset: number }[] = [];
 	/** Every unit's output this step, 1 where it fired or is active, population after population. */
 	readonly spikes: Uint8Array;
 	/** Units silenced by the reader: they neither fire nor hold a charge. */
@@ -102,6 +105,7 @@ export class Vision {
 			this.convs.push(conv);
 			const width = outRows * outColumns * features;
 			this.units.push({ v: new Float64Array(width), out: new Float64Array(width), offset });
+			this.maps.push({ rows: outRows, columns: outColumns, features, offset });
 			offset += width;
 			[rows, columns, channels] = [outRows, outColumns, features];
 		}
@@ -113,6 +117,7 @@ export class Vision {
 		this.joined = new Float64Array(flat + extra);
 		this.hidden = { kernel: hiddenKernel, bias: param('Dense_0/bias'), inputs: flat + extra, outputs: config.hidden };
 		this.units.push({ v: new Float64Array(config.hidden), out: new Float64Array(config.hidden), offset });
+		this.maps.push({ rows: 1, columns: config.hidden, features: 1, offset });
 		offset += config.hidden;
 		this.output = { kernel: param('Dense_1/kernel'), bias: param('Dense_1/bias'), inputs: config.hidden, outputs: config.outputs };
 		this.neurons = offset;
@@ -152,24 +157,31 @@ export class Vision {
 		return this.readout;
 	}
 
+	/** The convolution of `x` into `into`, read from the inputs that are not zero: each input adds its part
+	 * to the outputs whose windows cover it. An output's terms arrive in the order of its taps, rows, then
+	 * columns, then channels, so the sum is the one a sum over its window gives, a zero adding nothing. */
 	private convolve(conv: Conv, x: Float64Array, into: Float64Array): void {
 		const { kernel, bias, size, rows, columns, channels, outRows, outColumns, features, top, left } = conv;
-		for (let i = 0; i < outRows; i++)
-			for (let j = 0; j < outColumns; j++)
-				for (let f = 0; f < features; f++) {
-					let sum = 0;
-					for (let di = 0; di < size; di++) {
-						const r = 2 * i + di - top;
-						if (r < 0 || r >= rows) continue;
-						for (let dj = 0; dj < size; dj++) {
-							const c = 2 * j + dj - left;
-							if (c < 0 || c >= columns) continue;
-							for (let ch = 0; ch < channels; ch++)
-								sum += x[(r * columns + c) * channels + ch] * kernel[((di * size + dj) * channels + ch) * features + f];
+		into.fill(0);
+		for (let r = 0; r < rows; r++)
+			for (let c = 0; c < columns; c++)
+				for (let ch = 0; ch < channels; ch++) {
+					const v = x[(r * columns + c) * channels + ch];
+					if (v === 0) continue;
+					// Output row i takes input row r through tap di = r + top - 2i.
+					for (let di = (r + top) % 2; di < size; di += 2) {
+						const i = (r + top - di) / 2;
+						if (i < 0 || i >= outRows) continue;
+						for (let dj = (c + left) % 2; dj < size; dj += 2) {
+							const j = (c + left - dj) / 2;
+							if (j < 0 || j >= outColumns) continue;
+							const out = (i * outColumns + j) * features;
+							const tap = ((di * size + dj) * channels + ch) * features;
+							for (let f = 0; f < features; f++) into[out + f] += v * kernel[tap + f];
 						}
 					}
-					into[(i * outColumns + j) * features + f] = sum + bias[f];
 				}
+		for (let o = 0; o < into.length; o += features) for (let f = 0; f < features; f++) into[o + f] += bias[f];
 	}
 
 	/** Each unit's membrane takes in `drive` (which it overwrites with the units' outputs): a LIF neuron sums

@@ -18,14 +18,19 @@ export function floats(base64: string): Float64Array {
 }
 
 /** A dense layer's outputs into `out`: each the sum over inputs in order, then the bias. The kernel is
- * `[inputs * outputs]`, row-major by input, as flax stores it. */
+ * `[inputs * outputs]`, row-major by input, as flax stores it. Only inputs that are not zero are read, a
+ * spiking layer's few spikes: each output still adds its terms in the inputs' order, so the sum is the
+ * one every input would give, a zero adding nothing. */
 export function dense(layer: { kernel: Float64Array; bias: Float64Array; inputs: number; outputs: number }, x: ArrayLike<number>, out: Float64Array): void {
 	const { kernel, bias, inputs, outputs } = layer;
-	for (let j = 0; j < outputs; j++) {
-		let sum = 0;
-		for (let i = 0; i < inputs; i++) sum += x[i] * kernel[i * outputs + j];
-		out[j] = sum + bias[j];
+	out.fill(0, 0, outputs);
+	for (let i = 0; i < inputs; i++) {
+		const v = x[i];
+		if (v === 0) continue;
+		const row = i * outputs;
+		for (let j = 0; j < outputs; j++) out[j] += v * kernel[row + j];
 	}
+	for (let j = 0; j < outputs; j++) out[j] += bias[j];
 }
 
 export class Stack {

@@ -2,6 +2,7 @@
 // a track the visitor draws, seeing only its event camera's output, drawn beside what the camera sends and
 // the network's spikes.
 import { Racer, type RacerModel, Track } from '../../engines/racer';
+import { Vision } from '../../engines/vision';
 import { alpha, animate, fit, onTheme, type Palette } from '../theme';
 
 /** A closed track like those the racer trained on (site/lab/racer.py, `Tracks`): a radius of 6 to 10 m bent
@@ -78,8 +79,16 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 	const racer = new Racer(model, track);
 	const pixels = racer.pixels;
 	const hidden = racer.network.neurons;
-	if (!model.layers) throw new Error('the hero draws a dense stack');
-	const [first] = model.layers.flatMap((l) => (l.kind === 'dense' ? [l.outputs] : []));
+	// The populations to draw: a convolution's as a map, lit where any of a position's features fired; a
+	// dense layer's as its neurons.
+	const maps =
+		racer.network instanceof Vision
+			? racer.network.maps
+			: (model.layers ?? [])
+					// A dense layer into LIF neurons is a population; the last, into the readout, is not.
+					.flatMap((l, k, all) => (l.kind === 'dense' && all[k + 1]?.kind === 'lif' ? [l.outputs] : []))
+					.map((width, k, widths) => ({ rows: 1, columns: width, features: 1, offset: widths.slice(0, k).reduce((a, b) => a + b, 0) }));
+	const lit = maps.map((m) => new Float32Array(m.rows * m.columns));
 	const seen = new Float32Array(2 * pixels);
 	const flash = new Float32Array(hidden);
 	let colors: Palette;
@@ -113,6 +122,7 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 		crashedAt = -1;
 		seen.fill(0);
 		flash.fill(0);
+		for (const l of lit) l.fill(0);
 		fitTrack();
 	}
 
@@ -174,6 +184,12 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 			flash[i] = racer.network.spikes[i] ? 1 : flash[i] * 0.8;
 			spikes += racer.network.spikes[i];
 		}
+		for (const [k, m] of maps.entries())
+			for (let q = 0; q < m.rows * m.columns; q++) {
+				let any = 0;
+				for (let f = 0; f < m.features; f++) any = Math.max(any, flash[m.offset + q * m.features + f]);
+				lit[k][q] = any;
+			}
 		for (let p = 0; p < 2 * pixels; p++) seen[p] = racer.events[p] ? 1 : seen[p] * 0.75;
 		let d = racer.place[1] - along;
 		if (d < -track.total / 2) d += track.total;
@@ -222,13 +238,15 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 		const [x, y, psi] = racer.car;
 		const c = Math.cos(psi);
 		const s = Math.sin(psi);
+		const { forward, side } = racer.centres;
+		const dot = pixels > 1000 ? 1.5 : 3;
 		for (let p = 0; p < pixels; p++) {
 			const on = seen[p];
 			const off = seen[pixels + p];
-			const wx = x + racer.forward[p] * c - racer.side[p] * s;
-			const wy = y + racer.forward[p] * s + racer.side[p] * c;
+			const wx = x + forward[p] * c - side[p] * s;
+			const wy = y + forward[p] * s + side[p] * c;
 			ctx.fillStyle = on > 0.05 ? alpha(colors.spike, Math.min(1, on)) : off > 0.05 ? alpha(colors.membrane, Math.min(1, off)) : alpha(colors.ink, 0.12);
-			ctx.fillRect(sx(wx) - 1.5, sy(wy) - 1.5, 3, 3);
+			ctx.fillRect(sx(wx) - dot / 2, sy(wy) - dot / 2, dot, dot);
 		}
 		ctx.save();
 		ctx.translate(sx(x), sy(y));
@@ -265,26 +283,31 @@ export function racerHero(root: HTMLElement, model: RacerModel, report: (state: 
 		}
 		const left = net.x + camW + gap;
 		const room = net.x + net.w - left;
-		const second = hidden - first;
-		const columns = [12, 8];
-		const sizes = [first, second];
-		const unit = Math.min((room - gap - 40) / (columns[0] + columns[1]), camH / Math.ceil(first / columns[0]));
+		// Each population as a grid: a map at its own shape, a layer of neurons wrapped to a few columns.
+		const grids = maps.map((m) => {
+			if (m.rows > 1) return { columns: m.columns, rows: m.rows, round: false };
+			const columns = m.columns > 100 ? 16 : m.columns > 80 ? 12 : 8;
+			return { columns, rows: Math.ceil(m.columns / columns), round: true };
+		});
+		const across = grids.reduce((sum, g) => sum + g.columns, 0);
+		const unit = Math.min((room - 40 - (gap / 2) * grids.length) / across, ...grids.map((g) => camH / g.rows));
 		let x = left;
 		ctx.fillStyle = colors.muted;
-		ctx.fillText(`${hidden} spiking neurons`, left, top - 6);
-		let offset = 0;
-		for (let layer = 0; layer < 2; layer++) {
-			for (let k = 0; k < sizes[layer]; k++) {
-				const f = flash[offset + k];
-				const cx = x + (k % columns[layer]) * unit + unit / 2;
-				const cy = top + Math.floor(k / columns[layer]) * unit + unit / 2;
-				ctx.fillStyle = f > 0.05 ? alpha(colors.spike, 0.25 + 0.75 * f) : alpha(colors.ink, 0.1);
-				ctx.beginPath();
-				ctx.arc(cx, cy, Math.max(0.5, unit * 0.32), 0, 2 * Math.PI);
-				ctx.fill();
+		ctx.fillText(`${hidden.toLocaleString('en-US')} spiking neurons`, left, top - 6);
+		for (const [k, g] of grids.entries()) {
+			for (let q = 0; q < lit[k].length; q++) {
+				const f = lit[k][q];
+				const col = q % g.columns;
+				// A map's far rows are the top of the picture, as the camera's are.
+				const row = g.round ? Math.floor(q / g.columns) : g.rows - 1 - Math.floor(q / g.columns);
+				ctx.fillStyle = f > 0.05 ? alpha(colors.spike, 0.25 + 0.75 * f) : alpha(colors.ink, g.round ? 0.1 : 0.06);
+				if (g.round) {
+					ctx.beginPath();
+					ctx.arc(x + col * unit + unit / 2, top + row * unit + unit / 2, Math.max(0.5, unit * 0.32), 0, 2 * Math.PI);
+					ctx.fill();
+				} else ctx.fillRect(x + col * unit, top + row * unit, Math.max(0.5, unit - 0.5), Math.max(0.5, unit - 0.5));
 			}
-			offset += sizes[layer];
-			x += columns[layer] * unit + gap / 2;
+			x += g.columns * unit + gap / 2;
 		}
 		const bars = x + 6;
 		const steer = Math.tanh(racer.network.readout[0]);
