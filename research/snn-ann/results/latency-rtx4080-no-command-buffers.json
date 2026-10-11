@@ -1,0 +1,47 @@
+{
+ "device": "cuda:0",
+ "jax": "0.11.2.post3",
+ "xla_flags": "--xla_gpu_enable_command_buffer= --xla_allow_excess_precision=false --xla_gpu_enable_allocator_spatial_partitioning=false",
+ "arms": {
+  "A, spiking": {
+   "run": "7",
+   "units_active": 0.08956282585859299,
+   "step_ms": {
+    "median": 0.39882201235741377,
+    "p99": 0.7062423284514806,
+    "min": 0.3159589832648635
+   },
+   "stream_ms_per_step": 0.031075982328426715
+  },
+  "B, graded, events": {
+   "run": "29",
+   "units_active": 0.45527079701423645,
+   "step_ms": {
+    "median": 0.3915565030183643,
+    "p99": 0.6861657573608682,
+    "min": 0.3137059975415468
+   },
+   "stream_ms_per_step": 0.031646461332760126
+  },
+  "sigma-delta": {
+   "run": "12",
+   "units_active": 0.07687312364578247,
+   "step_ms": {
+    "median": 0.41137101652566344,
+    "p99": 0.7766788624576292,
+    "min": 0.31904998468235135
+   },
+   "stream_ms_per_step": 0.03271272966715818
+  },
+  "dendritic": {
+   "run": "13",
+   "units_active": 0.11206260323524475,
+   "step_ms": {
+    "median": 0.4215509834466502,
+    "p99": 0.7930320480954832,
+    "min": 0.3319749957881868
+   },
+   "stream_ms_per_step": 0.03330280067166314
+  }
+ }
+}
