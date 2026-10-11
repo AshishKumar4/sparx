@@ -93,8 +93,8 @@ if TYPE_CHECKING:
 __all__ = ["Sequentialized", "from_nir", "to_nir"]
 
 Discretization = Literal["exact", "euler"]
-type LayerParams = Mapping[str, jax.Array | np.ndarray]
-"""One layer's parameters: name to array."""
+type LayerParams = Mapping[str, jax.Array | np.ndarray | LayerParams]
+"""One layer's parameters: name to array, or to a wrapped layer's parameters (a `Recurrent`'s `neuron`)."""
 type StackVariables = Mapping[str, Mapping[str, LayerParams]]
 """A sequential stack's variables, `{"params": {"layers_k": {...}}}`."""
 type Pair = tuple[int, int]
@@ -110,7 +110,8 @@ class Sequentialized(Protocol):
     def as_sequential(self, variables: StackVariables) -> tuple[nn.Sequential, StackVariables]: ...
 
 type Imported = dict[str, np.ndarray | dict[str, np.ndarray]]
-"""One imported layer's parameters: a weight layer's arrays, or a recurrent layer's, its neuron's nested."""
+"""One imported layer's parameters, as `LayerParams` and mutable: the weight layer before a neuron node
+absorbs the node's input scale."""
 
 
 def _continuous(kept: float | np.ndarray, dt: float,
@@ -278,11 +279,17 @@ def _export_layer(layer: nn.Module, params: LayerParams, name: str, shape: tuple
             raise NotImplementedError("NIR holds a fixed dense recurrence; a sparse or plastic one has no "
                                       "node")
         lif, w_rec = f"{name}.lif", f"{name}.w_rec"
-        nodes: dict[str, nir.NIRNode] = {
-            lif: _export_neuron(cell.inner, layer.dt, shape, dt, discretization),
-            w_rec: nir.Linear(weight=np.asarray(cell.wiring.weight).T),
-        }
+        inner = _export_neuron(cell.inner, layer.dt, shape, dt, discretization)
+        if not isinstance(inner, nir.LIF):
+            raise NotImplementedError(f"a Recurrent layer exports around a LIF neuron, whose feedback "
+                                      f"sparx reads back; not around {type(inner).__name__}")
+        feedback = nir.Linear(weight=np.asarray(cell.wiring.weight).T)
+        nodes: dict[str, nir.NIRNode] = {lif: inner, w_rec: feedback}
         return nodes, [(lif, w_rec), (w_rec, lif)], lif
+    if isinstance(layer, nn.Dense | nn.Conv) and (
+            np.dtype(layer.dtype or np.float32) != np.float32 or np.dtype(layer.param_dtype) != np.float32):
+        raise NotImplementedError(f"NIR states a layer's weights, not the precision it computes in: export "
+                                  f"a {type(layer).__name__} that holds and computes in float32")
     if isinstance(layer, nn.Dense):
         node: nir.NIRNode = _export_dense(params, shape)
     elif isinstance(layer, nn.Conv):
@@ -299,7 +306,10 @@ def _first_shape(model: nn.Sequential, params: Mapping[str, LayerParams],
     if input_shape is not None:
         return tuple(int(n) for n in input_shape)
     if model.layers and isinstance(model.layers[0], nn.Dense):
-        return (int(np.shape(_own_params(model.layers[0], params, 0, None)["kernel"])[0]),)
+        kernel = _own_params(model.layers[0], params, 0, None)["kernel"]
+        if not isinstance(kernel, jax.Array | np.ndarray):
+            raise ValueError("layer 0, a Dense, holds no kernel array")
+        return (int(kernel.shape[0]),)
     raise ValueError("pass input_shape, one example's shape (H, W, C for images), "
                      "for a stack that does not start with a Dense layer")
 

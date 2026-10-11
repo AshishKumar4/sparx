@@ -281,6 +281,13 @@ def test_learned_time_constants_per_feature_round_trip(discretization, layer_dt,
                             for k, v in variables["params"].items()}}
     variables = unequal_decays(variables, np.random.default_rng(1))
     graph = to_nir(model, variables, dt=nir_dt, discretization=discretization)
+    # Each feature's tau and r from its decay over one step, by the rule's own formula.
+    for k in ("1", "3"):
+        kept = jax.nn.sigmoid(np.asarray(variables["params"][f"layers_{k}"]["decay"], np.float64)) ** layer_dt
+        tau = -nir_dt / np.log(kept) if discretization == "exact" else nir_dt / (1 - kept)
+        r = 1 / (1 - kept) if discretization == "exact" else tau / nir_dt
+        np.testing.assert_allclose(graph.nodes[k].tau, tau, rtol=1e-6)
+        np.testing.assert_allclose(graph.nodes[k].r, r, rtol=1e-6)
     assert np.unique(graph.nodes["1"].tau).size == 6 and np.unique(graph.nodes["3"].tau).size == 3
     back, back_variables = from_nir(graph, dt=nir_dt, discretization=discretization)
     assert back.layers[1].learn_tau and back.layers[3].learn_tau
@@ -310,6 +317,29 @@ def test_learned_time_constants_round_trip_through_convolution_and_recurrence():
     np.testing.assert_allclose(np.asarray(back.apply(back_variables, x)), expected, rtol=2e-5, atol=2e-5)
 
 
+@pytest.mark.parametrize("discretization", ["exact", "euler"])
+def test_a_graph_with_a_tau_per_neuron_imports_its_decays_and_input_scales(discretization):
+    # A graph made outside sparx, three LIF neurons with their own tau and r after an Affine node: each
+    # neuron's decay is its learned parameter, and the Affine's rows carry each neuron's input scale.
+    rng = np.random.default_rng(6)
+    weight, bias = rng.normal(size=(3, 4)), rng.normal(size=3)
+    tau, r, dt = np.asarray([0.002, 0.005, 0.02]), np.asarray([1.5, 2.0, 3.0]), 1e-3
+    graph = nir.NIRGraph(nodes={"input": nir.Input(input_type={"input": np.array([4])}),
+                                "0": nir.Affine(weight=weight, bias=bias),
+                                "1": nir.LIF(tau=tau, r=r, v_leak=np.zeros(3), v_threshold=np.ones(3),
+                                             v_reset=np.zeros(3)),
+                                "output": nir.Output(output_type={"output": np.array([3])})},
+                         edges=[("input", "0"), ("0", "1"), ("1", "output")])
+    model, variables = from_nir(graph, dt=dt, discretization=discretization)
+    kept = np.exp(-dt / tau) if discretization == "exact" else 1 - dt / tau
+    scale = r * ((1 - kept) if discretization == "exact" else dt / tau)
+    params = variables["params"]
+    assert model.layers[1].learn_tau
+    np.testing.assert_allclose(jax.nn.sigmoid(params["layers_1"]["decay"]), kept, rtol=1e-6)
+    np.testing.assert_allclose(params["layers_0"]["kernel"], weight.T * scale, rtol=1e-6)
+    np.testing.assert_allclose(params["layers_0"]["bias"], bias * scale, rtol=1e-6)
+
+
 def test_a_tau_that_differs_within_a_channel_or_leaves_its_domain_is_refused():
     graph = to_nir(nn.Sequential([nn.Dense(2), LI(tau=3.0)]),
                    nn.Sequential([nn.Dense(2), LI(tau=3.0)]).init(jax.random.key(0), jnp.ones((1, 1, 3))),
@@ -325,14 +355,26 @@ def test_a_tau_that_differs_within_a_channel_or_leaves_its_domain_is_refused():
 
 
 @pytest.mark.parametrize("recurrent", [False, True])
-def test_a_spiking_mlp_exports_as_the_stack_it_states(recurrent):
+@pytest.mark.parametrize("use_bias", [True, False])
+def test_a_spiking_mlp_exports_as_the_stack_it_states(recurrent, use_bias):
     # The stack SpikingMLP states runs as the model does at inference, dropout and all, and its graph
-    # comes back from NIR to the same outputs.
+    # comes back from NIR to the same outputs. Every bias is set apart from the rest, so a bias lost or
+    # moved to another layer shows.
     model = SpikingMLP(hidden=(8, 6), classes=3, neuron=LIF(tau=5.0, reset="zero", learn_tau=True),
-                       recurrent=recurrent, dropout=0.3, readout_tau=4.0, learn_readout_tau=True)
+                       recurrent=recurrent, dropout=0.3, readout_tau=4.0, learn_readout_tau=True,
+                       use_bias=use_bias)
     x = jnp.asarray(np.random.default_rng(4).random((30, 2, 10)), jnp.float32)
-    variables = unequal_decays(jax.tree.map(lambda w: 2 * w, model.init(jax.random.key(0), x)),
+    rng = np.random.default_rng(7)
+
+    def distinct(path, leaf):
+        if path[-1].key == "bias":
+            return jnp.asarray(rng.uniform(-0.5, 0.5, leaf.shape), leaf.dtype)
+        return 2 * leaf if path[-1].key == "kernel" else leaf
+
+    variables = unequal_decays(jax.tree_util.tree_map_with_path(distinct, model.init(jax.random.key(0), x)),
                                np.random.default_rng(5))
+    leaves = jax.tree_util.tree_flatten_with_path(variables)[0]
+    assert any(path[-1].key == "bias" for path, _ in leaves) == use_bias
     expected = np.asarray(model.apply(variables, x))
     stack, stack_variables = model.as_sequential(variables)
     np.testing.assert_array_equal(np.asarray(stack.apply(stack_variables, x)), expected)
@@ -344,9 +386,13 @@ def test_a_spiking_mlp_exports_as_the_stack_it_states(recurrent):
 
 
 @pytest.mark.parametrize(("options", "match"), [({"delays": 3}, "delayed"),
-                                                ({"batch_norm": True}, "batch norm")])
+                                                ({"batch_norm": True}, "batch norm"),
+                                                ({"dtype": jnp.float16}, "float32"),
+                                                ({"param_dtype": jnp.bfloat16}, "float32"),
+                                                ({"recurrent": True, "neuron": IF(reset="zero")},
+                                                 "around a LIF")])
 def test_a_spiking_mlp_with_layers_nir_cannot_state_is_refused(options, match):
-    model = SpikingMLP(hidden=(4,), classes=2, neuron=LIF(reset="zero"), **options)
+    model = SpikingMLP(hidden=(4,), classes=2, **{"neuron": LIF(reset="zero"), **options})
     variables = model.init(jax.random.key(0), jnp.zeros((6, 1, 5)))
     with pytest.raises(NotImplementedError, match=match):
         to_nir(model, variables, dt=1e-3)
