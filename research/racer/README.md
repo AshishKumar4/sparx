@@ -11,6 +11,7 @@ research/racer/sweep.sh research/racer/configs/<sweep>.json <label> <out dir> [p
 python research/racer/run.py research/racer/configs/<sweep>.json <out dir>              # on a GPU
 research/racer/queue.sh research/racer/configs/<sweep>.json <out dir> <results checkout> <first> <last>
 python research/racer/summarize.py <out dir> research/racer/results/<sweep>.json
+python research/racer/compare.py research/racer/results/<sweep>.json research/racer/results/<sweep>-arms.json
 ```
 
 `configs/phase2.json` is the comparison: the seven arms below, A, B, C, the 2- and 4-bit arms, sigma-delta
