@@ -46,10 +46,9 @@ BOUNDS = {
 
 
 def gpu_device():
-    try:
-        return jax.devices("gpu")[0]
-    except RuntimeError:
-        return None
+    """The GPU, or None on a machine without one, where the GPU tests skip."""
+    gpus = [device for device in jax.devices() if device.platform == "gpu"]
+    return gpus[0] if gpus else None
 
 
 @pytest.fixture(scope="module", params=("A", "B"))

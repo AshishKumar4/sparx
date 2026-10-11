@@ -70,7 +70,7 @@ def recorded_inputs(model: dict, steps: int = STEPS):
         image = jnp.concatenate([on, off], axis=-1)
         return jnp.concatenate([image, before[:, :, 3:4] / world.max_speed], axis=-1)[:, 0], spikes
 
-    # Set the input-producing drive to float32 too even when the reference enables x64 globally.
+    # The drive runs in float32 as the trained network did, though the reference enables float64.
     with jax.enable_x64(new_val=False):
         inputs, activity = jax.jit(drive)(params)
     jax.block_until_ready(inputs)
