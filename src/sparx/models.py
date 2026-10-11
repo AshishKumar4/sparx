@@ -285,6 +285,7 @@ class SpikingMLP(nn.Module):
         # model is built: before a checkpoint is restored onto a mesh, which reads them.
         logical_axes(_mlp_axes(len(self.hidden)))(SpikingMLP)
 
+    @nn.nowrap  # so the layers it makes belong to no module, this one included
     def as_sequential(self, variables: StackVariables) -> tuple[nn.Sequential, StackVariables]:
         """This network as an `nn.Sequential` of its layers, with `variables`' parameters renamed to
         match (`layers_k`), as it runs at inference (`train=False`) on flat inputs `[T, B, F]`: each hidden
