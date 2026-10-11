@@ -29,10 +29,11 @@ CUDA command buffers on (its default), and `results/latency-rtx4080-no-command-b
 Each cell gives command buffers on, then off. Every arm takes about the same time. A step called alone
 costs 0.39 to 0.57 ms, which is the cost of dispatching a compiled function from Python and reading its
 readout back, not of its 1.46 million multiply-adds: in a stream the same step takes 0.027 to 0.034 ms.
-The two runs of each arm differ by up to 0.17 ms in their medians and 2.8 ms in their 99th percentiles,
-in both directions, so command buffers make no measurable difference here; the spread is the host's,
-shared with other jobs. As XLA computes these networks, the spiking arm's sparsity buys no latency on this
-GPU.
+In a stream, every arm ran 0.003 to 0.007 ms a step faster with command buffers on. A step called alone
+moved by up to 0.17 ms in its median and 2.8 ms in its 99th percentile between the two runs, in both
+directions, so one run each does not isolate command buffers' effect there. Across the arms, at either
+setting, the spiking arm is no faster than the graded one: as XLA computes these networks, its sparsity
+buys no latency on this GPU.
 
 ## Next
 
