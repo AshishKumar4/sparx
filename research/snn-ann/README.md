@@ -37,7 +37,8 @@ buys no latency on this GPU.
 
 ## Second result: Pallas with zero-block skipping
 
-`kernel.py` steps both trained arms, A's run 7 and B's run 29, at batch 1 through the same
+The implementation measured here is `kernel.py` at commit 41df61a; the current grouped kernel is
+measured in the fourth result below. It steps both trained arms, A's run 7 and B's run 29, at batch 1 through the same
 Pallas/Triton implementation. There are four compute launches: conv0 with its membrane update,
 conv1 with its membrane update, 64 parallel partial sums of the dense drive, and the final dense
 reduction with its membrane update and readout. The standalone compiled return also has one
@@ -135,6 +136,64 @@ Its lower activity buys no latency under XLA, which computes every connection ev
 above skips only all-zero blocks, and it was slower with skipping than without at A's 61.5% of zero dense
 blocks, so it was not run on this arm.
 
+## Fourth result: grouped reductions and binary products
+
+The same session's control at 41df61a is in `results/kernel-control-rtx4080.json`. A whole-window
+vectorization at 97ae5de, `results/kernel-vectorized-rtx4080.json`, removed the tap loops and the
+standalone readout-copy launch, but its dense scans slowed from 0.0397 to 0.0428 ms a step for A and
+from 0.0398 to 0.0428 for B. The second convolution padded its 144 inputs to 256 and kept a larger
+live tile. In A's dense trace that population took 17.52 μs against the control's 12.09.
+
+At c5d480c, `kernel.py` keeps the first convolution's 25 taps in one reduction and takes the second's
+nine in groups of four, 64 channels per group, with the last group's invalid taps masked. Its camera
+inputs and A's hidden outputs are binary, so their products select float32 weights before a float64
+sum. B's graded inner products still multiply in float64. Membrane arithmetic and sums stay float64;
+stored membranes and weights stay float32. The dense layer has 64 input splits, each handled by four
+CTAs over 32 outputs. Skipping tests a complete convolutional group or a 64-input dense block and
+keeps weight loads behind the branch. Biases and membrane decay are always applied.
+
+The timed standalone call returns only its state and transfers the readout from there. The readout
+is no longer returned twice by the compiled function. CUPTI records four GPU events a step against
+the control's five; XLA drops a duplicate-return copy too, to 14 events for A and 13 for B.
+
+`results/kernel-grouped-rtx4080.json`, RTX 4080, driver 595.84, JAX 0.11.2.post3, command buffers on,
+the same wrapper flags as the second result. Each arm uses the same model and recorded inputs as
+its control. There are 2,000 calls after 200 warm-up steps, ten synchronized 1,500-step scans, and
+100 standalone calls over the first 100 inputs for CUPTI. All times below are milliseconds.
+
+| Arm | Step | Host median | Host p99 | Per step in scan | Device active |
+| --- | --- | ---: | ---: | ---: | ---: |
+| A, spiking | Pallas, skipping | 0.0958 | 0.1426 | 0.02920 | 0.02426 |
+| A, spiking | Pallas, no skipping | 0.0975 | 0.1526 | 0.02970 | 0.02599 |
+| A, spiking | XLA float32 | 0.1148 | 0.2508 | 0.02615 | 0.02826 |
+| B, graded | Pallas, skipping | 0.0984 | 0.1674 | 0.03669 | 0.03360 |
+| B, graded | Pallas, no skipping | 0.0977 | 0.1437 | 0.03640 | 0.03328 |
+| B, graded | XLA float32 | 0.1161 | 0.1945 | 0.02555 | 0.02606 |
+
+A's skipping call is 16.5% lower in host median and 43.1% in p99 than XLA in this session. Its device
+active time over the 100-input prefix is 14.1% lower. Over the full scan it remains 11.7% slower than
+XLA. The profile excludes gaps and uses a shorter input prefix than the scan, so these are different
+measurements. B's grouped calls have lower host latency too, but higher scan and device-active times
+than XLA. The grouped A and B without skipping run 25.3% and 8.5% faster in scans than their original
+Pallas controls. A has 51.5% zero 64-input dense blocks, B none. Skipping lowers A's scan time by
+1.7% relative to leaving it off and raises B's by 0.8%.
+
+The fixed bounds are unchanged. Over all 1,500 inputs, every spike or active-unit count matches
+both the float64 reference and XLA. A's largest RMS-relative error over its four populations is
+3.78e-8 and largest max-relative error 9.08e-8; B's are 4.58e-8 and 1.19e-7. The queued real-input
+CPU interpretation and GPU checks pass, 16 tests in 7.67 s. The same trained parameters are used;
+these correctness checks compare open-loop recorded inputs, not a new closed-loop driving evaluation.
+
+```bash
+DEW_GPU_LANE=racer ~/.cache/dew/dew-gpu-run --short env PYTHONPATH=src \
+  /home/mrwhite0racle/Desktop/dew/.venv/bin/python research/snn-ann/measure.py \
+  --out runs/kernel-grouped.json
+```
+
+Run `--mode profile` and `--mode verify` with that output path through the same wrapper to attach
+the trace and fixed-bound checks. The measured source snapshots are on `research/kernel-vectorized`.
+
 ## Next
 
-- Reduce reduction, branching and launch costs while keeping the fixed correctness bounds.
+- Repeat the paired standalone timing and measure closed-loop driving through the grouped kernel.
+- Reduce the streamed step's cost, which remains above XLA's despite the standalone host result.
