@@ -50,7 +50,10 @@ def main() -> None:
         arguments = shlex.split(run["arguments"])
         key = (option(arguments, "--neuron", "lif"), int(option(arguments, "--bits", "1")),
                option(arguments, "--sees", "events"))
-        arms.setdefault(NAMES.get(key, " ".join(map(str, key))), []).append(
+        name = NAMES.get(key, " ".join(map(str, key)))
+        if "--normalize-levels" in arguments:
+            name += ", level-scaled"
+        arms.setdefault(name, []).append(
             {"seed": int(option(arguments, "--seed", "0")), **run})
     table = {}
     for name, seeds in arms.items():

@@ -189,11 +189,13 @@ def network(hidden: tuple[int, ...] = (96, 64), tau: float = 3.0, readout_tau: f
 
 
 def vision(world: World, neuron: str = "lif", tau: float = 3.0, readout_tau: float = 4.0, bits: int = 1,
-           delta: float = 0.1, branches: int = 4, target: float = 0.03, eta: float = 0.001) -> Vision:
+           delta: float = 0.1, branches: int = 4, target: float = 0.03, eta: float = 0.001,
+           normalize_levels: bool = False) -> Vision:
     """The convolutional network over the camera's image: ON and OFF events, or a frame."""
     channels = 2 if world.sees == "events" else 1
     return Vision((world.rows, world.columns, channels), neuron=neuron, tau=tau, readout_tau=readout_tau,
-                  bits=bits, delta=delta, branches=branches, target=target, eta=eta)
+                  bits=bits, delta=delta, branches=branches, target=target, eta=eta,
+                  normalize_levels=normalize_levels)
 
 
 def inputs(world: World, on: jax.Array, off: jax.Array, seen: jax.Array, car: jax.Array) -> jax.Array:
@@ -343,7 +345,7 @@ def train(args: argparse.Namespace) -> None:
     ground = tuple(jnp.asarray(g, jnp.float32) for g in world.ground())
     if args.net == "conv":
         net = vision(world, args.neuron, args.tau, args.readout_tau, args.bits, args.delta, args.branches,
-                     args.target_rate, args.eta)
+                     args.target_rate, args.eta, args.normalize_levels)
     else:
         net = network(tuple(args.hidden), args.tau, args.readout_tau)
     params = net.init(jax.random.key(args.seed), jnp.zeros((1, 1, world.features)))["params"]
@@ -686,6 +688,8 @@ def main() -> None:
                    default="lif",
                    help="the conv network's units")
     t.add_argument("--bits", type=int, default=1, help="lif: the bits each spike carries")
+    t.add_argument("--normalize-levels", action="store_true",
+                   help="few-bit: divide each threshold's surrogate by the number of levels")
     t.add_argument("--delta", type=float, default=0.1, help="sigma-delta: the smallest change sent")
     t.add_argument("--branches", type=int, default=4, help="dendritic: the branches of each neuron")
     t.add_argument("--target-rate", type=float, default=0.03,
