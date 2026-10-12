@@ -201,9 +201,57 @@ for `classes` (4 classes) and 815 for `permuted` (all 20; its first task is unpe
   for BPTT and random e-prop and 1e-3 for e-prop. EWC and joint training take BPTT's rate, since EWC is
   BPTT until its first task ends.
 
+### At the chosen rates
+
+`results/lr1e-3/` and `results/lr3e-3/` hold all 84 runs, 42 at each rate, from the queue's
+pinned commit c5736fa, with 20 epochs a task on the RTX 4080, JAX 0.11.2.post3, clipping off.
+The rates chosen on held-out training recordings above were fixed before these tests. Every learner
+uses 1e-3 on permuted channels; on classes, e-prop uses 1e-3 and every other learner uses 3e-3.
+Means ± sample deviations over seeds 0, 1 and 2.
+
+Classes in turn:
+
+| Learner | Seeds | All 20 classes, % | Its own classes, % | Forgetting, points | Just learned, % |
+| --- | --- | --- | --- | --- | --- |
+| joint | 3 | 65.6 ± 5.6 | 88.1 ± 1.6 | none | 88.6 ± 7.0 |
+| bptt | 3 | 17.9 ± 0.2 | 38.5 ± 0.7 | 88.3 ± 5.1 | 88.6 ± 4.1 |
+| eprop | 3 | 17.1 ± 1.6 | 36.4 ± 3.0 | 90.0 ± 1.7 | 89.1 ± 2.5 |
+| eprop-random | 3 | 16.0 ± 3.2 | 36.0 ± 2.7 | 88.5 ± 4.4 | 86.8 ± 0.3 |
+| ewc1000 | 3 | 16.2 ± 2.9 | 43.8 ± 3.7 | 87.8 ± 6.1 | 86.4 ± 2.1 |
+| ewc10000 | 3 | 17.0 ± 0.5 | 50.1 ± 13.9 | 87.0 ± 7.7 | 86.6 ± 5.7 |
+| ewc100000 | 3 | 16.7 ± 1.3 | 68.0 ± 22.8 | 84.3 ± 8.2 | 84.1 ± 5.4 |
+
+Permuted channels:
+
+| Learner | Seeds | All 20 classes, % | Its own classes, % | Forgetting, points | Just learned, % |
+| --- | --- | --- | --- | --- | --- |
+| joint | 3 | 75.5 ± 2.1 | 75.5 ± 2.1 | none | 74.1 ± 2.8 |
+| bptt | 3 | 25.0 ± 5.0 | 25.0 ± 5.0 | 56.6 ± 4.1 | 70.2 ± 2.2 |
+| eprop | 3 | 34.8 ± 3.6 | 34.8 ± 3.6 | 55.2 ± 4.8 | 78.9 ± 1.4 |
+| eprop-random | 3 | 37.9 ± 1.1 | 37.9 ± 1.1 | 44.0 ± 1.6 | 73.1 ± 1.1 |
+| ewc1000 | 3 | 34.2 ± 4.2 | 34.2 ± 4.2 | 32.0 ± 6.8 | 59.5 ± 1.2 |
+| ewc10000 | 3 | 34.4 ± 4.7 | 34.4 ± 4.7 | 23.9 ± 8.1 | 52.6 ± 6.7 |
+| ewc100000 | 3 | 29.3 ± 7.3 | 29.3 ± 7.3 | 10.9 ± 5.5 | 37.4 ± 3.5 |
+
+- On classes, every sequential learner ends at 16.0 to 17.9% over all 20 and forgets 84.3 to 90.0
+  points of earlier tasks. e-prop ends at 17.1% against BPTT's 17.9%. EWC at λ = 100,000 keeps 68.0%
+  within each task's own classes, against BPTT's 38.5%, while ending at 16.7% over all 20.
+- On permuted channels, random e-prop ends highest among the sequential rules at 37.9 ± 1.1%, followed
+  by e-prop at 34.8 ± 3.6% and BPTT at 25.0 ± 5.0%; joint training reaches 75.5 ± 2.1%. EWC at λ = 10,000
+  ends at 34.4 ± 4.7% and forgets 23.9 ± 8.1 points, against BPTT's 56.6 ± 4.1.
+- At the same 20 epochs a task, selecting the rate on the first task gives all three sequential rules
+  lower final permuted scores than the 3e-4 runs above. BPTT ends at 25.0% against 35.8%, e-prop at
+  34.8% against 41.8%, and random e-prop at 37.9% against 46.3%. Each learns new tasks better and forgets
+  more. First-task learning-rate selection does not choose for retention across the stream.
+
+The complete grids can be summarized separately.
+
+```bash
+python3 research/continual/summarize.py research/continual/results/lr1e-3/
+python3 research/continual/summarize.py research/continual/results/lr3e-3/
+```
+
 ### Next
 
-- The streams at the chosen rates, three seeds, 20 epochs a task: every learner at 1e-3 and at 3e-3, which
-  covers each chosen rate.
 - BPTT's gradient through the recurrent spikes, with a narrower surrogate or one scaled down on the
   recurrent path, scored on the first task as above.
