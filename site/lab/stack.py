@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import itertools
 import math
+from dataclasses import dataclass
 from typing import NamedTuple
 
 import flax.linen as nn
@@ -78,15 +79,28 @@ class FewBitState(NamedTuple):
     """Whether the step's membrane reached the first threshold, differentiated through the surrogate."""
 
 
+@dataclass(frozen=True)
+class LevelSurrogate(Surrogate):
+    """Each threshold's derivative divided by the number of levels its payload sums."""
+
+    base: Surrogate
+    levels: int
+
+    def derivative(self, x: jax.Array) -> jax.Array:
+        return self.base.derivative(x) / self.levels
+
+
 @struct.dataclass
 class FewBitCell:
     """LIF neurons that reset to zero, whose spike carries how many thresholds (multiples of 1) the
     membrane reached, from 1 to `levels`: Loihi 2's graded spikes, of log2(levels + 1) bits. One level
-    is `LIFCell(decay, reset="zero")`; each level's step is differentiated through `surrogate`."""
+    is `LIFCell(decay, reset="zero")`; each level's step is differentiated through `surrogate`.
+    With `normalize_levels`, that derivative is divided by `levels`, in the payload, rate and reset."""
 
     decay: jax.Array | float
     levels: int = struct.field(pytree_node=False, default=1)
     surrogate: Surrogate = struct.field(pytree_node=False, default=ATan())
+    normalize_levels: bool = struct.field(pytree_node=False, default=False)
     graded = True
 
     def init_state(self, shape: tuple[int, ...], dtype: jnp.dtype) -> FewBitState:
@@ -95,8 +109,9 @@ class FewBitCell:
 
     def step(self, state: FewBitState, inputs: SynapticInput, dt: float) -> tuple[FewBitState, Output]:
         v = self.decay ** dt * state.v + inputs.jump
-        after, first = fire(v, 1.0, self.surrogate, "zero")
-        payload = first + sum(spike(v - k, self.surrogate) for k in range(2, self.levels + 1))
+        surrogate = LevelSurrogate(self.surrogate, self.levels) if self.normalize_levels else self.surrogate
+        after, first = fire(v, 1.0, surrogate, "zero")
+        payload = first + sum(spike(v - k, surrogate) for k in range(2, self.levels + 1))
         payload = payload.astype(inputs.jump.dtype)
         return FewBitState(after, first), Output(payload, jnp.ones_like(payload))
 
@@ -108,9 +123,10 @@ class FewBit(Neuron):
 
     tau: float = 3.0
     bits: int = 2
+    normalize_levels: bool = False
 
     def build(self, x: jax.Array) -> FewBitCell:
-        return FewBitCell(decay(self.tau), 2 ** self.bits - 1)
+        return FewBitCell(decay(self.tau), 2 ** self.bits - 1, normalize_levels=self.normalize_levels)
 
     def __call__(self, x: jax.Array) -> jax.Array:
         payload, first = run_recorded(self, self.model(x), x, lambda state: state.first)
@@ -236,6 +252,7 @@ class Vision(nn.Module):
     branches: int = 4
     target: float = 0.03
     eta: float = 0.001
+    normalize_levels: bool = False
 
     def unit(self, name: str) -> nn.Module:
         """A population of units, named so that `act` lists the populations in order."""
@@ -248,7 +265,7 @@ class Vision(nn.Module):
                 raise ValueError("homeostatic units send binary spikes; leave bits at 1")
             return Homeostatic(LIF(tau=self.tau, reset="zero"), target=self.target, eta=self.eta, name=name)
         if self.bits > 1:
-            return FewBit(tau=self.tau, bits=self.bits, name=name)
+            return FewBit(tau=self.tau, bits=self.bits, normalize_levels=self.normalize_levels, name=name)
         return LIF(tau=self.tau, reset="zero", name=name)
 
     @nn.compact
@@ -356,7 +373,7 @@ def vision_json(net: Vision, params: dict) -> dict:
     return {
         "config": {**{k: getattr(net, k)
                       for k in ("features", "kernels", "hidden", "outputs", "neuron", "bits", "delta",
-                                "branches", "target", "eta")},
+                                "branches", "target", "eta", "normalize_levels")},
                    "shape": list(net.shape), "decay": sparx.dynamics.decay(net.tau),
                    "readout_decay": sparx.dynamics.decay(net.readout_tau)},
         "params": {"/".join(key.key for key in path): {"shape": list(leaf.shape), "data": b64(leaf)}
@@ -371,6 +388,7 @@ def vision_from_json(model: dict) -> tuple[Vision, dict]:
                  neuron=config["neuron"], bits=config.get("bits", 1), delta=config.get("delta", 0.1),
                  branches=config.get("branches", 4), target=config.get("target", 0.03),
                  eta=config.get("eta", 0.001),
+                 normalize_levels=config.get("normalize_levels", False),
                  tau=-1 / math.log(config["decay"]), readout_tau=-1 / math.log(config["readout_decay"]))
     params: dict = {}
     for path, leaf in model["params"].items():
