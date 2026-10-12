@@ -8,9 +8,9 @@ from a step's input to its readout on the host, median and 99th percentile, at t
 the arms' seed-to-seed spread.
 
 The arms are Phase 2's networks, each the seed that drove farthest on its held-out tracks: A spiking,
-B graded on events, sigma-delta and dendritic, and a homeostatic arm still to train, A with intrinsic
-plasticity holding its neurons' rates lower (`sparx.nn.Homeostatic`). Every run is on the workstation's
-RTX 4080, one at a time through the GPU queue.
+B graded on events, sigma-delta and dendritic, and a homeostatic arm, A with intrinsic plasticity holding
+its neurons' rates lower (`sparx.nn.Homeostatic`, research/racer's η = 0.01 arm). Every run is on the
+workstation's RTX 4080, one at a time through the GPU queue.
 
 ## First result: dense XLA
 
@@ -120,7 +120,21 @@ Dew Python environment. `--mode profile` adds the CUPTI measurements to the exis
 `--runs` overrides the Phase 2 artifacts directory. Arm A can use the checked-in racer; arm B
 needs run 29's trained weights.
 
+## Third result: the homeostatic arm under XLA
+
+The homeostatic arm at η = 0.01 drove as A did with 6.7% of its units sending a step against A's 9.3%
+(`research/racer`). `latency.py` measured its best seed, run 4, beside A's run 7 in one session, as in the
+first result (`results/latency-rtx4080-homeostatic.json`, command buffers on):
+
+| Arm | Units active a step | One step, median | One step, 99th percentile | Per step in a stream |
+| --- | --- | --- | --- | --- |
+| A, spiking | 9.0% | 0.57 ms | 1.04 ms | 0.029 ms |
+| homeostatic, η = 0.01 | 7.3% | 0.54 ms | 1.02 ms | 0.029 ms |
+
+Its lower activity buys no latency under XLA, which computes every connection every step. The Pallas step
+above skips only all-zero blocks, and it was slower with skipping than without at A's 61.5% of zero dense
+blocks, so it was not run on this arm.
+
 ## Next
 
 - Reduce reduction, branching and launch costs while keeping the fixed correctness bounds.
-- Train and measure the homeostatic arm through the same step and input method.

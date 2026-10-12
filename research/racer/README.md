@@ -219,12 +219,34 @@ What the comparison says:
   measure of driving, and trained the most stably of all, with a median gradient norm of 0.1 at four seeds
   of five.
 
-A homeostatic arm trained afterwards (`configs/phase2-homeostatic.json`, `results/phase2-homeostatic.json`):
-A's network with each neuron's threshold drifting toward 3% of steps (`sparx.nn.Homeostatic`, the default
-rate η = 0.001 a spike). It drove as A did, every track at every seed, laps of 9.8 ± 0.2 s, 95.9 ± 3.2% at
-bend 1.8 and a 20 ms response, and it did not change the network's activity: 1,157 ± 173 units sent a
-step, 9.3% of them, against A's 1,161 ± 78. At η = 0.001 and about 9% of steps firing, a threshold rises by
-about 0.1 over a 30 s drive, too little to bring the rate toward 3%.
+Homeostatic arms trained afterwards: A's network with each neuron's threshold drifting toward 3% of steps
+(`sparx.nn.Homeostatic`), by η for each spike above or below that rate, at three values of η, five seeds
+each at Phase 2's recipe (`configs/phase2-homeostatic*.json`, `results/phase2-homeostatic*-arms.json`). The
+drift is part of the network's state: every drive, in training and in evaluation, starts with every
+threshold at 1.
+
+| Arm | Seeds that finished every unseen track | Unseen tracks finished, % | Bend 1.8, % | Lap, s | Steers back, ms | Units sending a step | Triggered MACs a step |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| A, spiking, on events | 5 of 5 | 100.0 ± 0.0 | 95.5 ± 3.5 | 9.8 ± 0.2 | 20 ± 0 | 1,161 ± 78 | 151,920 ± 6,466 |
+| homeostatic, η = 0.001 | 5 of 5 | 100.0 ± 0.0 | 95.9 ± 3.2 | 9.8 ± 0.2 | 20 ± 0 | 1,157 ± 173 | 150,453 ± 24,703 |
+| homeostatic, η = 0.01 | 5 of 5 | 100.0 ± 0.0 | 98.6 ± 2.6 | 9.8 ± 0.2 | 20 ± 0 | 828 ± 83 | 120,338 ± 9,988 |
+| homeostatic, η = 0.1 | 0 of 5 | 26.8 ± 22.2 | 6.9 ± 7.0 | 22.8 ± 4.8 | 128 ± 99 | 617 ± 54 | 102,005 ± 11,850 |
+
+The lap at η = 0.1 is over the four seeds that finished any track.
+
+- At η = 0.001, sparx's default, the arm drove as A did and its activity did not change. At A's 9% of
+  steps a threshold rises by about 0.1 over a 30 s drive, too little to bring the rate toward 3%.
+- At η = 0.01 the arm drove as well as A at every measure: every track at every seed, the same laps and
+  one-step response, and 98.6 ± 2.6% at bend 1.8 against A's 95.5 ± 3.5%, inside either deviation. 6.7% of
+  its units sent a step against A's 9.3%, so it would trigger a fifth fewer multiply-adds, 120,000 a step
+  against 152,000. Its mean rate over a drive stayed above the 3% target.
+- At η = 0.1 training failed at every seed: the best finished 45% of the unseen tracks and one none. Its
+  median gradient norm was 108 to 2,123 by seed, against A's 0.2 to 343, and its largest reached 2.5
+  million. A neuron firing every step raises its threshold by about 0.1 a step, a tenth of its starting value, so
+  thresholds move as fast as the weights train.
+- Before these runs, the η = 0.001 arm's seed 1 was driven at larger η without retraining, on 50 unseen
+  tracks: at η = 0.01 it finished every one with 6.2% of its units sending a step, at 0.03 it finished
+  76%, and at 0.1 none, with 3.2% sending.
 
 Five seeds an arm make these coarse: an arm's deviation is often larger than the difference between two
 arms, and only the few-bit arms' failures and the latency gap stand clear of it.

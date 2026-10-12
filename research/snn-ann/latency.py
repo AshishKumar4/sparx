@@ -1,8 +1,8 @@
 """Batch-1 latency of each racer arm's network on this machine's accelerator: the time from a step's input
 to its readout, as a controller that acts every 20 ms would see it.
 
-Each arm is the Phase 2 run that drove farthest on its held-out tracks (`research/racer/results/
-phase2c-arms.json` names the seeds), loaded from its saved weights. Two timings each:
+Each arm, named as `research/racer/compare.py` names it, is the run of `<runs dir>` that drove farthest on
+its held-out tracks, loaded from its saved weights. Two timings each:
 
 - one step: the step compiled alone and called once per input, with its state carried between calls,
   timed from the call to the readout on the host, over 2,000 calls after 200 of warm-up;
@@ -24,12 +24,13 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(ROOT / "src"), str(ROOT / "site/lab")]
+sys.path[:0] = [str(ROOT / "src"), str(ROOT / "site/lab"), str(ROOT / "research/racer")]
 
 import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
 import racer  # noqa: E402
+from compare import NAMES  # noqa: E402
 from stack import act, at_rest  # noqa: E402
 
 
@@ -39,12 +40,7 @@ def best_runs(runs: Path) -> dict[str, Path]:
     for model in sorted(runs.glob("*/racer.json")):
         meta = json.loads(model.read_text())["meta"]
         trained = meta["trained"]
-        key = (trained["neuron"], trained["bits"], trained["sees"])
-        name = {("lif", 1, "events"): "A, spiking", ("relu", 1, "events"): "B, graded, events",
-                ("relu", 1, "frames"): "C, graded, frames", ("sigma-delta", 1, "events"): "sigma-delta",
-                ("dendritic", 1, "events"): "dendritic"}.get(key)
-        if name is None:
-            continue
+        name = NAMES[trained["neuron"], trained["bits"], trained["sees"]]
         score = max(row["score"] for row in meta["history"] if "score" in row)
         if name not in chosen or score > chosen[name][0]:
             chosen[name] = (score, model)
