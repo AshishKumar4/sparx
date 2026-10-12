@@ -2,7 +2,8 @@
 
 The launch boundaries are the two convolutional populations: different CTAs need each other's
 outputs, and Triton has no grid-wide barrier. Each convolution includes its membrane update. The
-64 CTAs compute the dense drive's partial sums, then one CTA finalizes its units and readout.
+64 input splits, each in four CTAs over features, compute the dense drive's partial sums, then one CTA
+finalizes its units and readout. Convolutional windows reduce over taps and channels together.
 Weights and stored state are float32; products and sums use float64, not TF32, to meet the
 float64-reference correctness bar.
 This is an accuracy-first kernel, not a tensor-core implementation.
@@ -24,7 +25,7 @@ from jax.experimental.pallas import triton as plt
 
 NAMES = ("conv0", "conv1", "hidden", "readout")
 SHAPES = ((16, 32, 16), (8, 16, 32), (128,), (2,))
-DENSE_BLOCK = 16
+DENSE_BLOCK = 64
 DENSE_SPLITS = 64
 
 
@@ -88,41 +89,37 @@ def _fire(drive, before, config: Config):
 
 def _conv_kernel(x_ref, w_ref, b_ref, v_ref, after_ref, out_ref, *, layer, config, skip):
     rows, columns, channels, features, size, pixels = (
-        (32, 64, 2, 16, 5, 8) if layer == 0 else (16, 32, 16, 32, 3, 2)
+        (32, 64, 2, 16, 5, 2) if layer == 0 else (16, 32, 16, 32, 3, 1)
     )
     out_columns = columns // 2
     top = (size - 2) // 2  # SAME uses the smaller half of odd padding before.
     p = pl.program_id(0) * pixels + jnp.arange(pixels, dtype=jnp.int32)
-    c = jnp.arange(channels, dtype=jnp.int32)
-    f = jnp.arange(features, dtype=jnp.int32)
+    q = jnp.arange(pl.next_power_of_2(size * size * channels), dtype=jnp.int32)
+    tap = lax.div(q, np.int32(channels))
+    c = lax.rem(q, np.int32(channels))
+    f = pl.program_id(1) * 16 + jnp.arange(16, dtype=jnp.int32)
     r0 = lax.div(p, np.int32(out_columns)) * 2 - top
     c0 = lax.rem(p, np.int32(out_columns)) * 2 - top
 
-    def tap(k, acc):
-        # Static fori_loop's scan counter is int64 with x64 enabled. Triton indexes are int32.
-        k = k.astype(jnp.int32)
-        r = r0 + lax.div(k, np.int32(size))
-        col = c0 + lax.rem(k, np.int32(size))
-        valid = (r >= 0) & (r < rows) & (col >= 0) & (col < columns)
-        if layer == 0:
-            address = c[None, :] * rows * columns + r[:, None] * columns + col[:, None]
-        else:
-            address = (r[:, None] * columns + col[:, None]) * channels + c[None, :]
-        x = plt.load(x_ref.at[address], mask=valid[:, None], other=0)
+    r = r0[:, None] + lax.div(tap, np.int32(size))[None, :]
+    col = c0[:, None] + lax.rem(tap, np.int32(size))[None, :]
+    valid = (q[None, :] < size * size * channels) & (r >= 0) & (r < rows) & (col >= 0) & (col < columns)
+    if layer == 0:
+        address = c[None, :] * rows * columns + r * columns + col
+    else:
+        address = (r * columns + col) * channels + c[None, :]
+    x = plt.load(x_ref.at[address], mask=valid, other=0)
 
-        def compute(a):
-            w = plt.load(w_ref.at[k, c[:, None], f[None, :]])
-            product = x.astype(jnp.float64)[:, :, None] * w.astype(jnp.float64)[None, :, :]
-            return a + jnp.sum(product, axis=1)
+    def compute():
+        w = plt.load(w_ref.at[tap[:, None], c[:, None], f[None, :]],
+                     mask=q[:, None] < size * size * channels, other=0)
+        product = x.astype(jnp.float64)[:, :, None] * w.astype(jnp.float64)[None, :, :]
+        return jnp.sum(product, axis=1)
 
-        # reduce_or is not lowered by Pallas/Triton 0.11; max(abs(x)) tests the same zero block.
-        # The weight load is inside the dynamic branch, not a masked post-load multiply.
-        if not skip:
-            return compute(acc)
-        return lax.cond(jnp.max(jnp.abs(x)) != 0, compute, lambda a: a, acc)
-
-    drive = lax.fori_loop(np.int32(0), np.int32(size * size), tap,
-                         jnp.zeros((pixels, features), jnp.float64))
+    # One reduction covers the window instead of serializing its taps. The skip branch covers that
+    # whole window too, so it trades fewer tests for fewer weight blocks skipped.
+    drive = (lax.cond(jnp.max(jnp.abs(x)) != 0, compute,
+                       lambda: jnp.zeros((pixels, 16), jnp.float64)) if skip else compute())
     drive = drive + plt.load(b_ref.at[f]).astype(jnp.float64)[None, :]
     ix = p[:, None] * features + f[None, :]
     before = plt.load(v_ref.at[ix])
@@ -132,26 +129,18 @@ def _conv_kernel(x_ref, w_ref, b_ref, v_ref, after_ref, out_ref, *, layer, confi
 
 
 def _dense_partial_kernel(x_ref, w_ref, partial_ref, *, skip):
-    f = jnp.arange(128, dtype=jnp.int32)
+    f = pl.program_id(1) * 32 + jnp.arange(32, dtype=jnp.int32)
     c = jnp.arange(DENSE_BLOCK, dtype=jnp.int32)
     pid = pl.program_id(0)
-    rows_per_split = 4096 // DENSE_SPLITS
+    row = pid * DENSE_BLOCK + c
+    x = plt.load(x_ref.at[row])
 
-    def block(k, acc):
-        k = k.astype(jnp.int32)
-        row = pid * rows_per_split + k * DENSE_BLOCK + c
-        x = plt.load(x_ref.at[row])
+    def compute():
+        w = plt.load(w_ref.at[row[:, None], f[None, :]])
+        return jnp.sum(x.astype(jnp.float64)[:, None] * w.astype(jnp.float64), axis=0)
 
-        def compute(a):
-            w = plt.load(w_ref.at[row[:, None], f[None, :]])
-            return a + jnp.sum(x.astype(jnp.float64)[:, None] * w.astype(jnp.float64), axis=0)
-
-        if not skip:
-            return compute(acc)
-        return lax.cond(jnp.max(jnp.abs(x)) != 0, compute, lambda a: a, acc)
-
-    drive = lax.fori_loop(np.int32(0), np.int32(rows_per_split // DENSE_BLOCK), block,
-                         jnp.zeros((128,), jnp.float64))
+    drive = (lax.cond(jnp.max(jnp.abs(x)) != 0, compute, lambda: jnp.zeros((32,), jnp.float64))
+             if skip else compute())
     plt.store(partial_ref.at[pid, f], drive)
 
 
@@ -194,11 +183,11 @@ def step_with_activity(params: Parameters, state: State, x: jax.Array, *, config
         w, b = params[2 * layer:2 * layer + 2]
         shape = state[layer].shape
         features = shape[-1]
-        pixels = 8 if layer == 0 else 2
+        pixels = 2 if layer == 0 else 1
         out_shape = (jax.ShapeDtypeStruct((state[layer].size,), state[layer].dtype),) * 2
         after, h = pl.pallas_call(
             partial(_conv_kernel, layer=layer, config=config, skip=skip),
-            out_shape=out_shape, grid=(state[layer].size // features // pixels,),
+            out_shape=out_shape, grid=(state[layer].size // features // pixels, features // 16),
             compiler_params=plt.CompilerParams(num_warps=4, num_stages=1),
             interpret=interpret, name=f"racer_conv{layer}_unit",
         )(h, w.reshape((-1, w.shape[-2], w.shape[-1])), b, state[layer].reshape(-1))
@@ -206,7 +195,7 @@ def step_with_activity(params: Parameters, state: State, x: jax.Array, *, config
     dense_partial = pl.pallas_call(
         partial(_dense_partial_kernel, skip=skip),
         out_shape=jax.ShapeDtypeStruct((DENSE_SPLITS, 128), jnp.float64),
-        grid=(DENSE_SPLITS,), compiler_params=plt.CompilerParams(num_warps=4, num_stages=1),
+        grid=(DENSE_SPLITS, 4), compiler_params=plt.CompilerParams(num_warps=4, num_stages=1),
         interpret=interpret, name="racer_dense_partial",
     )(h, params.dense_kernel)
     hidden, readout, out = pl.pallas_call(

@@ -87,6 +87,10 @@ def xla_state(carried) -> kernel.State:
     return kernel.State(*units, readout)
 
 
+def xla_readout(carried):
+    return jax.tree.leaves(carried["LI_0"])[0]
+
+
 def xla_function(net):
     def step(p, carried, x):
         u, carried, _ = act(net, p, carried, x[None])
@@ -155,7 +159,7 @@ def spike_flips(actual, reference) -> dict:
 
 
 def sparsity(inputs, activity) -> dict:
-    # The dense layer consumes conv1's output in contiguous 16-input blocks. The speed is its own tail.
+    # The speed is its own tail, outside the dense blocks whose weights the partial kernel skips.
     x = np.asarray(activity[1]).reshape((len(inputs), 4096))
     return {
         "input_zero_fraction": float(np.mean(np.asarray(inputs)[:, :4096] == 0)),
@@ -163,7 +167,8 @@ def sparsity(inputs, activity) -> dict:
             name: float(np.mean(np.asarray(a) != 0))
             for name, a in zip(kernel.NAMES[:3], activity, strict=True)
         },
-        "dense_zero_block_fraction_excluding_speed": float(np.mean(~np.any(x.reshape(-1, 16) != 0, -1))),
+        "dense_zero_block_fraction_excluding_speed": float(np.mean(
+            ~np.any(x.reshape(-1, kernel.DENSE_BLOCK) != 0, -1))),
     }
 
 
@@ -192,27 +197,37 @@ def correctness(host_params, params, config, net, xla_params, inputs):
             "spike_flips_vs_reference": spike_flips(activity, ref_activity),
             "spike_flips_vs_xla_f32": spike_flips(activity, xla_activity),
         }
+        variant = result["variants"]["skip" if skip else "dense"]
+        for population, bound in TEST_BOUNDS["B" if config.graded else "A"].items():
+            for field in ("per_output", "test_per_output"):
+                for metric, maximum in bound.items():
+                    if variant[field][population][metric] > maximum:
+                        raise RuntimeError(f"{population} {field} {metric} exceeds {maximum:g}")
+        if any(variant[field][population] for field in (
+                "spike_flips_vs_reference", "spike_flips_vs_xla_f32") for population in kernel.NAMES[:3]):
+            raise RuntimeError("A spike or active-unit mismatch")
         print("correctness", "skip" if skip else "dense", json.dumps(result["variants"][
             "skip" if skip else "dense"]), flush=True)
     result["sparsity"] = sparsity(inputs, ref_activity)
     return result
 
 
-def latency(step, params, initial, inputs, calls=2000, warmup=200, repeats=10):
-    alone = jax.jit(step)
+def latency(step, params, initial, inputs, readout_of, calls=2000, warmup=200, repeats=10):
+    # Returning the readout twice made XLA launch a copy kernel; it is already in the carried state.
+    alone = jax.jit(lambda p, state, x: step(p, state, x)[0])
     # Slicing and transferring the next input are outside the timer for every implementation.
     samples = [inputs[t] for t in range(len(inputs))]
     jax.block_until_ready(samples)
     state = initial
     for t in range(warmup):
-        state, readout = alone(params, state, samples[t % len(samples)])
-    jax.block_until_ready(readout)
+        state = alone(params, state, samples[t % len(samples)])
+    jax.block_until_ready(state)
     times = []
     for t in range(calls):
         x = samples[t % len(samples)]
         start = time.perf_counter_ns()
-        state, readout = alone(params, state, x)
-        np.asarray(readout)
+        state = alone(params, state, x)
+        np.asarray(readout_of(state))
         times.append((time.perf_counter_ns() - start) / 1e6)
 
     def stream(p, xs, state):
@@ -235,20 +250,20 @@ def latency(step, params, initial, inputs, calls=2000, warmup=200, repeats=10):
     }
 
 
-def profile_device(step, params, initial, inputs, directory, calls=100):
+def profile_device(step, params, initial, inputs, directory, readout_of, calls=100):
     """CUPTI kernel active time, excluding gaps and copies, not an end-to-end device timer."""
-    call = jax.jit(step)
+    call = jax.jit(lambda p, state, x: step(p, state, x)[0])
     samples = [inputs[t] for t in range(calls)]
     jax.block_until_ready(samples)
-    state, readout = call(params, initial, samples[0])
-    jax.block_until_ready(readout)
+    state = call(params, initial, samples[0])
+    jax.block_until_ready(state)
     options = jax.profiler.ProfileOptions()
     options.host_tracer_level = 0
     options.python_tracer_level = 0
     with jax.profiler.trace(directory, profiler_options=options):
         for x in samples:
-            state, readout = call(params, state, x)
-        jax.block_until_ready(readout)
+            state = call(params, state, x)
+        jax.block_until_ready(readout_of(state))
     traces = sorted(directory.rglob("*.trace.json.gz"))
     if not traces:
         return {"calls": calls, "unavailable": "The profiler exported no Chrome trace"}
@@ -306,10 +321,11 @@ def measure_arm(arm, args):
         for skip in (True, False):
             name = "skip" if skip else "dense"
             fn = partial(kernel.step, config=config, skip=skip)
-            report["latency"][name] = latency(fn, params, kernel.at_rest(), inputs,
+            report["latency"][name] = latency(fn, params, kernel.at_rest(), inputs, lambda s: s.readout,
                                              args.calls, args.warmup, args.repeats)
             print(arm, name, json.dumps(report["latency"][name]), flush=True)
         report["latency"]["xla"] = latency(xla_function(net), xla_params, xla_rest(net, xla_params), inputs,
+                                           xla_readout,
                                            args.calls, args.warmup, args.repeats)
         print(arm, "xla", json.dumps(report["latency"]["xla"]), flush=True)
     return report
@@ -339,6 +355,9 @@ def main():
         return
     report = {
         "device": str(device), "device_kind": device.device_kind, "jax": jax.__version__,
+        "code_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT,
+                                                text=True).strip(),
+        "kernel_sha256": hashlib.sha256(Path(kernel.__file__).read_bytes()).hexdigest(),
         **hardware_metadata(),
         "xla_flags": os.environ.get("XLA_FLAGS", ""), "track_seed": TRACK_SEED,
         "input_speed": "pre-step car speed, as passed by racer.inputs inside racer.race",
@@ -347,14 +366,15 @@ def main():
             "fused_parts": ["conv0 + unit", "conv1 + unit", "split-K dense partial sums",
                             "dense final reduction + unit + readout"],
             "launches_per_step": 4, "state_dtype": "float32", "weight_dtype": "float32",
-            "launch_count_scope": "Pallas compute launches. The standalone compiled return also has "
-                                  "an XLA readout-copy kernel; CUPTI records it separately.",
+            "launch_count_scope": "Pallas compute launches. The standalone call returns state alone; "
+                                  "the readout is transferred from it, without a duplicate return.",
             "accumulator_dtype": "float64", "dense_input_block": kernel.DENSE_BLOCK,
             "dense_splits": kernel.DENSE_SPLITS,
             "could_not_do": "A single launch needs a grid-wide barrier between convolutional populations, "
                             "which the Triton backend does not expose. A three-launch version put the "
                             "entire dense/readout in one CTA and serialized its weight reads; the fourth "
-                            "launch parallelizes the dense reduction across 64 CTAs.",
+                            "launch parallelizes the dense reduction across 64 input splits, "
+                            "each with four 32-feature CTAs.",
         },
         "timing_note": "Host input indexing is outside the timer; readout transfer is inside. Scan time "
                        "is synchronized wall time, not a separately profiled device-only time.",
@@ -413,7 +433,8 @@ def add_profiles(args):
             p = xla_params if name == "xla" else params
             initial = xla_rest(net, xla_params) if name == "xla" else kernel.at_rest()
             directory = args.out.parent / "profiles" / f"{arm}-{name}"
-            measured = profile_device(fn, p, initial, inputs, directory)
+            readout_of = xla_readout if name == "xla" else lambda s: s.readout
+            measured = profile_device(fn, p, initial, inputs, directory, readout_of)
             report["arms"][arm]["latency"][name]["device_profile"] = measured
             print(arm, name, "profile", json.dumps(measured), flush=True)
     args.out.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
