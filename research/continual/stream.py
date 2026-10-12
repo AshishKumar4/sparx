@@ -23,6 +23,10 @@ Each writes `<out>/<stream>-<learner>-<seed>.json`, the learner `ewc<lambda>` fo
 the last task minus its last), the mean final accuracy, the loss after each epoch, the hidden neurons'
 mean rate, and the time taken.
 
+With `--select`, a learner trains on the first task alone, less a tenth of its training recordings held
+out, and writes its accuracy on those to `<out>/<stream>-<learner>-<seed>-lr<lr>.json`: the score a
+learning rate is chosen by, with no test recording seen.
+
     python research/continual/stream.py --stream classes --learner eprop --seed 0 --out runs/stream
 """
 
@@ -159,6 +163,24 @@ class Learner:
         return np.concatenate(scores), rate / len(spikes)
 
 
+def fit(learner: Learner, spikes: np.ndarray, labels: np.ndarray, epochs: int, rng: np.random.Generator,
+        task: int) -> list[dict]:
+    """`epochs` passes over a task's recordings in shuffled batches: each epoch's mean loss and its batches'
+    median and largest gradient norm."""
+    losses = []
+    for _ in range(epochs):
+        order = rng.permutation(len(labels))
+        batches = [order[s:s + learner.args.batch] for s in range(0, len(order) - learner.args.batch + 1,
+                                                                  learner.args.batch)]
+        results = np.array([learner.update(time_major(spikes[b]), labels[b]) for b in batches])
+        loss = float(np.mean(results[:, 0]))
+        losses.append({"task": task, "loss": loss, "grad_norm_median": float(np.median(results[:, 1])),
+                       "grad_norm_max": float(np.max(results[:, 1]))})
+        if not np.isfinite(loss):
+            raise SystemExit(f"task {task}: the loss is not finite")
+    return losses
+
+
 def evaluate(learner: Learner, stream: list[dict], tests: list) -> tuple[list[float], list[float], float]:
     """Each task's test accuracy over all 20 classes and over its own, and the hidden neurons' mean rate."""
     whole, own, rates = [], [], []
@@ -187,6 +209,8 @@ def main() -> None:
     parser.add_argument("--tau", type=float, default=10.0, help="the neurons' time constant, in steps")
     parser.add_argument("--readout-tau", type=float, default=20.0)
     parser.add_argument("--limit", type=int, help="only this many recordings of each split, for a smoke run")
+    parser.add_argument("--select", action="store_true",
+                        help="score the learning rate on held-out recordings of the first task alone")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     epochs = args.epochs or (20 if args.stream == "classes" else 5)
@@ -205,18 +229,24 @@ def main() -> None:
     rng = np.random.default_rng(args.seed)
     matrix, own_matrix, losses, rate = [], [], [], 0.0
     phases = [subset(train, task) for task in stream]
+    rule = f"ewc{args.ewc:g}" if args.learner == "ewc" else args.learner
+    args.out.mkdir(parents=True, exist_ok=True)
+    if args.select:
+        spikes, labels = phases[0]
+        held = np.isin(np.arange(len(labels)), rng.permutation(len(labels))[:len(labels) // 10])
+        losses = fit(learner, spikes[~held], labels[~held], epochs, rng, 0)
+        y, _ = learner.predict(spikes[held])
+        report = {"stream": args.stream, "learner": args.learner, "seed": args.seed, "lr": args.lr,
+                  "epochs": epochs, "held_out": float(np.mean(np.argmax(y, -1) == labels[held])),
+                  "recordings": int(held.sum()), "losses": losses, "seconds": round(time.time() - started, 1)}
+        print(json.dumps({k: report[k] for k in ("lr", "held_out", "seconds")}), flush=True)
+        (args.out / f"{args.stream}-{rule}-{args.seed}-lr{args.lr:g}.json").write_text(
+            json.dumps(report, indent=1) + "\n")
+        return
     if args.learner == "joint":
         phases = [(np.concatenate([x for x, _ in phases]), np.concatenate([y for _, y in phases]))]
     for k, (spikes, labels) in enumerate(phases):
-        for _ in range(epochs):
-            order = rng.permutation(len(labels))
-            batches = [order[s:s + args.batch] for s in range(0, len(order) - args.batch + 1, args.batch)]
-            results = np.array([learner.update(time_major(spikes[b]), labels[b]) for b in batches])
-            loss = float(np.mean(results[:, 0]))
-            losses.append({"task": k, "loss": loss, "grad_norm_median": float(np.median(results[:, 1])),
-                           "grad_norm_max": float(np.max(results[:, 1]))})
-            if not np.isfinite(loss):
-                raise SystemExit(f"task {k}: the loss is not finite")
+        losses += fit(learner, spikes, labels, epochs, rng, k)
         learner.consolidate(spikes, labels, rng)
         whole, own, rate = evaluate(learner, stream, tests)
         matrix.append(whole)
@@ -238,10 +268,7 @@ def main() -> None:
         "losses": losses, "rate": rate, "seconds": round(time.time() - started, 1),
         "device": str(jax.devices()[0]), "jax": jax.__version__,
     }
-    args.out.mkdir(parents=True, exist_ok=True)
-    rule = f"ewc{args.ewc:g}" if args.learner == "ewc" else args.learner
-    name = f"{args.stream}-{rule}-{args.seed}.json"
-    (args.out / name).write_text(json.dumps(report, indent=1) + "\n")
+    (args.out / f"{args.stream}-{rule}-{args.seed}.json").write_text(json.dumps(report, indent=1) + "\n")
 
 
 if __name__ == "__main__":
