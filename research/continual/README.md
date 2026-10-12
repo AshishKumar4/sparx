@@ -135,9 +135,75 @@ against 31%). It stalled EWC: the penalty's gradient, scaled by the Fisher infor
 gradients, reached global norms of 1e7 to 1e14, so the clipped step followed the penalty alone: each
 permuted task after the first reached 2.9 to 9.7% right after it was learned, 5.5% on average. Clipping is therefore off by default (`--clip 0`).
 
+### A lower learning rate
+
+`results/lr3e-4/` repeats every run with Adam at 3e-4 instead of 1e-3 and the permuted stream at 20 epochs
+a task instead of 5 (`--lr 3e-4 --epochs 20`, commit b594079), from the same initializations:
+
+Classes in turn:
+
+| Learner | Seeds | All 20 classes, % | Its own classes, % | Forgetting, points | Just learned, % |
+| --- | --- | --- | --- | --- | --- |
+| joint | 3 | 48.3 ± 13.0 | 78.6 ± 9.6 | none | 60.6 ± 4.8 |
+| bptt | 3 | 15.2 ± 1.9 | 41.7 ± 5.7 | 86.6 ± 4.6 | 84.5 ± 3.7 |
+| eprop | 3 | 16.9 ± 2.1 | 45.2 ± 8.8 | 89.3 ± 1.5 | 88.3 ± 2.1 |
+| eprop-random | 3 | 16.4 ± 1.6 | 37.7 ± 3.8 | 88.7 ± 3.7 | 87.4 ± 2.2 |
+| ewc1000 | 3 | 15.3 ± 2.2 | 50.9 ± 5.6 | 83.4 ± 4.3 | 82.0 ± 1.8 |
+| ewc10000 | 3 | 15.5 ± 1.2 | 57.7 ± 6.9 | 82.5 ± 3.4 | 81.5 ± 2.0 |
+| ewc100000 | 3 | 13.0 ± 4.6 | 63.1 ± 20.9 | 80.2 ± 3.5 | 77.2 ± 2.1 |
+
+Permuted channels:
+
+| Learner | Seeds | All 20 classes, % | Its own classes, % | Forgetting, points | Just learned, % |
+| --- | --- | --- | --- | --- | --- |
+| joint | 3 | 58.0 ± 13.6 | 58.0 ± 13.6 | none | 55.7 ± 18.1 |
+| bptt | 3 | 35.8 ± 2.1 | 35.8 ± 2.1 | 33.5 ± 2.6 | 62.6 ± 3.0 |
+| eprop | 3 | 41.8 ± 1.1 | 41.8 ± 1.1 | 44.0 ± 1.5 | 77.0 ± 1.1 |
+| eprop-random | 3 | 46.3 ± 1.9 | 46.3 ± 1.9 | 32.5 ± 1.5 | 72.4 ± 0.9 |
+| ewc1000 | 3 | 31.3 ± 4.6 | 31.3 ± 4.6 | 10.5 ± 4.2 | 38.9 ± 5.1 |
+| ewc10000 | 3 | 15.7 ± 5.1 | 15.7 ± 5.1 | 5.4 ± 4.6 | 19.9 ± 8.8 |
+| ewc100000 | 3 | 16.6 ± 4.6 | 16.6 ± 4.6 | 4.1 ± 3.3 | 19.8 ± 2.0 |
+
+- Learning classes in turn, the lower rate changed little: every sequential learner ended at 13 to 17% of
+  the 20 classes and forgot 80 to 89 points of each earlier task. It did not steady BPTT. Its loss rose by
+  up to 2.4 nats from one epoch to the next within a task (seed 2, the first task), against 1.9 at 1e-3,
+  and joint training's final accuracy ranges from 37 to 62% across seeds. e-prop's loss rose by at most
+  0.03 nats.
+- With permuted channels and four times the epochs, two changes at once, BPTT, both e-props and EWC at
+  λ = 1,000 learned each task better, BPTT to 63% right after learning it against 43%, and forgot more,
+  34 points against 15. Random e-prop ended highest, 46.3 ± 1.9%, then e-prop at 41.8 ± 1.1% and BPTT at
+  35.8 ± 2.1%; joint training reached 58.0 ± 13.6%. EWC at λ = 1,000 forgot 10.5 points and ended at 31%;
+  at 10,000 and 100,000 it learned the tasks to about 20% on average.
+
+### Choosing each learner's rate
+
+`stream.py --select` trains on a stream's first task alone, with a tenth of its training recordings held
+out, and scores the learner on those. `select.sh` runs BPTT, e-prop and random e-prop at four rates on each
+stream at seed 0, 20 epochs (`results/select/`, commit c5736fa). Accuracy on the held-out recordings, 161
+for `classes` (4 classes) and 815 for `permuted` (all 20; its first task is unpermuted):
+
+| Stream | Learner | 1e-4 | 3e-4 | 1e-3 | 3e-3 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| classes | bptt | 95.0 | 86.3 | 98.8 | 99.4 |
+| classes | eprop | 98.1 | 97.5 | 100.0 | 100.0 |
+| classes | eprop-random | 86.3 | 95.7 | 99.4 | 100.0 |
+| permuted | bptt | 18.9 | 21.0 | 39.6 | 38.5 |
+| permuted | eprop | 79.5 | 83.7 | 87.1 | 85.0 |
+| permuted | eprop-random | 55.5 | 69.8 | 84.3 | 82.1 |
+
+- On four classes every learner reached 98.8 to 100% at 1e-3 and above, where one recording is 0.6
+  points.
+- On all 20 classes e-prop reached 87.1% and BPTT at best 39.6%, both at 1e-3. At that rate BPTT's training
+  loss began at 3.48 nats, above the 3.00 of a uniform guess, and ended at 2.30 after 20 epochs; e-prop's
+  went from 2.62 to 0.61. The two differ only in the gradient through the recurrent spikes, which e-prop
+  drops (`sparx.learn.eprop`), so on this network that gradient is what holds BPTT back.
+- The rates chosen, the smaller on a tie: 1e-3 for every learner on the permuted stream; on classes, 3e-3
+  for BPTT and random e-prop and 1e-3 for e-prop. EWC and joint training take BPTT's rate, since EWC is
+  BPTT until its first task ends.
+
 ### Next
 
-BPTT's instability makes it a weak baseline here. The next runs train BPTT at lower learning rates and
-with a narrower surrogate, choose each learner's rate on held-out data from the first task, and run the
-permuted stream for 20 epochs a task, so every learner reaches its own best on each task before the
-next arrives.
+- The streams at the chosen rates, three seeds, 20 epochs a task: every learner at 1e-3 and at 3e-3, which
+  covers each chosen rate.
+- BPTT's gradient through the recurrent spikes, with a narrower surrogate or one scaled down on the
+  recurrent path, scored on the first task as above.
