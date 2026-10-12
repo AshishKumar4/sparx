@@ -43,6 +43,7 @@ import optax
 from sparx.datasets import shd
 from sparx.dynamics import LIFCell, decay
 from sparx.learn import EPropParams, bptt_loss, eprop, eprop_forward
+from sparx.surrogate import ATan, FastSigmoid
 
 CLASSES = 20
 TASKS = 5
@@ -78,7 +79,8 @@ class Learner:
 
     def __init__(self, args: argparse.Namespace, steps: int):
         self.args = args
-        self.cell = LIFCell(decay(args.tau), reset="zero")
+        surrogate = FastSigmoid(args.surrogate_slope) if args.surrogate_slope else ATan()
+        self.cell = LIFCell(decay(args.tau), reset="zero", surrogate=surrogate)
         self.mask = 1 - jnp.eye(args.hidden)
         self.steps = steps
         # Clipping is off by default: at norm 1 it did not steady BPTT and stalled EWC (README, results/).
@@ -208,11 +210,15 @@ def main() -> None:
     parser.add_argument("--fisher-samples", type=int, default=256)
     parser.add_argument("--tau", type=float, default=10.0, help="the neurons' time constant, in steps")
     parser.add_argument("--readout-tau", type=float, default=20.0)
+    parser.add_argument("--surrogate-slope", type=float, default=0.0,
+                        help="FastSigmoid's slope; 0 keeps ATan(2), the original surrogate")
     parser.add_argument("--limit", type=int, help="only this many recordings of each split, for a smoke run")
     parser.add_argument("--select", action="store_true",
                         help="score the learning rate on held-out recordings of the first task alone")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
+    if not np.isfinite(args.surrogate_slope) or args.surrogate_slope < 0:
+        parser.error("--surrogate-slope must be finite and nonnegative")
     epochs = args.epochs or (20 if args.stream == "classes" else 5)
     started = time.time()
 
@@ -240,7 +246,8 @@ def main() -> None:
         losses = fit(learner, spikes[~held], labels[~held], epochs, rng, 0)
         y, _ = learner.predict(spikes[held])
         report = {"stream": args.stream, "learner": rule, "seed": args.seed, "lr": args.lr,
-                  "epochs": epochs, "held_out": float(np.mean(np.argmax(y, -1) == labels[held])),
+                  "epochs": epochs, "surrogate_slope": args.surrogate_slope,
+                  "held_out": float(np.mean(np.argmax(y, -1) == labels[held])),
                   "recordings": int(held.sum()), "losses": losses, "seconds": round(time.time() - started, 1)}
         print(json.dumps({k: report[k] for k in ("lr", "held_out", "seconds")}), flush=True)
         (args.out / f"{args.stream}-{rule}-{args.seed}-lr{args.lr:g}.json").write_text(
