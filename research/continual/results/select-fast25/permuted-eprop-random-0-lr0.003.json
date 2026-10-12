@@ -1,0 +1,133 @@
+{
+ "stream": "permuted",
+ "learner": "eprop-random",
+ "seed": 0,
+ "lr": 0.003,
+ "epochs": 20,
+ "surrogate_slope": 25.0,
+ "held_out": 0.554601226993865,
+ "recordings": 815,
+ "losses": [
+  {
+   "task": 0,
+   "loss": 3.7290174814692714,
+   "grad_norm_median": 23.78711986541748,
+   "grad_norm_max": 41.039615631103516
+  },
+  {
+   "task": 0,
+   "loss": 3.1279311682048596,
+   "grad_norm_median": 26.395509719848633,
+   "grad_norm_max": 38.15812683105469
+  },
+  {
+   "task": 0,
+   "loss": 2.957098682721456,
+   "grad_norm_median": 28.48603057861328,
+   "grad_norm_max": 40.64625930786133
+  },
+  {
+   "task": 0,
+   "loss": 2.7490563622692177,
+   "grad_norm_median": 27.079812049865723,
+   "grad_norm_max": 43.577728271484375
+  },
+  {
+   "task": 0,
+   "loss": 2.4793283730222466,
+   "grad_norm_median": 26.70026969909668,
+   "grad_norm_max": 44.500267028808594
+  },
+  {
+   "task": 0,
+   "loss": 2.4448834343960413,
+   "grad_norm_median": 27.297114372253418,
+   "grad_norm_max": 51.42648696899414
+  },
+  {
+   "task": 0,
+   "loss": 2.379935744561647,
+   "grad_norm_median": 27.489078521728516,
+   "grad_norm_max": 40.07463073730469
+  },
+  {
+   "task": 0,
+   "loss": 2.190619211447866,
+   "grad_norm_median": 25.28084945678711,
+   "grad_norm_max": 41.4891471862793
+  },
+  {
+   "task": 0,
+   "loss": 2.1823183360852694,
+   "grad_norm_median": 24.878915786743164,
+   "grad_norm_max": 35.32432174682617
+  },
+  {
+   "task": 0,
+   "loss": 2.091196172070085,
+   "grad_norm_median": 26.47421169281006,
+   "grad_norm_max": 49.22603225708008
+  },
+  {
+   "task": 0,
+   "loss": 1.9774621003552486,
+   "grad_norm_median": 24.17949867248535,
+   "grad_norm_max": 36.437461853027344
+  },
+  {
+   "task": 0,
+   "loss": 2.0600954482429907,
+   "grad_norm_median": 26.644906997680664,
+   "grad_norm_max": 43.02085494995117
+  },
+  {
+   "task": 0,
+   "loss": 1.911687035309641,
+   "grad_norm_median": 22.93330192565918,
+   "grad_norm_max": 35.21725845336914
+  },
+  {
+   "task": 0,
+   "loss": 1.8967682959740622,
+   "grad_norm_median": 23.45775604248047,
+   "grad_norm_max": 39.99138259887695
+  },
+  {
+   "task": 0,
+   "loss": 1.9458409192269308,
+   "grad_norm_median": 23.709331512451172,
+   "grad_norm_max": 41.15656280517578
+  },
+  {
+   "task": 0,
+   "loss": 1.781406283378601,
+   "grad_norm_median": 22.208096504211426,
+   "grad_norm_max": 35.5100212097168
+  },
+  {
+   "task": 0,
+   "loss": 1.6661907978225172,
+   "grad_norm_median": 21.533772468566895,
+   "grad_norm_max": 33.488590240478516
+  },
+  {
+   "task": 0,
+   "loss": 1.671526669410237,
+   "grad_norm_median": 21.17038059234619,
+   "grad_norm_max": 37.29379653930664
+  },
+  {
+   "task": 0,
+   "loss": 1.7026384305535702,
+   "grad_norm_median": 22.5662899017334,
+   "grad_norm_max": 37.25164031982422
+  },
+  {
+   "task": 0,
+   "loss": 1.7003106380763806,
+   "grad_norm_median": 23.8460111618042,
+   "grad_norm_max": 44.44455337524414
+  }
+ ],
+ "seconds": 125.7
+}

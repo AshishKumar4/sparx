@@ -251,7 +251,47 @@ python3 research/continual/summarize.py research/continual/results/lr1e-3/
 python3 research/continual/summarize.py research/continual/results/lr3e-3/
 ```
 
+### A narrower surrogate
+
+`--surrogate-slope` replaces ATan(2) with `sparx.surrogate.FastSigmoid` at that slope. The spike and
+reset use it; their forward values stay unchanged. Its derivative has the same peak of 1 and a
+narrower width, and its integral is 2 divided by the slope, 0.08 at 25 and 0.02 at 100, against ATan's 1.
+These runs change width and total gradient mass together, on both the spike and reset paths.
+
+`results/select-fast25/` and `results/select-fast100/` hold 48 first-task selection runs at commit
+5d64ade, on the RTX 4080, JAX 0.11.2.post3. The network, initialization, held-out split, batch order,
+20 epochs and four rates are those of the original selection above, at seed 0. No test recordings
+are loaded. Held-out accuracy, %:
+
+| Stream | Learner | Slope | 1e-4 | 3e-4 | 1e-3 | 3e-3 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| classes | bptt | 25 | 98.1 | 100.0 | 97.5 | 99.4 |
+| classes | eprop | 25 | 100.0 | 98.8 | 99.4 | 100.0 |
+| classes | eprop-random | 25 | 90.7 | 95.0 | 99.4 | 100.0 |
+| classes | bptt | 100 | 98.1 | 100.0 | 96.3 | 96.3 |
+| classes | eprop | 100 | 98.1 | 100.0 | 100.0 | 98.8 |
+| classes | eprop-random | 100 | 87.6 | 96.9 | 98.8 | 99.4 |
+| permuted | bptt | 25 | 78.8 | 86.7 | 88.5 | 80.0 |
+| permuted | eprop | 25 | 78.4 | 85.8 | 90.2 | 82.7 |
+| permuted | eprop-random | 25 | 51.9 | 69.2 | 71.5 | 55.5 |
+| permuted | bptt | 100 | 69.8 | 80.6 | 77.1 | 74.7 |
+| permuted | eprop | 100 | 70.3 | 83.3 | 81.7 | 74.2 |
+| permuted | eprop-random | 100 | 48.6 | 56.9 | 65.6 | 40.6 |
+
+On all 20 classes, slope 25 lifts BPTT from 39.6% to 88.5%, 48.9 points, at 1e-3 in both cases.
+e-prop reaches 90.2%, against its original 87.1%; random e-prop falls from 84.3% to 71.5%.
+Slope 100 gives BPTT at best 80.6% at 3e-4 and e-prop 83.3% at that rate, below slope 25 for both.
+The large first-task gap between BPTT and e-prop shrinks from 47.5 to 1.7 points at slope 25.
+These are first-task scores at one seed; the full streams above still use ATan.
+
+```bash
+research/continual/select.sh runs/select-fast25 --epochs 20 --surrogate-slope 25
+research/continual/select.sh runs/select-fast100 --epochs 20 --surrogate-slope 100
+```
+
+`select.sh` puts every run through `dew-gpu-run` in the racer lane.
+
 ### Next
 
-- BPTT's gradient through the recurrent spikes, with a narrower surrogate or one scaled down on the
-  recurrent path, scored on the first task as above.
+- The slope-25 BPTT and e-prop on the full streams at their held-out chosen rates, over three seeds,
+  with first-task learning and final retention measured separately.
