@@ -216,15 +216,18 @@ def main() -> None:
     epochs = args.epochs or (20 if args.stream == "classes" else 5)
     started = time.time()
 
-    train, test = shd("train"), shd("test")
-    if args.limit:
+    pick = np.random.default_rng(0)
+
+    def load(split: str) -> dict:
+        data = shd(split)
+        if not args.limit:
+            return data
         # A random subset: the files are ordered, so their first recordings hold only a few classes.
-        pick = np.random.default_rng(0)
-        rows = [np.sort(pick.permutation(len(split["label"]))[:args.limit]) for split in (train, test)]
-        train, test = ({k: v[r] for k, v in split.items()}
-                       for split, r in zip((train, test), rows, strict=True))
+        rows = np.sort(pick.permutation(len(data["label"]))[:args.limit])
+        return {k: v[rows] for k, v in data.items()}
+
+    train = load("train")
     stream = tasks(args.stream, args.seed)
-    tests = [subset(test, task) for task in stream]
     learner = Learner(args, train["spikes"].shape[1])
     rng = np.random.default_rng(args.seed)
     matrix, own_matrix, losses, rate = [], [], [], 0.0
@@ -236,13 +239,15 @@ def main() -> None:
         held = np.isin(np.arange(len(labels)), rng.permutation(len(labels))[:len(labels) // 10])
         losses = fit(learner, spikes[~held], labels[~held], epochs, rng, 0)
         y, _ = learner.predict(spikes[held])
-        report = {"stream": args.stream, "learner": args.learner, "seed": args.seed, "lr": args.lr,
+        report = {"stream": args.stream, "learner": rule, "seed": args.seed, "lr": args.lr,
                   "epochs": epochs, "held_out": float(np.mean(np.argmax(y, -1) == labels[held])),
                   "recordings": int(held.sum()), "losses": losses, "seconds": round(time.time() - started, 1)}
         print(json.dumps({k: report[k] for k in ("lr", "held_out", "seconds")}), flush=True)
         (args.out / f"{args.stream}-{rule}-{args.seed}-lr{args.lr:g}.json").write_text(
             json.dumps(report, indent=1) + "\n")
         return
+    test = load("test")
+    tests = [subset(test, task) for task in stream]
     if args.learner == "joint":
         phases = [(np.concatenate([x for x, _ in phases]), np.concatenate([y for _, y in phases]))]
     for k, (spikes, labels) in enumerate(phases):

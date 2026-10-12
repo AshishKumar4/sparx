@@ -14,7 +14,8 @@ for stream in classes permuted; do
       name=$stream-$learner-0-lr$lr
       [ -f "$out/$name.json" ] && continue
       DEW_GPU_LANE=racer "$HOME/.cache/dew/dew-gpu-run" --minutes 20 env PYTHONPATH=src "$python" \
-        research/continual/stream.py --stream "$stream" --learner "$learner" --lr "$lr" --select "$@" --out "$out"
+        research/continual/stream.py --stream "$stream" --learner "$learner" --lr "$lr" --select "$@" \
+        --out "$out"
       [ -f "$out/$name.json" ] || { echo "$name wrote no result" >&2; exit 1; }
     done
   done

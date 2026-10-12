@@ -26,13 +26,15 @@ def selection(runs: list[dict]) -> None:
     rates = sorted({d["lr"] for d in runs})
     for stream in ("classes", "permuted"):
         print(f"\n{stream}\n")
-        print("| Learner | " + " | ".join(f"{lr:g}" for lr in rates) + " |")
-        print("| --- |" + " --- |" * len(rates))
+        print("| Learner | Seed | " + " | ".join(f"{lr:g}" for lr in rates) + " |")
+        print("| --- | --- |" + " --- |" * len(rates))
         for learner in ORDER:
-            held = {d["lr"]: d["held_out"] for d in runs if (d["stream"], d["learner"]) == (stream, learner)}
-            if held:
-                print(f"| {learner} | " + " | ".join(f"{100 * held[lr]:.1f}" if lr in held else ""
-                                                      for lr in rates) + " |")
+            for seed in sorted({d["seed"] for d in runs}):
+                held = {d["lr"]: d["held_out"] for d in runs
+                        if (d["stream"], d["learner"], d["seed"]) == (stream, learner, seed)}
+                if held:
+                    print(f"| {learner} | {seed} | " + " | ".join(
+                        f"{100 * held[lr]:.1f}" if lr in held else "" for lr in rates) + " |")
 
 
 def main() -> None:
