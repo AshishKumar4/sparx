@@ -38,7 +38,8 @@ buys no latency on this GPU.
 ## Second result: Pallas with zero-block skipping
 
 The implementation measured here is `kernel.py` at commit 41df61a; the current grouped kernel is
-measured in the fourth result below. It steps both trained arms, A's run 7 and B's run 29, at batch 1 through the same
+measured in the fourth result below. It steps both trained arms, A's run 7 and B's run 29, at batch 1
+through the same
 Pallas/Triton implementation. There are four compute launches: conv0 with its membrane update,
 conv1 with its membrane update, 64 parallel partial sums of the dense drive, and the final dense
 reduction with its membrane update and readout. The standalone compiled return also has one
@@ -138,7 +139,7 @@ blocks, so it was not run on this arm.
 
 ## Fourth result: grouped reductions and binary products
 
-The same session's control at 41df61a is in `results/kernel-control-rtx4080.json`. A whole-window
+A fresh control at 41df61a is in `results/kernel-control-rtx4080.json`. A whole-window
 vectorization at 97ae5de, `results/kernel-vectorized-rtx4080.json`, removed the tap loops and the
 standalone readout-copy launch, but its dense scans slowed from 0.0397 to 0.0428 ms a step for A and
 from 0.0398 to 0.0428 for B. The second convolution padded its 144 inputs to 256 and kept a larger

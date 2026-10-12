@@ -248,7 +248,7 @@ The lap at η = 0.1 is over the four seeds that finished any track.
 Five seeds an arm make these coarse: an arm's deviation is often larger than the difference between two
 arms, and only the few-bit arms' failures and the latency gap stand clear of it.
 
-## Open questions the comparison raised
+## Scaling each few-bit surrogate by the number of levels
 
 Spikes of a few bits trained unstably under the common recipe. At seed 2 the 2-bit arm drove at 5.6 m/s
 on its training tracks by step 100, slowed to 0.16 m/s by step 250, and then trained with gradient norms
@@ -256,6 +256,56 @@ of 1e3 to 7e4, ending with 85 of 200 unseen tracks finished. The 4-bit arm at se
 100 and finished none, with gradient norms of 3e3 to 1e4 for the rest of its run. The spiking arm A,
 from the same start, finished all 200 at that seed. A few-bit spike is the sum of one surrogate step per
 level (`FewBitCell`), so its derivative is the sum of their surrogates: a membrane near several levels
-passes several times a binary spike's gradient, and nothing scales it down. A candidate for the next study:
-the same arms with each level's surrogate scaled by the number of levels, or one surrogate of the
-rounded membrane, against the binary spike. This comparison keeps the recipe as it is.
+passes several times a binary spike's gradient, and the original arm leaves that sum unscaled.
+
+`--normalize-levels` divides each level's surrogate by the number of levels, 3 for 2-bit spikes and
+15 for 4-bit spikes. The first level also differentiates the firing-rate band and the reset, so it is
+scaled there too. Forward payloads and membranes are unchanged at fixed parameters. Eight focused
+tests check the payload, rate and reset derivatives against the equations, the unchanged forward
+stream and chunking, and JSON reconstruction through the network. Removing the division fails three
+of those tests.
+
+`configs/phase2-level-scaled.json` repeats both arms at seeds 1 through 5, from commit 9336f4c,
+with Phase 2's unchanged recipe, including the same initializations, 3,000 steps, Adam at 1e-3,
+truncation at 50 of a 300-step drive, and parameter selection every 250 steps on 32 held-out tracks.
+The RTX 4080 ran each through the racer queue in 17.2 to 17.5 minutes. `results/phase2-level-scaled.json`
+holds the ten runs and `results/phase2-level-scaled-arms.json` their means ± sample deviations.
+The original arms below are the same seeds from Phase 2, including its binary reference.
+
+| Arm | Seeds that finished every unseen track | Unseen tracks finished, % | Bend 1.8, % | Lap, s | Steers back, ms |
+| --- | --- | --- | --- | --- | --- |
+| A, binary | 5 of 5 | 100.0 ± 0.0 | 95.5 ± 3.5 | 9.8 ± 0.2 | 20 ± 0 |
+| 2 bits, original surrogate | 3 of 5 | 87.9 ± 25.4 | 79.8 ± 36.6 | 10.7 ± 1.2 | 70 ± 35 |
+| 2 bits, level-scaled | 5 of 5 | 100.0 ± 0.0 | 98.5 ± 3.1 | 9.8 ± 0.2 | 20 ± 0 |
+| 4 bits, original surrogate | 1 of 5 | 74.7 ± 42.2 | 64.3 ± 37.8 | 14.7 ± 5.8 | 96 ± 61 |
+| 4 bits, level-scaled | 5 of 5 | 100.0 ± 0.0 | 99.3 ± 1.3 | 9.9 ± 0.1 | 8 ± 11 |
+
+Every normalized run finished all 200 unseen tracks. The failure of both original few-bit arms at
+seed 2 is gone, as are their other failures across these five seeds. Their lap times match the
+binary arm's within its spread. Both respond to a sideways nudge within one 20 ms step. The 4-bit
+arm's seed medians are 20, 0, 0, 0 and 20 ms; a zero means its steering difference reached half its
+eventual peak in the nudge's first frame, rather than a measured sub-frame time.
+
+The logged gradient norms are smaller and steadier. Across the five seeds, the 2-bit medians fall
+from 189 to 13,682 in the original runs to 0.46 to 1.84; their largest logged norms fall from
+7.1e4 to 1.1e10 to 52 to 193. The 4-bit medians fall from 32 to 1,585 to 2.42 to 4.46, and their
+largest logged norms from 2.0e5 to 3.0e7 to 52 to 151. These are the training steps logged every 50,
+including the initial step, before clipping to norm 1.
+
+The normalized 2-bit arm sends from 1,120 ± 110 units a step and the 4-bit arm from 1,184 ± 96,
+9.0% and 9.5% of their 12,416 units, against the originals' 1,782 and 1,899. Their triggered work is
+139,773 ± 10,034 and 152,824 ± 21,243 MACs a step, against the originals' 246,133 and 259,023 and
+the binary arm's 151,920. They still carry 2 or 4 bits per nonzero payload, about 2,240 and 4,737 bits
+a step, against the binary arm's 1,161. Their dense GPU work remains 1,464,992 MACs a step. The
+binary-only Pallas kernel in `research/snn-ann` has not been run on these arms.
+
+Scaling the surrogate removed the few-bit arms' observed training failures under this recipe. The
+extra bits now match the binary arm's reliability and lap time in these five seeds; this does not
+establish a gain from spike precision on other tasks or hardware.
+
+```bash
+research/racer/queue.sh research/racer/configs/phase2-level-scaled.json \
+  runs/phase2-level-scaled <results-checkout> 0 9
+```
+
+The queue puts every run through `dew-gpu-run` with `DEW_GPU_LANE=racer` and records the code commit.
